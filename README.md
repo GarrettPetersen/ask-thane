@@ -44,7 +44,7 @@ Ask Thane is a conversational task-tracking system that listens to team communic
 - `apps/bot-worker`: Slack ingress, task inference orchestration, scheduled reminder loop.
 - `apps/api-worker`: Internal REST endpoints for task status queries and future analytics.
 - `apps/payments-worker`: Stripe webhook ingestion and entitlement state hooks.
-- `apps/landing`: Static marketing site served via Worker assets.
+- `apps/landing`: Static marketing site configured for Cloudflare Pages (`public/` output).
 
 ## Shared packages
 - `@ask-thane/domain`: Core entities and enums.
@@ -76,6 +76,15 @@ pnpm dev:api
 pnpm dev:payments
 pnpm dev:landing
 ```
+
+## Cloudflare Pages setup for `askthane.com`
+1. In Cloudflare, create a **Pages** project connected to this GitHub repo.
+2. Set the Pages project root directory to `apps/landing`.
+3. Build command: leave empty (no build required).
+4. Build output directory: `public`.
+5. Production branch: `master`.
+6. Add custom domain `askthane.com` in the Pages project domain settings.
+7. Add `www.askthane.com` and configure redirect preferences as desired.
 
 ## Build/test commands
 - `pnpm build`: runs all package/app build scripts via Turbo.
