@@ -85,7 +85,8 @@ pnpm dev:landing
 5. Production branch: `master`.
 6. Add custom domain `askthane.com` in the Pages project domain settings.
 7. Add `www.askthane.com` and configure redirect preferences as desired.
-8. Do not use `wrangler deploy` from monorepo root for Pages builds.
+8. If your Pages config uses a deploy command, set it to `npm run deploy` (from `apps/landing` root).
+9. Do not use `wrangler deploy` for this Pages project.
 
 ### Workspace Wrangler error fix
 If you see:
