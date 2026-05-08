@@ -85,6 +85,19 @@ pnpm dev:landing
 5. Production branch: `master`.
 6. Add custom domain `askthane.com` in the Pages project domain settings.
 7. Add `www.askthane.com` and configure redirect preferences as desired.
+8. Do not use `wrangler deploy` from monorepo root for Pages builds.
+
+### Workspace Wrangler error fix
+If you see:
+`The Wrangler application detection logic has been run in the root of a workspace...`
+
+Use one of these commands from repo root instead:
+```bash
+npm run pages:dev
+npm run pages:deploy
+```
+
+Both commands target `apps/landing` explicitly and avoid Wrangler workspace auto-detection errors.
 
 ## Build/test commands
 - `pnpm build`: landing-only build (safe default for Cloudflare Pages root build command).
