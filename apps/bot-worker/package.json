@@ -1,0 +1,24 @@
+{
+  "name": "@ask-thane/bot-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy",
+    "build": "wrangler deploy --dry-run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "echo 'No lint task yet for @ask-thane/bot-worker'",
+    "test": "echo 'No tests yet for @ask-thane/bot-worker'"
+  },
+  "dependencies": {
+    "@ask-thane/ai": "workspace:*",
+    "@ask-thane/data": "workspace:*",
+    "@ask-thane/domain": "workspace:*",
+    "@ask-thane/integrations": "workspace:*",
+    "@ask-thane/workflows": "workspace:*"
+  },
+  "devDependencies": {
+    "wrangler": "^4.17.0"
+  }
+}

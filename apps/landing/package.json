@@ -1,0 +1,17 @@
+{
+  "name": "@ask-thane/landing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "wrangler deploy --dry-run",
+    "typecheck": "echo 'No TypeScript source in landing app yet'",
+    "lint": "echo 'No lint task yet for @ask-thane/landing'",
+    "test": "echo 'No tests yet for @ask-thane/landing'"
+  },
+  "devDependencies": {
+    "wrangler": "^4.17.0"
+  }
+}

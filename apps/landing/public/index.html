@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ask Thane | Conversational Task Tracking</title>
+    <style>
+      :root {
+        --bg: #fffaf5;
+        --ink: #171717;
+        --accent: #005bbb;
+        --accent-2: #ef6c00;
+        --muted: #5f6368;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Avenir Next", "Segoe UI", sans-serif;
+        background: radial-gradient(circle at top right, #ffe7c7 0%, var(--bg) 45%);
+        color: var(--ink);
+      }
+
+      main {
+        max-width: 920px;
+        margin: 0 auto;
+        padding: 64px 20px;
+      }
+
+      h1 {
+        font-size: clamp(2rem, 4vw, 3.8rem);
+        line-height: 1.1;
+        margin: 0 0 12px;
+        letter-spacing: -0.02em;
+      }
+
+      p {
+        font-size: 1.05rem;
+        line-height: 1.7;
+        color: var(--muted);
+      }
+
+      .card {
+        margin-top: 32px;
+        border: 1px solid #e6dfd2;
+        border-radius: 16px;
+        background: #ffffffcc;
+        backdrop-filter: blur(4px);
+        padding: 24px;
+      }
+
+      .pill {
+        display: inline-block;
+        padding: 6px 12px;
+        border-radius: 999px;
+        background: #dcebff;
+        color: var(--accent);
+        font-weight: 600;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      ul {
+        padding-left: 18px;
+      }
+
+      .actions {
+        margin-top: 24px;
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      a.button {
+        display: inline-block;
+        padding: 12px 18px;
+        border-radius: 10px;
+        text-decoration: none;
+        font-weight: 600;
+      }
+
+      a.primary {
+        background: var(--accent);
+        color: #fff;
+      }
+
+      a.secondary {
+        background: #fff;
+        border: 1px solid #d8d0c2;
+        color: var(--ink);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <span class="pill">Early Build</span>
+      <h1>Ask Thane turns conversation into accountable execution.</h1>
+      <p>
+        Teams talk naturally in Slack. Thane listens, creates tasks, follows up automatically,
+        and gives leaders live visibility without forcing anyone into manual issue trackers.
+      </p>
+
+      <section class="card">
+        <h2>Monorepo Initialized</h2>
+        <ul>
+          <li>Cloudflare Workers for bot, API, payments, and static landing app</li>
+          <li>D1 task schema and shared TypeScript domain contracts</li>
+          <li>Provider abstraction for OpenAI and Anthropic orchestration</li>
+          <li>Starter Slack webhook ingestion and scheduled reminder jobs</li>
+        </ul>
+        <div class="actions">
+          <a class="button primary" href="/health">Health Check</a>
+          <a class="button secondary" href="https://github.com">Set Repo Remote</a>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

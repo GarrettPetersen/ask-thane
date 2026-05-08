@@ -1,0 +1,20 @@
+{
+  "name": "@ask-thane/api-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "wrangler deploy --dry-run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "echo 'No lint task yet for @ask-thane/api-worker'",
+    "test": "echo 'No tests yet for @ask-thane/api-worker'"
+  },
+  "dependencies": {
+    "@ask-thane/data": "workspace:*"
+  },
+  "devDependencies": {
+    "wrangler": "^4.17.0"
+  }
+}

@@ -1,0 +1,15 @@
+name = "ask-thane-bot"
+main = "src/index.ts"
+compatibility_date = "2026-05-08"
+
+[triggers]
+crons = ["*/15 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ask-thane"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[vars]
+DEFAULT_LLM_PROVIDER = "openai"
+DEFAULT_LLM_MODEL = "gpt-4.1-mini"
