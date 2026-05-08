@@ -87,7 +87,8 @@ pnpm dev:landing
 7. Add `www.askthane.com` and configure redirect preferences as desired.
 
 ## Build/test commands
-- `pnpm build`: runs all package/app build scripts via Turbo.
+- `pnpm build`: landing-only build (safe default for Cloudflare Pages root build command).
+- `pnpm build:all`: runs all package/app build scripts via Turbo.
 - `pnpm typecheck`: TypeScript checks across the monorepo.
 - `pnpm lint`: placeholder lint tasks (to be replaced with ESLint config).
 - `pnpm test`: placeholder test tasks (to be replaced with Vitest/Miniflare tests).
