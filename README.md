@@ -44,7 +44,7 @@ Ask Thane is a conversational task-tracking system that listens to team communic
 - `apps/bot-worker`: Slack ingress, task inference orchestration, scheduled reminder loop.
 - `apps/api-worker`: Internal REST endpoints for task status queries and future analytics.
 - `apps/payments-worker`: Stripe webhook ingestion and entitlement state hooks.
-- `apps/landing`: Static marketing site configured for Cloudflare Pages (`public/` output).
+- `apps/landing`: Cloudflare Worker serving static marketing assets from `public/`.
 
 ## Shared packages
 - `@ask-thane/domain`: Core entities and enums.
@@ -77,31 +77,24 @@ pnpm dev:payments
 pnpm dev:landing
 ```
 
-## Cloudflare Pages setup for `askthane.com`
-1. In Cloudflare, create a **Pages** project connected to this GitHub repo.
-2. Set the Pages project root directory to `apps/landing`.
-3. Build command: leave empty (no build required).
-4. Build output directory: `public`.
-5. Production branch: `master`.
-6. Add custom domain `askthane.com` in the Pages project domain settings.
-7. Add `www.askthane.com` and configure redirect preferences as desired.
-8. If your Pages config uses a deploy command, set it to `npm run deploy` (from `apps/landing` root).
-9. Do not use `wrangler deploy` for this Pages project.
+## Cloudflare Worker setup for `askthane.com`
+1. In Cloudflare, create a **Worker** project connected to this GitHub repo.
+2. Set the project root directory to `apps/landing`.
+3. Build command: leave empty.
+4. Deploy command: `npx wrangler deploy`.
+5. Ensure the Worker uses [apps/landing/wrangler.toml](/Users/garrettpetersen/ask-thane/apps/landing/wrangler.toml), which defines both `main` and `[assets]`.
+6. Add custom domain `askthane.com` to the Worker route/custom-domain settings.
+7. Add `www.askthane.com` and configure redirect behavior as desired.
 
-### Workspace Wrangler error fix
-If you see:
-`The Wrangler application detection logic has been run in the root of a workspace...`
-
-Use one of these commands from repo root instead:
+### Monorepo Wrangler command fix
+If you run Wrangler from repo root and hit workspace auto-detection errors, use:
 ```bash
-npm run pages:dev
-npm run pages:deploy
+npm run landing:dev
+npm run landing:deploy
 ```
 
-Both commands target `apps/landing` explicitly and avoid Wrangler workspace auto-detection errors.
-
 ## Build/test commands
-- `pnpm build`: landing-only build (safe default for Cloudflare Pages root build command).
+- `pnpm build`: landing-only build.
 - `pnpm build:all`: runs all package/app build scripts via Turbo.
 - `pnpm typecheck`: TypeScript checks across the monorepo.
 - `pnpm lint`: placeholder lint tasks (to be replaced with ESLint config).

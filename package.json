@@ -7,8 +7,8 @@
   "scripts": {
     "build": "turbo run build --filter=@ask-thane/landing",
     "build:all": "turbo run build",
-    "pages:dev": "wrangler pages dev apps/landing/public --project-name ask-thane",
-    "pages:deploy": "wrangler pages deploy apps/landing/public --project-name ask-thane",
+    "landing:dev": "wrangler --cwd apps/landing dev",
+    "landing:deploy": "wrangler --cwd apps/landing deploy",
     "dev": "turbo run dev --parallel",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",

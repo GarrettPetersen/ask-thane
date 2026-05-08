@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler pages dev public --project-name ask-thane",
-    "deploy": "wrangler pages deploy public --project-name ask-thane",
-    "build": "echo 'Static Pages app: no build step required (serves from public/)'",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "wrangler deploy --dry-run",
     "typecheck": "echo 'No TypeScript source in landing app yet'",
     "lint": "echo 'No lint task yet for @ask-thane/landing'",
     "test": "echo 'No tests yet for @ask-thane/landing'"
