@@ -10,11 +10,13 @@
 - LLM task extraction prompt + structured parser
 - Task state transitions from conversational updates (`done`, `blocked`, reprioritized)
 - Reminder DM flow and response interpretation
+- Organization-scoped tenancy enforcement in schema + repositories + handlers
 
 ## Phase 2: Productization
 - Billing enforcement and trial lifecycle
 - Workspace settings, reminder cadence, role-based access
 - Executive status endpoints and summaries
+- Datastore observability and migration thresholds for D1-to-Postgres decision
 
 ## Phase 3: Multi-platform
 - Teams adapter

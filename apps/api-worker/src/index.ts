@@ -28,6 +28,32 @@ export default {
       return Response.json({ tasks });
     }
 
+    if (url.pathname === "/v1/tasks/open-visible") {
+      const organizationId = url.searchParams.get("organization_id") || "";
+      const assigneeId = url.searchParams.get("assignee_id") || "";
+      const readableConversationSourceIds = (url.searchParams.get("readable_conversation_source_ids") || "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+      const allowUnscoped = url.searchParams.get("allow_unscoped") === "true";
+
+      if (!organizationId || !assigneeId) {
+        return Response.json(
+          { error: "organization_id and assignee_id are required" },
+          { status: 400 }
+        );
+      }
+
+      const repo = new D1TaskRepository(env.DB);
+      const tasks = await repo.listOpenByAssigneeWithAcl({
+        organizationId,
+        assigneeId,
+        readableConversationSourceIds,
+        allowUnscoped
+      });
+      return Response.json({ tasks });
+    }
+
     return new Response("Not Found", { status: 404 });
   }
 };

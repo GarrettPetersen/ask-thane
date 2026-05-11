@@ -6,6 +6,14 @@
 - External LLM providers (OpenAI/Anthropic) are consumed through one shared adapter package.
 - Slack is the first integration point; Teams is a follow-on adapter using the same domain contracts.
 
+## Datastore strategy
+- Primary datastore is Cloudflare D1 (SQLite-compatible) for MVP and early production.
+- Data access must remain behind `packages/data` repository interfaces so storage can be swapped without changing workflow/business logic.
+- Tenant isolation is enforced at the application and query layer with mandatory `organization_id` scope on all reads/writes.
+- Postgres migration is planned as a threshold-based move, not a default:
+  - Trigger when sustained write concurrency, query latency, or analytics complexity exceeds D1 targets.
+  - Build a Postgres adapter in parallel to D1, validate parity, then cut over by tenant placement.
+
 ## Worker boundaries
 - `apps/bot-worker`: Ingests message events, infers task updates, persists tasks, runs periodic reminder jobs.
 - `apps/api-worker`: Provides internal and executive APIs (status rollups, work-in-progress summaries).
@@ -30,3 +38,5 @@
 - Store minimal message content required for extraction and auditing.
 - Encrypt secrets in Cloudflare, avoid plaintext key exposure in logs.
 - Preserve immutable task event logs for compliance and trust.
+- Enforce ReBAC with source-conversation provenance and explicit declassification for cross-scope task state updates.
+- Treat auth context as server-owned input to every tool call; models cannot choose or override authorization scope.

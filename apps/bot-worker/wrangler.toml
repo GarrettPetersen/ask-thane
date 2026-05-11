@@ -13,3 +13,4 @@ database_id = "REPLACE_WITH_D1_DATABASE_ID"
 [vars]
 DEFAULT_LLM_PROVIDER = "openai"
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
+DEFAULT_ORGANIZATION_ID = "org_0"

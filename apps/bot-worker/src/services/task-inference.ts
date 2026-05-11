@@ -7,6 +7,8 @@ export interface BotEnv {
   DB: D1Database;
   DEFAULT_LLM_PROVIDER?: "openai" | "anthropic";
   DEFAULT_LLM_MODEL?: string;
+  SLACK_BOT_TOKEN?: string;
+  DEFAULT_ORGANIZATION_ID?: string;
 }
 
 export async function inferAndPersistTasks(event: MessageEvent, env: BotEnv) {

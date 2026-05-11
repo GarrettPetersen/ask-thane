@@ -62,6 +62,7 @@ pnpm install
 ```bash
 cp .env.example .env
 ```
+   - For internal testing, keep `DEFAULT_ORGANIZATION_ID=org_0`. The bot bootstrap flow will auto-create `org_0` with a `free_forever` plan tier and attach newly seen Slack workspaces to it.
 3. Create a D1 database and apply schema (after Cloudflare auth is configured):
 ```bash
 cd apps/bot-worker
