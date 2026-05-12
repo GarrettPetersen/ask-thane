@@ -3,14 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Ask Thane | Conversational Task Tracking</title>
+    <title>Ask Thane | Conversational Task Tracking for Slack Teams</title>
+    <meta
+      name="description"
+      content="Ask Thane turns team conversations into accountable execution by auto-capturing tasks, following up, and reporting progress."
+    />
     <style>
       :root {
-        --bg: #fffaf5;
-        --ink: #171717;
-        --accent: #005bbb;
-        --accent-2: #ef6c00;
-        --muted: #5f6368;
+        --bg: #f7f3ea;
+        --ink: #131313;
+        --muted: #5a5a5a;
+        --brand: #0f5fd7;
+        --brand-dark: #0848a6;
+        --accent: #f18701;
+        --surface: #fffdf8;
+        --border: #e7decd;
+        --ok: #1d7a42;
+        --bad: #b3261e;
       }
 
       * {
@@ -19,104 +28,339 @@
 
       body {
         margin: 0;
-        font-family: "Avenir Next", "Segoe UI", sans-serif;
-        background: radial-gradient(circle at top right, #ffe7c7 0%, var(--bg) 45%);
         color: var(--ink);
+        font-family: "Avenir Next", "Segoe UI", sans-serif;
+        background:
+          radial-gradient(1100px 480px at 100% -10%, #ffe4be 0%, transparent 65%),
+          radial-gradient(760px 420px at -10% 0%, #dceaff 0%, transparent 60%),
+          var(--bg);
       }
 
-      main {
-        max-width: 920px;
+      .container {
+        width: min(1080px, 100% - 2rem);
         margin: 0 auto;
-        padding: 64px 20px;
       }
 
-      h1 {
-        font-size: clamp(2rem, 4vw, 3.8rem);
-        line-height: 1.1;
-        margin: 0 0 12px;
-        letter-spacing: -0.02em;
+      header {
+        padding: 26px 0;
       }
 
-      p {
-        font-size: 1.05rem;
-        line-height: 1.7;
-        color: var(--muted);
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        text-decoration: none;
+        color: inherit;
+        font-weight: 700;
+        letter-spacing: 0.02em;
       }
 
-      .card {
-        margin-top: 32px;
-        border: 1px solid #e6dfd2;
-        border-radius: 16px;
-        background: #ffffffcc;
-        backdrop-filter: blur(4px);
-        padding: 24px;
+      .dot {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, var(--brand), var(--accent));
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 18px;
+        margin-top: 12px;
+      }
+
+      .panel {
+        border: 1px solid var(--border);
+        background: var(--surface);
+        border-radius: 18px;
+        padding: 28px;
       }
 
       .pill {
         display: inline-block;
-        padding: 6px 12px;
-        border-radius: 999px;
-        background: #dcebff;
-        color: var(--accent);
-        font-weight: 600;
-        font-size: 0.85rem;
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
         text-transform: uppercase;
-        letter-spacing: 0.06em;
+        color: var(--brand-dark);
+        background: #dfebff;
+        border-radius: 999px;
+        padding: 7px 11px;
       }
 
-      ul {
+      h1 {
+        margin: 14px 0 10px;
+        font-size: clamp(2rem, 5vw, 3.5rem);
+        line-height: 1.04;
+        letter-spacing: -0.02em;
+      }
+
+      p.lead {
+        font-size: 1.1rem;
+        line-height: 1.65;
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .proof {
+        margin-top: 18px;
+        display: grid;
+        gap: 10px;
+      }
+
+      .proof-item {
+        border: 1px dashed #d8ccba;
+        border-radius: 12px;
+        padding: 10px 12px;
+        font-size: 0.95rem;
+        background: #fff;
+      }
+
+      .kicker {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      h2 {
+        margin: 0 0 10px;
+        font-size: 1.35rem;
+      }
+
+      form {
+        display: grid;
+        gap: 9px;
+      }
+
+      label {
+        display: grid;
+        gap: 5px;
+        font-size: 0.9rem;
+        color: var(--muted);
+      }
+
+      input,
+      textarea {
+        width: 100%;
+        border: 1px solid #d4c8b5;
+        border-radius: 10px;
+        background: #fffcf6;
+        padding: 11px 12px;
+        font: inherit;
+        color: var(--ink);
+      }
+
+      textarea {
+        resize: vertical;
+        min-height: 92px;
+      }
+
+      button {
+        border: 0;
+        border-radius: 10px;
+        padding: 12px 14px;
+        font: inherit;
+        font-weight: 700;
+        background: var(--brand);
+        color: #fff;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: var(--brand-dark);
+      }
+
+      .status {
+        font-size: 0.9rem;
+        min-height: 1.2em;
+      }
+
+      .status.ok {
+        color: var(--ok);
+      }
+
+      .status.bad {
+        color: var(--bad);
+      }
+
+      section.stack {
+        margin-top: 18px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .stack h3 {
+        margin: 0 0 6px;
+      }
+
+      .stack p,
+      .stack li {
+        color: var(--muted);
+      }
+
+      .stack ul {
+        margin: 0;
         padding-left: 18px;
       }
 
-      .actions {
-        margin-top: 24px;
-        display: flex;
-        gap: 12px;
-        flex-wrap: wrap;
+      footer {
+        margin: 26px 0 36px;
+        font-size: 0.95rem;
+        color: var(--muted);
       }
 
-      a.button {
-        display: inline-block;
-        padding: 12px 18px;
-        border-radius: 10px;
-        text-decoration: none;
-        font-weight: 600;
+      footer a {
+        color: var(--brand-dark);
       }
 
-      a.primary {
-        background: var(--accent);
-        color: #fff;
-      }
+      @media (max-width: 920px) {
+        .hero {
+          grid-template-columns: 1fr;
+        }
 
-      a.secondary {
-        background: #fff;
-        border: 1px solid #d8d0c2;
-        color: var(--ink);
+        section.stack {
+          grid-template-columns: 1fr;
+        }
       }
     </style>
   </head>
   <body>
-    <main>
-      <span class="pill">Early Build</span>
-      <h1>Ask Thane turns conversation into accountable execution.</h1>
-      <p>
-        Teams talk naturally in Slack. Thane listens, creates tasks, follows up automatically,
-        and gives leaders live visibility without forcing anyone into manual issue trackers.
-      </p>
+    <header class="container">
+      <a class="brand" href="/">
+        <span class="dot" aria-hidden="true"></span>
+        <span>Ask Thane</span>
+      </a>
+    </header>
 
-      <section class="card">
-        <h2>Monorepo Initialized</h2>
-        <ul>
-          <li>Cloudflare Workers for bot, API, payments, and static landing app</li>
-          <li>D1 task schema and shared TypeScript domain contracts</li>
-          <li>Provider abstraction for OpenAI and Anthropic orchestration</li>
-          <li>Starter Slack webhook ingestion and scheduled reminder jobs</li>
-        </ul>
-        <div class="actions">
-          <a class="button primary" href="/health">Health Check</a>
-          <a class="button secondary" href="https://github.com">Set Repo Remote</a>
-        </div>
+    <main class="container">
+      <section class="hero">
+        <article class="panel">
+          <span class="pill">Conversational Execution Layer</span>
+          <h1>Stop manually managing tickets nobody wants to maintain.</h1>
+          <p class="lead">
+            Ask Thane listens in Slack, turns natural language asks into structured tasks,
+            follows up automatically, and reports real ownership across teams.
+          </p>
+
+          <div class="proof">
+            <div class="proof-item">1. Alice asks Bob for website updates in channel.</div>
+            <div class="proof-item">2. Thane creates and tracks the task automatically.</div>
+            <div class="proof-item">3. Thane pings Bob later and updates status from replies.</div>
+          </div>
+          <p class="kicker">No extra tool adoption required. Teams keep talking naturally.</p>
+        </article>
+
+        <aside class="panel" id="waitlist">
+          <h2>Join the Early Access Waitlist</h2>
+          <p class="kicker">Tell us about your team and we'll reach out for pilot onboarding.</p>
+
+          <form id="waitlist-form" novalidate>
+            <label>
+              Work email
+              <input name="email" type="email" required placeholder="you@company.com" />
+            </label>
+            <label>
+              Name
+              <input name="name" type="text" placeholder="Your name" />
+            </label>
+            <label>
+              Company
+              <input name="company" type="text" placeholder="Company name" />
+            </label>
+            <label>
+              What should Thane solve first?
+              <textarea name="notes" placeholder="Optional context"></textarea>
+            </label>
+            <button type="submit">Request Early Access</button>
+            <div class="status" id="waitlist-status" aria-live="polite"></div>
+          </form>
+        </aside>
+      </section>
+
+      <section class="stack">
+        <article class="panel">
+          <h3>Built For</h3>
+          <ul>
+            <li>Slack-first startups and product teams</li>
+            <li>Consultancies running shared client channels</li>
+            <li>Leaders who want output visibility without Jira drag</li>
+          </ul>
+        </article>
+
+        <article class="panel">
+          <h3>Current Build Status</h3>
+          <ul>
+            <li>Multi-workspace Slack OAuth installs live</li>
+            <li>Cloudflare Workers + D1 backend online</li>
+            <li>Per-workspace bot credential storage implemented</li>
+          </ul>
+        </article>
+
+        <article class="panel">
+          <h3>Contact</h3>
+          <p>
+            Founder: <a href="mailto:garrett@askthane.com">garrett@askthane.com</a>
+          </p>
+          <p>
+            If you run delivery teams and want pilot access, include team size and
+            current workflow pain in your waitlist note.
+          </p>
+        </article>
       </section>
     </main>
+
+    <footer class="container">
+      Ask Thane is in active development. Data handling and enterprise controls are being
+      hardened before broad rollout.
+    </footer>
+
+    <script>
+      (() => {
+        const form = document.getElementById("waitlist-form");
+        const statusEl = document.getElementById("waitlist-status");
+
+        if (!form || !statusEl) {
+          return;
+        }
+
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          statusEl.className = "status";
+          statusEl.textContent = "Submitting...";
+
+          const formData = new FormData(form);
+          const payload = {
+            email: String(formData.get("email") || "").trim(),
+            name: String(formData.get("name") || "").trim(),
+            company: String(formData.get("company") || "").trim(),
+            notes: String(formData.get("notes") || "").trim()
+          };
+
+          try {
+            const response = await fetch("/api/waitlist", {
+              method: "POST",
+              headers: {
+                "content-type": "application/json"
+              },
+              body: JSON.stringify(payload)
+            });
+
+            const result = await response.json();
+            if (!response.ok || !result.ok) {
+              throw new Error(result.error || "submission_failed");
+            }
+
+            statusEl.className = "status ok";
+            statusEl.textContent = "You're on the list. We'll contact you at that email.";
+            form.reset();
+          } catch (_error) {
+            statusEl.className = "status bad";
+            statusEl.textContent =
+              "Could not submit right now. Email garrett@askthane.com and we will add you manually.";
+          }
+        });
+      })();
+    </script>
   </body>
 </html>

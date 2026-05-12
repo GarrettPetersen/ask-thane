@@ -253,3 +253,18 @@ CREATE TABLE IF NOT EXISTS slack_workspace_installs (
 
 CREATE INDEX IF NOT EXISTS idx_slack_workspace_installs_org_workspace
   ON slack_workspace_installs(organization_id, workspace_id);
+
+CREATE TABLE IF NOT EXISTS waitlist_signups (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  name TEXT,
+  company TEXT,
+  notes TEXT,
+  source TEXT NOT NULL DEFAULT 'landing_page',
+  status TEXT NOT NULL DEFAULT 'new',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_waitlist_signups_status_created
+  ON waitlist_signups(status, created_at);

@@ -5,3 +5,8 @@ main = "src/index.ts"
 [assets]
 directory = "./public"
 binding = "ASSETS"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ask-thane"
+database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"

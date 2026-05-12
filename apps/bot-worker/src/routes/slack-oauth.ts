@@ -27,6 +27,85 @@ interface SlackOAuthResponse {
   };
 }
 
+function wantsHtml(request: Request): boolean {
+  const accept = request.headers.get("accept") ?? "";
+  return accept.includes("text/html");
+}
+
+function renderInstallPage(input: {
+  title: string;
+  message: string;
+  details?: string[];
+  ok: boolean;
+}): Response {
+  const detailsHtml = (input.details ?? [])
+    .map((item) => `<li>${item}</li>`)
+    .join("");
+
+  const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${input.title}</title>
+    <style>
+      :root {
+        --bg: #f7f4ed;
+        --ink: #141414;
+        --muted: #5e5e5e;
+        --ok: #0b6b2d;
+        --bad: #b42318;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        font-family: "Avenir Next", "Segoe UI", sans-serif;
+        background: radial-gradient(circle at top right, #f7e7cf 0%, var(--bg) 45%);
+        color: var(--ink);
+        padding: 24px;
+      }
+      .card {
+        width: min(720px, 100%);
+        background: #fffdf8;
+        border: 1px solid #e8dfd0;
+        border-radius: 16px;
+        padding: 28px;
+      }
+      h1 { margin: 0 0 10px; font-size: clamp(1.5rem, 3.8vw, 2.1rem); }
+      p { margin: 0; line-height: 1.6; color: var(--muted); }
+      .status {
+        display: inline-block;
+        margin-bottom: 14px;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: ${input.ok ? "var(--ok)" : "var(--bad)"};
+      }
+      ul { margin: 18px 0 0; padding-left: 20px; color: var(--muted); }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #f4efe3; padding: 1px 5px; border-radius: 5px; }
+    </style>
+  </head>
+  <body>
+    <section class="card">
+      <div class="status">${input.ok ? "Install complete" : "Install failed"}</div>
+      <h1>${input.title}</h1>
+      <p>${input.message}</p>
+      ${detailsHtml ? `<ul>${detailsHtml}</ul>` : ""}
+    </section>
+  </body>
+</html>`;
+
+  return new Response(html, {
+    status: input.ok ? 200 : 400,
+    headers: {
+      "content-type": "text/html; charset=utf-8"
+    }
+  });
+}
+
 function base64UrlEncode(input: string): string {
   return btoa(input).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
@@ -113,6 +192,15 @@ function resolveRedirectUri(request: Request, env: BotEnv): string {
 
 export async function handleSlackInstallStart(request: Request, env: BotEnv): Promise<Response> {
   if (!env.SLACK_CLIENT_ID || !env.SLACK_OAUTH_STATE_SECRET) {
+    if (wantsHtml(request)) {
+      return renderInstallPage({
+        ok: false,
+        title: "Slack OAuth Not Configured",
+        message: "Ask Thane is missing required OAuth configuration.",
+        details: ["Required secrets: SLACK_CLIENT_ID, SLACK_OAUTH_STATE_SECRET"]
+      });
+    }
+
     return Response.json(
       {
         ok: false,
@@ -139,6 +227,15 @@ export async function handleSlackInstallStart(request: Request, env: BotEnv): Pr
 
 export async function handleSlackOAuthCallback(request: Request, env: BotEnv): Promise<Response> {
   if (!env.SLACK_CLIENT_ID || !env.SLACK_CLIENT_SECRET || !env.SLACK_OAUTH_STATE_SECRET) {
+    if (wantsHtml(request)) {
+      return renderInstallPage({
+        ok: false,
+        title: "Slack OAuth Not Configured",
+        message: "Ask Thane is missing required OAuth configuration.",
+        details: ["Required secrets: SLACK_CLIENT_ID, SLACK_CLIENT_SECRET, SLACK_OAUTH_STATE_SECRET"]
+      });
+    }
+
     return Response.json(
       {
         ok: false,
@@ -155,15 +252,42 @@ export async function handleSlackOAuthCallback(request: Request, env: BotEnv): P
   const callbackError = url.searchParams.get("error");
 
   if (callbackError) {
+    if (wantsHtml(request)) {
+      return renderInstallPage({
+        ok: false,
+        title: "Slack Authorization Cancelled",
+        message: "Slack returned an authorization error.",
+        details: [`Error: ${callbackError}`]
+      });
+    }
+
     return Response.json({ ok: false, error: `slack_oauth_error:${callbackError}` }, { status: 400 });
   }
 
   if (!code || !state) {
+    if (wantsHtml(request)) {
+      return renderInstallPage({
+        ok: false,
+        title: "Missing OAuth Parameters",
+        message: "Required parameters were missing in the callback request.",
+        details: ["Expected query params: code and state"]
+      });
+    }
+
     return Response.json({ ok: false, error: "missing_code_or_state" }, { status: 400 });
   }
 
   const isStateValid = await verifyState(state, env.SLACK_OAUTH_STATE_SECRET);
   if (!isStateValid) {
+    if (wantsHtml(request)) {
+      return renderInstallPage({
+        ok: false,
+        title: "Invalid Install Session",
+        message: "The OAuth state validation failed. Start the install flow again.",
+        details: ["Open /slack/install and retry authorization."]
+      });
+    }
+
     return Response.json({ ok: false, error: "invalid_state" }, { status: 400 });
   }
 
@@ -184,6 +308,15 @@ export async function handleSlackOAuthCallback(request: Request, env: BotEnv): P
   });
 
   if (!slackResponse.ok) {
+    if (wantsHtml(request)) {
+      return renderInstallPage({
+        ok: false,
+        title: "Slack OAuth Exchange Failed",
+        message: "Slack returned a non-success HTTP status during token exchange.",
+        details: [`Status: ${slackResponse.status}`]
+      });
+    }
+
     return Response.json(
       { ok: false, error: `slack_oauth_http_error:${slackResponse.status}` },
       { status: 502 }
@@ -192,6 +325,15 @@ export async function handleSlackOAuthCallback(request: Request, env: BotEnv): P
 
   const payload = (await slackResponse.json()) as SlackOAuthResponse;
   if (!payload.ok || !payload.access_token || !payload.team?.id) {
+    if (wantsHtml(request)) {
+      return renderInstallPage({
+        ok: false,
+        title: "Slack OAuth Exchange Rejected",
+        message: "Slack rejected the install exchange.",
+        details: [`Reason: ${payload.error ?? "unknown"}`]
+      });
+    }
+
     return Response.json(
       { ok: false, error: `slack_oauth_exchange_failed:${payload.error ?? "unknown"}` },
       { status: 400 }
@@ -251,6 +393,19 @@ export async function handleSlackOAuthCallback(request: Request, env: BotEnv): P
     installInput.installedByExternalUserId = payload.authed_user.id;
   }
   await installs.upsertWorkspaceInstall(installInput);
+
+  if (wantsHtml(request)) {
+    return renderInstallPage({
+      ok: true,
+      title: "Thane Installed Successfully",
+      message: "Your Slack workspace is now connected to Ask Thane.",
+      details: [
+        `Team: ${payload.team.name ?? payload.team.id}`,
+        `External workspace ID: ${payload.team.id}`,
+        "You can now add Thane to channels and continue backend setup."
+      ]
+    });
+  }
 
   return Response.json(
     {
