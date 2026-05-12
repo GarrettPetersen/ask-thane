@@ -5,4 +5,4 @@ compatibility_date = "2026-05-08"
 [[d1_databases]]
 binding = "DB"
 database_name = "ask-thane"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"

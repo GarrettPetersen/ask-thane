@@ -118,3 +118,14 @@ npm run landing:deploy
 ## Notes
 - This is intentionally a skeleton; many routes contain stubs and no external API calls yet.
 - The repo is designed to evolve into production-ready Cloudflare Workers with D1, Queues, and Durable Objects.
+
+## Multi-workspace Slack installs
+- The bot worker now supports OAuth install endpoints:
+  - `GET /slack/install`
+  - `GET /slack/oauth/callback`
+- Per-workspace bot tokens are stored in D1 (`slack_workspace_installs`) and used for scheduled membership reconciliation.
+- The legacy single `SLACK_BOT_TOKEN` env var remains as fallback for workspaces without stored installs.
+
+## Operator checklist
+- Setup runbook for env keys + Cloudflare Workers + Slack/Stripe provisioning:
+  [docs/integration-env-cloudflare-checklist.md](/Users/garrettpetersen/ask-thane/docs/integration-env-cloudflare-checklist.md)

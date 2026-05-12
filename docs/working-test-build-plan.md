@@ -67,7 +67,7 @@ Status:
 - E3 not done
 
 ## Known gaps before external MVP
-1. Multi-workspace Slack credentials currently use one `SLACK_BOT_TOKEN` env var. For true many-workspace operation, store bot tokens/OAuth installs per workspace.
+1. Multi-workspace Slack OAuth install flow exists, but production hardening still needed (request signature verification, encrypted token storage, uninstall handling).
 2. LLM extraction is stubbed and requires production prompt + structured parsing.
 3. Billing UX/enforcement is not implemented (only placeholder webhook surface).
 4. End-to-end tool runtime for conversational query/command dispatch is not finished.

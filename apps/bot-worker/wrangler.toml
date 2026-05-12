@@ -8,9 +8,11 @@ crons = ["*/15 * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "ask-thane"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"
 
 [vars]
 DEFAULT_LLM_PROVIDER = "openai"
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
 DEFAULT_ORGANIZATION_ID = "org_0"
+THANE_BASE_URL = "https://askthane.com"
+SLACK_BOT_SCOPES = "channels:history,groups:history,channels:read,groups:read,im:read,mpim:read,chat:write,chat:write.public,im:write"

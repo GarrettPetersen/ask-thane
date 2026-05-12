@@ -10,6 +10,7 @@ export class OrgRegistry {
   async resolveOrCreateSlackWorkspace(params: {
     externalWorkspaceId: string;
     defaultOrganizationId?: string;
+    workspaceName?: string;
   }): Promise<SlackWorkspaceRef> {
     const defaultOrganizationId = params.defaultOrganizationId ?? "org_0";
     const nowIso = new Date().toISOString();
@@ -25,13 +26,16 @@ export class OrgRegistry {
         `INSERT INTO workspaces (
            id, organization_id, platform, external_workspace_id, name, plan_tier, created_at, updated_at
          ) VALUES (?, ?, 'slack', ?, ?, 'free', ?, ?)
-         ON CONFLICT(platform, external_workspace_id) DO NOTHING`
+         ON CONFLICT(platform, external_workspace_id)
+         DO UPDATE SET
+           name = excluded.name,
+           updated_at = excluded.updated_at`
       )
       .bind(
         workspaceId,
         defaultOrganizationId,
         params.externalWorkspaceId,
-        `Slack ${params.externalWorkspaceId}`,
+        params.workspaceName ?? `Slack ${params.externalWorkspaceId}`,
         nowIso,
         nowIso
       )
