@@ -321,6 +321,14 @@ async function processWorkspaceMessages(target: WorkspacePollTarget, env: BotEnv
         stats.identitiesLinked += 1;
       }
 
+      await resolver.ensureSlackConversationMembership({
+        organizationId: target.organizationId,
+        workspaceId: target.workspaceId,
+        conversationSourceId: source.id,
+        platformUserId: message.user,
+        nowIso
+      });
+
       const alreadyTasked = await hasTaskForSourceMessage({
         db: env.DB,
         organizationId: target.organizationId,

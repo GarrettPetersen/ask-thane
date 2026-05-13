@@ -6,6 +6,8 @@ export interface SlackEnvelope {
   event_time?: number;
   event?: {
     type?: string;
+    subtype?: string;
+    bot_id?: string;
     channel?: string;
     ts?: string;
     text?: string;
@@ -38,7 +40,9 @@ export function normalizeSlackEvent(input: SlackEnvelope): MessageEvent | null {
     !input.event.ts ||
     !input.event.user ||
     !input.event.text ||
-    input.event.type !== "message"
+    input.event.type !== "message" ||
+    input.event.subtype === "bot_message" ||
+    Boolean(input.event.bot_id)
   ) {
     return null;
   }

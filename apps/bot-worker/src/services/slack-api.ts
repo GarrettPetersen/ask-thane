@@ -22,6 +22,21 @@ interface SlackHistoryResponse {
   };
 }
 
+interface SlackOpenConversationResponse {
+  ok?: boolean;
+  error?: string;
+  channel?: {
+    id?: string;
+  };
+}
+
+interface SlackPostMessageResponse {
+  ok?: boolean;
+  error?: string;
+  channel?: string;
+  ts?: string;
+}
+
 export async function fetchSlackConversationHistory(input: {
   botToken: string;
   channelId: string;
@@ -79,4 +94,65 @@ export async function fetchSlackConversationHistory(input: {
 
   messages.sort((a, b) => Number(a.ts ?? "0") - Number(b.ts ?? "0"));
   return messages;
+}
+
+export async function openSlackDirectMessage(input: {
+  botToken: string;
+  userId: string;
+}): Promise<{ channelId: string }> {
+  const body = new URLSearchParams({
+    users: input.userId
+  });
+
+  const response = await fetch("https://slack.com/api/conversations.open", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.botToken}`,
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body
+  });
+
+  if (!response.ok) {
+    throw new Error(`slack_open_dm_http_error:${response.status}`);
+  }
+
+  const payload = (await response.json()) as SlackOpenConversationResponse;
+  if (!payload.ok || !payload.channel?.id) {
+    throw new Error(`slack_open_dm_error:${payload.error ?? "unknown"}`);
+  }
+
+  return { channelId: payload.channel.id };
+}
+
+export async function postSlackMessage(input: {
+  botToken: string;
+  channelId: string;
+  text: string;
+}): Promise<{ channelId: string; ts: string }> {
+  const response = await fetch("https://slack.com/api/chat.postMessage", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.botToken}`,
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    body: JSON.stringify({
+      channel: input.channelId,
+      text: input.text
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`slack_post_message_http_error:${response.status}`);
+  }
+
+  const payload = (await response.json()) as SlackPostMessageResponse;
+  if (!payload.ok || !payload.channel || !payload.ts) {
+    throw new Error(`slack_post_message_error:${payload.error ?? "unknown"}`);
+  }
+
+  return {
+    channelId: payload.channel,
+    ts: payload.ts
+  };
 }

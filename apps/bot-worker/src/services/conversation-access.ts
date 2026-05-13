@@ -351,6 +351,33 @@ export class ConversationAccessResolver {
     return { userId };
   }
 
+  async ensureSlackConversationMembership(params: {
+    organizationId: string;
+    workspaceId: string;
+    conversationSourceId: string;
+    platformUserId: string;
+    nowIso: string;
+  }): Promise<{ userId: string }> {
+    const user = await this.ensureSlackUser({
+      organizationId: params.organizationId,
+      workspaceId: params.workspaceId,
+      platformUserId: params.platformUserId,
+      nowIso: params.nowIso
+    });
+
+    await this.upsertConversationMembership({
+      organizationId: params.organizationId,
+      workspaceId: params.workspaceId,
+      conversationSourceId: params.conversationSourceId,
+      userId: user.userId,
+      isActive: true,
+      syncedAt: params.nowIso,
+      version: params.nowIso
+    });
+
+    return user;
+  }
+
   private async upsertConversationMembership(params: {
     organizationId: string;
     workspaceId: string;

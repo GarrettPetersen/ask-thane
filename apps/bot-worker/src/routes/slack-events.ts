@@ -6,6 +6,7 @@ import {
   type SlackEnvelope
 } from "@ask-thane/integrations";
 import { runConversationalAgentForSlackMessage } from "../services/agent-runtime";
+import { postSlackMessage } from "../services/slack-api";
 import type { BotEnv } from "../services/task-inference";
 import { ConversationAccessResolver } from "../services/conversation-access";
 import { OrgRegistry } from "../services/org-registry";
@@ -52,6 +53,15 @@ async function addSlackTaskCapturedReaction(input: {
   if (!payload.ok && payload.error !== "already_reacted") {
     throw new Error(`slack_reaction_error:${payload.error ?? "unknown"}`);
   }
+}
+
+async function resolveSlackBotToken(input: {
+  env: BotEnv;
+  externalWorkspaceId: string;
+}): Promise<string | null> {
+  const installStore = new SlackInstallStore(input.env.DB);
+  const installedToken = await installStore.getBotTokenByExternalWorkspaceId(input.externalWorkspaceId);
+  return installedToken ?? input.env.SLACK_BOT_TOKEN ?? null;
 }
 
 export async function handleSlackEvents(request: Request, env: BotEnv): Promise<Response> {
@@ -175,6 +185,13 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
     isPublic: conversationMeta.isPublic,
     nowIso: event.occurredAt
   });
+  await resolver.ensureSlackConversationMembership({
+    organizationId,
+    workspaceId: workspaceRef.workspaceId,
+    conversationSourceId: conversationSource.id,
+    platformUserId: event.author.platformUserId,
+    nowIso: event.occurredAt
+  });
 
   let agentUsed = false;
   let tasksCreatedByAgent = 0;
@@ -190,11 +207,23 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
       event: {
         ...event,
         workspaceId: workspaceRef.workspaceId
-      }
+      },
+      interactionMode: conversationMeta.conversationKind === "dm" ? "dm_reply" : "passive_ingest"
     });
     agentUsed = agentRun.usedTools;
     tasksCreatedByAgent = agentRun.createdTaskIds.length;
     agentSummary = agentRun.finalSummary;
+
+    if (conversationMeta.conversationKind === "dm" && agentRun.replyText) {
+      const token = await resolveSlackBotToken({ env, externalWorkspaceId });
+      if (token) {
+        await postSlackMessage({
+          botToken: token,
+          channelId: event.channelId,
+          text: agentRun.replyText
+        });
+      }
+    }
   } catch (error) {
     console.error("agent_runtime_failed", {
       organizationId,

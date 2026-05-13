@@ -24,6 +24,8 @@ Current tool set:
 - `create_task`
 - `update_task`
 - `request_permission_waiver`
+- `get_notification_cadence`
+- `set_notification_cadence`
 
 ## Permission model
 All tool reads/writes are constrained by actor scope:
@@ -70,3 +72,8 @@ Polling path also links identities for authors, mentions, and reactors.
 ## Fallback and coexistence
 - Scheduled Slack poller now also invokes the same tool-calling agent runtime per ingested message.
 - Webhook and polling paths share one reasoning layer and one command surface.
+
+## DM mode
+- In Slack `dm` conversations, runtime switches to conversational reply mode.
+- The model can answer task questions, update tasks through tools, and change reminder cadence through cadence tools.
+- Bot replies are posted back into the DM thread.

@@ -1,15 +1,14 @@
-import { D1TaskRepository } from "@ask-thane/data";
 import { healthcheck } from "./routes/health";
 import { handleSlackEvents } from "./routes/slack-events";
 import { handleSlackInstallStart, handleSlackOAuthCallback } from "./routes/slack-oauth";
 import { ConversationAccessResolver } from "./services/conversation-access";
+import { runScheduledReminderDigests } from "./services/reminder-digests";
 import { pollSlackWorkspacesForTasks } from "./services/slack-poller";
 import { SlackInstallStore } from "./services/slack-install-store";
 import type { BotEnv } from "./services/task-inference";
 
 async function sendReminders(env: BotEnv): Promise<void> {
-  const repo = new D1TaskRepository(env.DB);
-  await repo.listOpenByAssignee("TODO_WORKSPACE", "TODO_ASSIGNEE");
+  await runScheduledReminderDigests(env);
 }
 
 async function reconcileSlackMemberships(env: BotEnv): Promise<void> {
@@ -106,6 +105,32 @@ async function getPollStatus(env: BotEnv): Promise<Record<string, unknown>> {
   };
 }
 
+async function getDigestStatus(env: BotEnv): Promise<Record<string, unknown>> {
+  const recentCadences = await env.DB
+    .prepare(
+      `SELECT organization_id, workspace_id, user_id, external_user_id, timezone, cadence_summary, next_digest_at, last_digest_at, updated_at
+       FROM user_notification_cadences
+       ORDER BY updated_at DESC
+       LIMIT 50`
+    )
+    .all<Record<string, unknown>>();
+
+  const recentDigests = await env.DB
+    .prepare(
+      `SELECT organization_id, workspace_id, user_id, external_user_id, delivery_channel_id, source_message_id, task_count, sent_at
+       FROM digest_deliveries
+       ORDER BY sent_at DESC
+       LIMIT 50`
+    )
+    .all<Record<string, unknown>>();
+
+  return {
+    ok: true,
+    recentCadences: recentCadences.results ?? [],
+    recentDigestDeliveries: recentDigests.results ?? []
+  };
+}
+
 export default {
   async fetch(request: Request, env: BotEnv): Promise<Response> {
     const { pathname } = new URL(request.url);
@@ -139,6 +164,22 @@ export default {
         return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
       }
       const status = await getPollStatus(env);
+      return Response.json(status, { status: 200 });
+    }
+
+    if (pathname === "/admin/reminders/run" && request.method === "POST") {
+      if (!isAdminAuthorized(request, env)) {
+        return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+      }
+      const summary = await runScheduledReminderDigests(env);
+      return Response.json({ ok: true, summary }, { status: 200 });
+    }
+
+    if (pathname === "/admin/reminders/status" && request.method === "GET") {
+      if (!isAdminAuthorized(request, env)) {
+        return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+      }
+      const status = await getDigestStatus(env);
       return Response.json(status, { status: 200 });
     }
 

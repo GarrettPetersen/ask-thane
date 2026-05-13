@@ -129,6 +129,76 @@ export interface PermissionWaiverDecisionInput {
   metadata?: Record<string, unknown>;
 }
 
+export interface UserNotificationCadenceUpsertInput {
+  id: string;
+  organizationId: string;
+  workspaceId: string;
+  userId: string;
+  platform: UserRef["platform"];
+  externalUserId: string;
+  isEnabled: boolean;
+  timezone: string;
+  cadenceJson: Record<string, unknown>;
+  cadenceSummary?: string;
+  nextDigestAt?: string;
+  lastDigestAt?: string;
+  updatedAt: string;
+  createdAt?: string;
+}
+
+export interface UserNotificationCadenceRecord {
+  id: string;
+  organizationId: string;
+  workspaceId: string;
+  userId: string;
+  platform: UserRef["platform"];
+  externalUserId: string;
+  isEnabled: boolean;
+  timezone: string;
+  cadenceJson: Record<string, unknown>;
+  cadenceSummary?: string;
+  nextDigestAt?: string;
+  lastDigestAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DigestDeliveryInput {
+  id: string;
+  organizationId: string;
+  workspaceId: string;
+  userId: string;
+  externalUserId: string;
+  deliveryChannelId?: string;
+  sourceMessageId?: string;
+  taskCount: number;
+  sentAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface DigestDeliveryRecord {
+  id: string;
+  organizationId: string;
+  workspaceId: string;
+  userId: string;
+  externalUserId: string;
+  deliveryChannelId?: string;
+  sourceMessageId?: string;
+  taskCount: number;
+  sentAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface UserWithOpenTasksRow {
+  organizationId: string;
+  workspaceId: string;
+  userId: string;
+  platform: UserRef["platform"];
+  externalUserId: string;
+  displayName?: string;
+  openTaskCount: number;
+}
+
 export class D1TaskRepository implements TaskRepository {
   constructor(private readonly db: D1Database) {}
 
@@ -181,6 +251,49 @@ export class D1TaskRepository implements TaskRepository {
     const result = await query.bind(workspaceId, assigneeId).all<Record<string, unknown>>();
 
     return (result.results ?? []).map((row) => toTaskRecord(row));
+  }
+
+  async listUsersWithOpenTasks(limit = 200): Promise<UserWithOpenTasksRow[]> {
+    const safeLimit = Math.min(Math.max(limit, 1), 1000);
+    const result = await this.db
+      .prepare(
+        `SELECT
+           t.organization_id,
+           t.workspace_id,
+           u.id AS user_id,
+           u.platform,
+           u.external_user_id,
+           u.display_name,
+           COUNT(*) AS open_task_count
+         FROM tasks t
+         JOIN users u
+           ON u.organization_id = t.organization_id
+          AND u.workspace_id = t.workspace_id
+          AND u.platform = t.assignee_platform
+          AND u.external_user_id = t.assignee_id
+         WHERE t.status IN ('incomplete', 'in_progress', 'blocked')
+         GROUP BY
+           t.organization_id,
+           t.workspace_id,
+           u.id,
+           u.platform,
+           u.external_user_id,
+           u.display_name
+         ORDER BY open_task_count DESC, u.updated_at DESC
+         LIMIT ?`
+      )
+      .bind(safeLimit)
+      .all<Record<string, unknown>>();
+
+    return (result.results ?? []).map((row) => ({
+      organizationId: String(row.organization_id),
+      workspaceId: String(row.workspace_id),
+      userId: String(row.user_id),
+      platform: String(row.platform) as UserRef["platform"],
+      externalUserId: String(row.external_user_id),
+      ...(row.display_name ? { displayName: String(row.display_name) } : {}),
+      openTaskCount: Number(row.open_task_count)
+    }));
   }
 
   async recordIngestEvent(input: IngestEventInput): Promise<boolean> {
@@ -752,6 +865,134 @@ export class D1TaskRepository implements TaskRepository {
     return (result.results ?? []).map((row) => toPermissionWaiverRecord(row));
   }
 
+  async getUserNotificationCadence(input: {
+    organizationId: string;
+    workspaceId: string;
+    userId: string;
+  }): Promise<UserNotificationCadenceRecord | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT *
+         FROM user_notification_cadences
+         WHERE organization_id = ?
+           AND workspace_id = ?
+           AND user_id = ?
+         LIMIT 1`
+      )
+      .bind(input.organizationId, input.workspaceId, input.userId)
+      .first<Record<string, unknown>>();
+
+    return row ? toUserNotificationCadenceRecord(row) : null;
+  }
+
+  async upsertUserNotificationCadence(input: UserNotificationCadenceUpsertInput): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO user_notification_cadences (
+           id, organization_id, workspace_id, user_id, platform, external_user_id,
+           is_enabled, timezone, cadence_json, cadence_summary, next_digest_at, last_digest_at, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(organization_id, workspace_id, user_id)
+         DO UPDATE SET
+           platform = excluded.platform,
+           external_user_id = excluded.external_user_id,
+           is_enabled = excluded.is_enabled,
+           timezone = excluded.timezone,
+           cadence_json = excluded.cadence_json,
+           cadence_summary = excluded.cadence_summary,
+           next_digest_at = excluded.next_digest_at,
+           last_digest_at = excluded.last_digest_at,
+           updated_at = excluded.updated_at`
+      )
+      .bind(
+        input.id,
+        input.organizationId,
+        input.workspaceId,
+        input.userId,
+        input.platform,
+        input.externalUserId,
+        input.isEnabled ? 1 : 0,
+        input.timezone,
+        JSON.stringify(input.cadenceJson),
+        input.cadenceSummary ?? null,
+        input.nextDigestAt ?? null,
+        input.lastDigestAt ?? null,
+        input.createdAt ?? input.updatedAt,
+        input.updatedAt
+      )
+      .run();
+  }
+
+  async listDueNotificationCadences(nowIso: string, limit = 100): Promise<UserNotificationCadenceRecord[]> {
+    const safeLimit = Math.min(Math.max(limit, 1), 500);
+    const result = await this.db
+      .prepare(
+        `SELECT *
+         FROM user_notification_cadences
+         WHERE is_enabled = 1
+           AND next_digest_at IS NOT NULL
+           AND next_digest_at <= ?
+         ORDER BY next_digest_at ASC
+         LIMIT ?`
+      )
+      .bind(nowIso, safeLimit)
+      .all<Record<string, unknown>>();
+
+    return (result.results ?? []).map((row) => toUserNotificationCadenceRecord(row));
+  }
+
+  async recordDigestDelivery(input: DigestDeliveryInput): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO digest_deliveries (
+           id, organization_id, workspace_id, user_id, external_user_id,
+           delivery_channel_id, source_message_id, task_count, sent_at, metadata_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        input.id,
+        input.organizationId,
+        input.workspaceId,
+        input.userId,
+        input.externalUserId,
+        input.deliveryChannelId ?? null,
+        input.sourceMessageId ?? null,
+        input.taskCount,
+        input.sentAt,
+        JSON.stringify(input.metadata ?? {})
+      )
+      .run();
+  }
+
+  async setUserNotificationCadenceDigestTimes(input: {
+    organizationId: string;
+    workspaceId: string;
+    userId: string;
+    lastDigestAt: string;
+    nextDigestAt?: string;
+    updatedAt: string;
+  }): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE user_notification_cadences
+         SET last_digest_at = ?,
+             next_digest_at = ?,
+             updated_at = ?
+         WHERE organization_id = ?
+           AND workspace_id = ?
+           AND user_id = ?`
+      )
+      .bind(
+        input.lastDigestAt,
+        input.nextDigestAt ?? null,
+        input.updatedAt,
+        input.organizationId,
+        input.workspaceId,
+        input.userId
+      )
+      .run();
+  }
+
   private async recordTaskAction(input: TaskActionInput & { resultedStatus: TaskStatus }): Promise<void> {
     await this.db
       .prepare(
@@ -958,4 +1199,56 @@ function toPermissionWaiverRecord(row: Record<string, unknown>): PermissionWaive
   }
 
   return waiver;
+}
+
+function toUserNotificationCadenceRecord(row: Record<string, unknown>): UserNotificationCadenceRecord {
+  const cadence: UserNotificationCadenceRecord = {
+    id: String(row.id),
+    organizationId: String(row.organization_id),
+    workspaceId: String(row.workspace_id),
+    userId: String(row.user_id),
+    platform: String(row.platform) as UserRef["platform"],
+    externalUserId: String(row.external_user_id),
+    isEnabled: Number(row.is_enabled) === 1,
+    timezone: String(row.timezone),
+    cadenceJson: row.cadence_json
+      ? (JSON.parse(String(row.cadence_json)) as Record<string, unknown>)
+      : {},
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+
+  if (row.cadence_summary) {
+    cadence.cadenceSummary = String(row.cadence_summary);
+  }
+  if (row.next_digest_at) {
+    cadence.nextDigestAt = String(row.next_digest_at);
+  }
+  if (row.last_digest_at) {
+    cadence.lastDigestAt = String(row.last_digest_at);
+  }
+
+  return cadence;
+}
+
+function toDigestDeliveryRecord(row: Record<string, unknown>): DigestDeliveryRecord {
+  const delivery: DigestDeliveryRecord = {
+    id: String(row.id),
+    organizationId: String(row.organization_id),
+    workspaceId: String(row.workspace_id),
+    userId: String(row.user_id),
+    externalUserId: String(row.external_user_id),
+    taskCount: Number(row.task_count),
+    sentAt: String(row.sent_at)
+  };
+  if (row.delivery_channel_id) {
+    delivery.deliveryChannelId = String(row.delivery_channel_id);
+  }
+  if (row.source_message_id) {
+    delivery.sourceMessageId = String(row.source_message_id);
+  }
+  if (row.metadata_json) {
+    delivery.metadata = JSON.parse(String(row.metadata_json)) as Record<string, unknown>;
+  }
+  return delivery;
 }

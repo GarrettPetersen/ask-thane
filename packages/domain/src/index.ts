@@ -123,3 +123,33 @@ export interface PermissionWaiverRecord {
   expiresAt?: string;
   metadata?: Record<string, unknown>;
 }
+
+export interface UserNotificationCadenceRecord {
+  id: string;
+  organizationId: string;
+  workspaceId: string;
+  userId: string;
+  platform: UserRef["platform"];
+  externalUserId: string;
+  isEnabled: boolean;
+  timezone: string;
+  cadenceJson: Record<string, unknown>;
+  cadenceSummary?: string;
+  nextDigestAt?: string;
+  lastDigestAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DigestDeliveryRecord {
+  id: string;
+  organizationId: string;
+  workspaceId: string;
+  userId: string;
+  externalUserId: string;
+  deliveryChannelId?: string;
+  sourceMessageId?: string;
+  taskCount: number;
+  sentAt: string;
+  metadata?: Record<string, unknown>;
+}

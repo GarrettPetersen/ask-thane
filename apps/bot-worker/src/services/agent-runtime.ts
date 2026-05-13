@@ -10,6 +10,7 @@ import type {
 } from "@ask-thane/domain";
 import type { MessageEvent } from "@ask-thane/domain";
 import { ConversationAccessResolver } from "./conversation-access";
+import { computeNextDigestAt, defaultCadenceSpec, normalizeCadenceSpec, normalizeTimezone } from "./notification-cadence";
 import { fetchSlackConversationHistory } from "./slack-api";
 import { SlackInstallStore } from "./slack-install-store";
 import type { BotEnv } from "./task-inference";
@@ -21,6 +22,7 @@ interface AgentRuntimeInput {
   externalWorkspaceId: string;
   conversationSourceId: string;
   event: MessageEvent;
+  interactionMode?: "passive_ingest" | "dm_reply";
 }
 
 interface ChatCompletionToolCall {
@@ -50,7 +52,9 @@ interface ChatCompletionResponse {
 interface AgentRunResult {
   usedTools: boolean;
   createdTaskIds: string[];
+  updatedTaskIds: string[];
   finalSummary?: string;
+  replyText?: string;
 }
 
 interface ToolContext {
@@ -305,11 +309,46 @@ function toolDefinitions() {
           }
         }
       }
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_notification_cadence",
+        description: "Read the actor user's current reminder cadence for task digests.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {}
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "set_notification_cadence",
+        description:
+          "Set or update the actor user's reminder cadence and timezone when they ask for a different schedule.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            is_enabled: { type: "boolean" },
+            timezone: { type: "string" },
+            cadence_summary: { type: "string" },
+            cadence_json: { type: "object" }
+          }
+        }
+      }
     }
   ] as const;
 }
 
-function systemPrompt(): string {
+function systemPrompt(mode: "passive_ingest" | "dm_reply"): string {
+  const responseInstruction =
+    mode === "dm_reply"
+      ? "Respond conversationally to the user in plain text. Keep it concise, helpful, and action-oriented."
+      : "Final response must be short JSON with keys: summary, created_task_ids, updated_task_ids, notes_written, waivers_requested.";
+
   return [
     "You are Thane, an autonomous conversational task-tracking agent.",
     "You may call tools multiple times to read context, search tasks, read/write notes, and mutate task state.",
@@ -318,7 +357,8 @@ function systemPrompt(): string {
     "If task completion/cancellation is asserted in private context and visibility is unclear, create a permission waiver request.",
     "When writing notes, prefer short durable facts (skills, ownership patterns, constraints).",
     "Avoid duplicate tasks for same intent/source message.",
-    "Final response must be short JSON with keys: summary, created_task_ids, updated_task_ids, notes_written, waivers_requested."
+    "Use notification cadence tools when the user asks to change reminder frequency or timing.",
+    responseInstruction
   ].join(" ");
 }
 
@@ -680,17 +720,112 @@ async function executeTool(
       return { ok: true };
     }
 
+    case "get_notification_cadence": {
+      const cadence = await ctx.repo.getUserNotificationCadence({
+        organizationId: ctx.organizationId,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.actorInternalUserId
+      });
+
+      if (!cadence) {
+        return {
+          ok: true,
+          is_configured: false,
+          default_cadence: {
+            timezone: "UTC",
+            cadence_json: defaultCadenceSpec(),
+            cadence_summary: "Once per working day"
+          }
+        };
+      }
+
+      return {
+        ok: true,
+        is_configured: true,
+        cadence: {
+          timezone: cadence.timezone,
+          cadence_json: cadence.cadenceJson,
+          cadence_summary: cadence.cadenceSummary ?? null,
+          is_enabled: cadence.isEnabled,
+          next_digest_at: cadence.nextDigestAt ?? null,
+          last_digest_at: cadence.lastDigestAt ?? null
+        }
+      };
+    }
+
+    case "set_notification_cadence": {
+      const nowIso = new Date().toISOString();
+      const existing = await ctx.repo.getUserNotificationCadence({
+        organizationId: ctx.organizationId,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.actorInternalUserId
+      });
+
+      const existingCadenceJson = existing?.cadenceJson ?? (defaultCadenceSpec() as unknown as Record<string, unknown>);
+      const rawCadenceJson =
+        args.cadence_json && typeof args.cadence_json === "object"
+          ? (args.cadence_json as Record<string, unknown>)
+          : existingCadenceJson;
+
+      const normalizedSpec = normalizeCadenceSpec(rawCadenceJson);
+      const timezone = normalizeTimezone(typeof args.timezone === "string" ? args.timezone : existing?.timezone ?? "UTC");
+      const isEnabled = typeof args.is_enabled === "boolean" ? args.is_enabled : (existing?.isEnabled ?? true);
+      const cadenceSummary =
+        typeof args.cadence_summary === "string" && args.cadence_summary.trim()
+          ? args.cadence_summary.trim()
+          : existing?.cadenceSummary ?? "Custom cadence";
+
+      const nextDigestAt = isEnabled
+        ? computeNextDigestAt({
+            cadenceJson: normalizedSpec as unknown as Record<string, unknown>,
+            timezone,
+            nowIso,
+            fromIso: nowIso
+          })
+        : null;
+
+      await ctx.repo.upsertUserNotificationCadence({
+        id: existing?.id ?? crypto.randomUUID(),
+        organizationId: ctx.organizationId,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.actorInternalUserId,
+        platform: "slack",
+        externalUserId: ctx.actorExternalUserId,
+        isEnabled,
+        timezone,
+        cadenceJson: normalizedSpec as unknown as Record<string, unknown>,
+        cadenceSummary,
+        ...(nextDigestAt ? { nextDigestAt } : {}),
+        ...(existing?.lastDigestAt ? { lastDigestAt: existing.lastDigestAt } : {}),
+        updatedAt: nowIso,
+        createdAt: existing?.createdAt ?? nowIso
+      });
+
+      return {
+        ok: true,
+        cadence: {
+          timezone,
+          cadence_json: normalizedSpec,
+          cadence_summary: cadenceSummary,
+          is_enabled: isEnabled,
+          next_digest_at: nextDigestAt
+        }
+      };
+    }
+
     default:
       return { ok: false, error: `unknown_tool:${toolCall.function.name}` };
   }
 }
 
 export async function runConversationalAgentForSlackMessage(input: AgentRuntimeInput): Promise<AgentRunResult> {
+  const interactionMode = input.interactionMode ?? "passive_ingest";
+
   if ((input.env.DEFAULT_LLM_PROVIDER ?? "openai") !== "openai") {
-    return { usedTools: false, createdTaskIds: [] };
+    return { usedTools: false, createdTaskIds: [], updatedTaskIds: [] };
   }
   if (!input.env.OPENAI_API_KEY) {
-    return { usedTools: false, createdTaskIds: [] };
+    return { usedTools: false, createdTaskIds: [], updatedTaskIds: [] };
   }
 
   const repo = new D1TaskRepository(input.env.DB);
@@ -726,7 +861,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
   });
 
   if (!botToken) {
-    return { usedTools: false, createdTaskIds: [] };
+    return { usedTools: false, createdTaskIds: [], updatedTaskIds: [] };
   }
 
   const recentMessages = await fetchSlackConversationHistory({
@@ -782,6 +917,11 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     scopeId: actorPerson.id,
     limit: 15
   });
+  const userCadence = await repo.getUserNotificationCadence({
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    userId: actorUser.userId
+  });
 
   const readableConversations = await resolver.listReadableConversationSources({
     organizationId: input.organizationId,
@@ -827,13 +967,22 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
       conversation: conversationNotes.map((note) => note.content),
       user: userNotes.map((note) => note.content),
       person: personNotes.map((note) => note.content)
-    }
+    },
+    notification_cadence: userCadence
+      ? {
+          timezone: userCadence.timezone,
+          cadence_json: userCadence.cadenceJson,
+          cadence_summary: userCadence.cadenceSummary ?? null,
+          is_enabled: userCadence.isEnabled,
+          next_digest_at: userCadence.nextDigestAt ?? null
+        }
+      : null
   };
 
   const messages: Array<Record<string, unknown>> = [
     {
       role: "system",
-      content: systemPrompt()
+      content: systemPrompt(interactionMode)
     },
     {
       role: "user",
@@ -847,6 +996,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
   const waiversRequestedCountRef = { count: 0 };
   let usedTools = false;
   let finalSummary: string | undefined;
+  let replyText: string | undefined;
 
   const ctx: ToolContext = {
     env: input.env,
@@ -903,7 +1053,12 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
 
     if (toolCalls.length === 0) {
       if (typeof assistantMessage.content === "string" && assistantMessage.content.trim()) {
-        finalSummary = assistantMessage.content.trim();
+        const content = assistantMessage.content.trim();
+        if (interactionMode === "dm_reply") {
+          replyText = content;
+        } else {
+          finalSummary = content;
+        }
       }
       break;
     }
@@ -928,9 +1083,21 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     waivers_requested: waiversRequestedCountRef.count
   };
 
-  return {
+  const result: AgentRunResult = {
     usedTools,
     createdTaskIds,
-    finalSummary: JSON.stringify(summaryObject)
+    updatedTaskIds: Array.from(updatedTaskIds)
   };
+
+  if (interactionMode === "passive_ingest") {
+    result.finalSummary = JSON.stringify(summaryObject);
+  } else if (finalSummary) {
+    result.finalSummary = finalSummary;
+  }
+
+  if (replyText) {
+    result.replyText = replyText;
+  }
+
+  return result;
 }
