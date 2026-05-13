@@ -35,6 +35,24 @@ export interface AclFilteredTaskReadInput {
   allowUnscoped?: boolean;
 }
 
+export interface AclTaskSearchInput {
+  organizationId: string;
+  readableConversationSourceIds: string[];
+  query?: string;
+  assigneeId?: string;
+  workspaceId?: string;
+  statuses?: TaskStatus[];
+  limit?: number;
+  allowUnscoped?: boolean;
+}
+
+export interface AclTaskGetByIdInput {
+  organizationId: string;
+  taskId: string;
+  readableConversationSourceIds: string[];
+  allowUnscoped?: boolean;
+}
+
 export interface ResolvePersonForIdentityInput {
   organizationId: string;
   provider: UserRef["platform"];
@@ -262,6 +280,146 @@ export class D1TaskRepository implements TaskRepository {
     return (result.results ?? []).map((row) => toTaskRecord(row));
   }
 
+  async searchTasksWithAcl(input: AclTaskSearchInput): Promise<TaskRecord[]> {
+    const readableConversationSourceIds = Array.from(new Set(input.readableConversationSourceIds));
+    const allowUnscoped = Boolean(input.allowUnscoped);
+    const hasReadableScopes = readableConversationSourceIds.length > 0;
+    const scopePlaceholders = readableConversationSourceIds.map(() => "?").join(", ");
+
+    const aclReadableCondition = hasReadableScopes
+      ? `ra.conversation_source_id IS NULL OR ra.conversation_source_id IN (${scopePlaceholders})`
+      : "ra.conversation_source_id IS NULL";
+
+    const fallbackVisibilityParts: string[] = [];
+    if (hasReadableScopes) {
+      fallbackVisibilityParts.push(`t.primary_conversation_source_id IN (${scopePlaceholders})`);
+    }
+    if (allowUnscoped) {
+      fallbackVisibilityParts.push("t.primary_conversation_source_id IS NULL");
+    }
+    const fallbackVisibility = fallbackVisibilityParts.length > 0 ? fallbackVisibilityParts.join(" OR ") : "0";
+
+    const whereParts: string[] = [
+      "t.organization_id = ?",
+      `(
+         EXISTS (
+           SELECT 1
+           FROM resource_acl ra
+           WHERE ra.organization_id = t.organization_id
+             AND ra.resource_type = 'task'
+             AND ra.resource_id = t.id
+             AND (${aclReadableCondition})
+         )
+         OR (
+           NOT EXISTS (
+             SELECT 1
+             FROM resource_acl ra2
+             WHERE ra2.organization_id = t.organization_id
+               AND ra2.resource_type = 'task'
+               AND ra2.resource_id = t.id
+           )
+           AND (${fallbackVisibility})
+         )
+       )`
+    ];
+
+    const bindings: Array<string | number> = [input.organizationId];
+    if (hasReadableScopes) {
+      bindings.push(...readableConversationSourceIds);
+      bindings.push(...readableConversationSourceIds);
+    }
+
+    if (input.workspaceId) {
+      whereParts.push("t.workspace_id = ?");
+      bindings.push(input.workspaceId);
+    }
+
+    if (input.assigneeId) {
+      whereParts.push("t.assignee_id = ?");
+      bindings.push(input.assigneeId);
+    }
+
+    const statuses = input.statuses && input.statuses.length > 0 ? input.statuses : null;
+    if (statuses) {
+      whereParts.push(`t.status IN (${statuses.map(() => "?").join(", ")})`);
+      bindings.push(...statuses);
+    }
+
+    const query = input.query?.trim();
+    if (query) {
+      whereParts.push("(LOWER(t.title) LIKE ? OR LOWER(COALESCE(t.description, '')) LIKE ?)");
+      const like = `%${query.toLowerCase()}%`;
+      bindings.push(like, like);
+    }
+
+    const limit = Math.min(Math.max(input.limit ?? 30, 1), 200);
+    bindings.push(limit);
+
+    const sql = `SELECT t.*
+       FROM tasks t
+       WHERE ${whereParts.join("\n         AND ")}
+       ORDER BY t.created_at DESC
+       LIMIT ?`;
+
+    const result = await this.db.prepare(sql).bind(...bindings).all<Record<string, unknown>>();
+    return (result.results ?? []).map((row) => toTaskRecord(row));
+  }
+
+  async getTaskByIdWithAcl(input: AclTaskGetByIdInput): Promise<TaskRecord | null> {
+    const readableConversationSourceIds = Array.from(new Set(input.readableConversationSourceIds));
+    const allowUnscoped = Boolean(input.allowUnscoped);
+    const hasReadableScopes = readableConversationSourceIds.length > 0;
+    const scopePlaceholders = readableConversationSourceIds.map(() => "?").join(", ");
+
+    const aclReadableCondition = hasReadableScopes
+      ? `ra.conversation_source_id IS NULL OR ra.conversation_source_id IN (${scopePlaceholders})`
+      : "ra.conversation_source_id IS NULL";
+
+    const fallbackVisibilityParts: string[] = [];
+    if (hasReadableScopes) {
+      fallbackVisibilityParts.push(`t.primary_conversation_source_id IN (${scopePlaceholders})`);
+    }
+    if (allowUnscoped) {
+      fallbackVisibilityParts.push("t.primary_conversation_source_id IS NULL");
+    }
+    const fallbackVisibility = fallbackVisibilityParts.length > 0 ? fallbackVisibilityParts.join(" OR ") : "0";
+
+    const sql = `SELECT t.*
+      FROM tasks t
+      WHERE t.organization_id = ?
+        AND t.id = ?
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM resource_acl ra
+            WHERE ra.organization_id = t.organization_id
+              AND ra.resource_type = 'task'
+              AND ra.resource_id = t.id
+              AND (${aclReadableCondition})
+          )
+          OR (
+            NOT EXISTS (
+              SELECT 1
+              FROM resource_acl ra2
+              WHERE ra2.organization_id = t.organization_id
+                AND ra2.resource_type = 'task'
+                AND ra2.resource_id = t.id
+            )
+            AND (${fallbackVisibility})
+          )
+        )
+      LIMIT 1`;
+
+    const bindings: Array<string> = [input.organizationId, input.taskId];
+    if (hasReadableScopes) {
+      bindings.push(...readableConversationSourceIds);
+      bindings.push(...readableConversationSourceIds);
+    }
+
+    const row = await this.db.prepare(sql).bind(...bindings).first<Record<string, unknown>>();
+    return row ? toTaskRecord(row) : null;
+  }
+
   async resolveOrCreatePersonForIdentity(input: ResolvePersonForIdentityInput): Promise<PersonRecord> {
     const existing = await this.db
       .prepare(
@@ -371,6 +529,24 @@ export class D1TaskRepository implements TaskRepository {
       .all<Record<string, unknown>>();
 
     return (result.results ?? []).map((row) => toIdentityAccountLink(row));
+  }
+
+  async getPersonByUserId(organizationId: string, userId: string): Promise<PersonRecord | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT p.*
+         FROM people p
+         JOIN identity_accounts ia ON ia.person_id = p.id
+         WHERE p.organization_id = ?
+           AND ia.organization_id = ?
+           AND ia.user_id = ?
+         ORDER BY ia.updated_at DESC
+         LIMIT 1`
+      )
+      .bind(organizationId, organizationId, userId)
+      .first<Record<string, unknown>>();
+
+    return row ? toPersonRecord(row) : null;
   }
 
   async addAgentNote(input: AgentNoteInput): Promise<void> {

@@ -1,6 +1,7 @@
 import { D1TaskRepository } from "@ask-thane/data";
 import type { TaskRecord, TaskUrgency } from "@ask-thane/domain";
 import { ConversationAccessResolver } from "./conversation-access";
+import { fetchSlackConversationHistory, type SlackHistoryMessage, type SlackReaction } from "./slack-api";
 import { SlackInstallStore } from "./slack-install-store";
 import type { BotEnv } from "./task-inference";
 
@@ -22,29 +23,6 @@ interface SlackConversationListResponse {
   ok?: boolean;
   error?: string;
   channels?: SlackConversation[];
-  response_metadata?: {
-    next_cursor?: string;
-  };
-}
-
-interface SlackReaction {
-  name?: string;
-  users?: string[];
-}
-
-interface SlackHistoryMessage {
-  type?: string;
-  subtype?: string;
-  user?: string;
-  text?: string;
-  ts?: string;
-  reactions?: SlackReaction[];
-}
-
-interface SlackHistoryResponse {
-  ok?: boolean;
-  error?: string;
-  messages?: SlackHistoryMessage[];
   response_metadata?: {
     next_cursor?: string;
   };
@@ -251,52 +229,6 @@ async function listJoinedChannels(botToken: string): Promise<Array<{ id: string;
   return channels;
 }
 
-async function fetchChannelMessages(input: {
-  botToken: string;
-  channelId: string;
-  oldestTs?: string;
-}): Promise<SlackHistoryMessage[]> {
-  const messages: SlackHistoryMessage[] = [];
-  let cursor: string | null = null;
-
-  do {
-    const params = new URLSearchParams({
-      channel: input.channelId,
-      limit: "200",
-      inclusive: "false"
-    });
-    if (input.oldestTs) {
-      params.set("oldest", input.oldestTs);
-    }
-    if (cursor) {
-      params.set("cursor", cursor);
-    }
-
-    const response = await fetch(`https://slack.com/api/conversations.history?${params.toString()}`, {
-      headers: {
-        Authorization: `Bearer ${input.botToken}`
-      }
-    });
-    if (!response.ok) {
-      throw new Error(`slack_history_http_error:${response.status}`);
-    }
-
-    const payload = (await response.json()) as SlackHistoryResponse;
-    if (!payload.ok) {
-      throw new Error(`slack_history_error:${payload.error ?? "unknown"}`);
-    }
-
-    for (const message of payload.messages ?? []) {
-      messages.push(message);
-    }
-
-    cursor = payload.response_metadata?.next_cursor?.trim() || null;
-  } while (cursor);
-
-  messages.sort((a, b) => Number(a.ts ?? "0") - Number(b.ts ?? "0"));
-  return messages;
-}
-
 async function getPollCursor(input: {
   db: D1Database;
   organizationId: string;
@@ -430,10 +362,11 @@ async function processWorkspaceMessages(target: WorkspacePollTarget, env: BotEnv
     const oldestTs =
       previousCursor ?? String(Math.floor(Date.now() / 1000) - 60 * 60 * 4);
 
-    const messages = await fetchChannelMessages({
+    const messages = await fetchSlackConversationHistory({
       botToken: target.botToken,
       channelId: channel.id,
-      oldestTs
+      oldestTs,
+      maxPages: 8
     });
 
     let newestSeenTs: string | null = null;

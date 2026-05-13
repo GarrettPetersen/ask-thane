@@ -1,0 +1,936 @@
+import { D1TaskRepository, type AclTaskSearchInput } from "@ask-thane/data";
+import type {
+  NoteScopeType,
+  NoteVisibility,
+  TaskActionType,
+  TaskDifficulty,
+  TaskRecord,
+  TaskStatus,
+  TaskUrgency
+} from "@ask-thane/domain";
+import type { MessageEvent } from "@ask-thane/domain";
+import { ConversationAccessResolver } from "./conversation-access";
+import { fetchSlackConversationHistory } from "./slack-api";
+import { SlackInstallStore } from "./slack-install-store";
+import type { BotEnv } from "./task-inference";
+
+interface AgentRuntimeInput {
+  env: BotEnv;
+  organizationId: string;
+  workspaceId: string;
+  externalWorkspaceId: string;
+  conversationSourceId: string;
+  event: MessageEvent;
+}
+
+interface ChatCompletionToolCall {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+interface ChatCompletionResponse {
+  choices?: Array<{
+    message?: {
+      role?: string;
+      content?: string | null;
+      tool_calls?: ChatCompletionToolCall[];
+    };
+  }>;
+  error?: {
+    message?: string;
+    code?: string;
+    type?: string;
+  };
+}
+
+interface AgentRunResult {
+  usedTools: boolean;
+  createdTaskIds: string[];
+  finalSummary?: string;
+}
+
+interface ToolContext {
+  env: BotEnv;
+  repo: D1TaskRepository;
+  resolver: ConversationAccessResolver;
+  installStore: SlackInstallStore;
+  organizationId: string;
+  workspaceId: string;
+  externalWorkspaceId: string;
+  actorExternalUserId: string;
+  actorInternalUserId: string;
+  actorPersonId?: string;
+  readableConversationSourceIds: string[];
+  currentConversationSourceId: string;
+  botToken: string;
+  createdTaskIds: string[];
+  event: MessageEvent;
+}
+
+function clampLimit(limit: unknown, fallback: number, max: number): number {
+  if (typeof limit !== "number" || !Number.isFinite(limit)) {
+    return fallback;
+  }
+  return Math.min(Math.max(Math.floor(limit), 1), max);
+}
+
+function asTaskStatusList(raw: unknown): TaskStatus[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const allowed: TaskStatus[] = ["incomplete", "in_progress", "blocked", "done", "cancelled"];
+  const statuses = raw.filter((value): value is TaskStatus => typeof value === "string" && allowed.includes(value as TaskStatus));
+  return statuses.length > 0 ? statuses : undefined;
+}
+
+function asNoteScopeType(raw: unknown): NoteScopeType | null {
+  if (
+    raw === "organization" ||
+    raw === "workspace" ||
+    raw === "conversation" ||
+    raw === "person" ||
+    raw === "user" ||
+    raw === "task"
+  ) {
+    return raw;
+  }
+  return null;
+}
+
+function asVisibility(raw: unknown): NoteVisibility | null {
+  if (raw === "private" || raw === "organization" || raw === "conversation_acl") {
+    return raw;
+  }
+  return null;
+}
+
+function asTaskActionType(raw: unknown): TaskActionType | null {
+  if (
+    raw === "create" ||
+    raw === "mark_done" ||
+    raw === "mark_cancelled" ||
+    raw === "mark_blocked" ||
+    raw === "reopen" ||
+    raw === "merge_into" ||
+    raw === "edit"
+  ) {
+    return raw;
+  }
+  return null;
+}
+
+function asUrgency(raw: unknown): TaskUrgency {
+  if (raw === "low" || raw === "medium" || raw === "high" || raw === "critical") {
+    return raw;
+  }
+  return "medium";
+}
+
+function asDifficulty(raw: unknown): TaskDifficulty {
+  if (raw === "low" || raw === "medium" || raw === "high") {
+    return raw;
+  }
+  return "medium";
+}
+
+function summarizeTask(task: TaskRecord): Record<string, unknown> {
+  return {
+    id: task.id,
+    title: task.title,
+    status: task.status,
+    assignee_user_id: task.assignee.platformUserId,
+    assigner_user_id: task.assigner.platformUserId,
+    urgency: task.urgency,
+    difficulty: task.difficulty,
+    created_at: task.createdAt,
+    due_at: task.dueAt ?? null,
+    channel_id: task.channelId ?? null,
+    source_message_id: task.sourceMessageId ?? null
+  };
+}
+
+function toolDefinitions() {
+  return [
+    {
+      type: "function",
+      function: {
+        name: "search_tasks",
+        description: "Search visible tasks in the organization with ACL already enforced.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            query: { type: "string" },
+            assignee_user_id: { type: "string" },
+            statuses: {
+              type: "array",
+              items: {
+                type: "string",
+                enum: ["incomplete", "in_progress", "blocked", "done", "cancelled"]
+              }
+            },
+            limit: { type: "number" }
+          }
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_notes",
+        description: "Read previously stored agent notes from a specific scope.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          required: ["scope_type", "scope_id"],
+          properties: {
+            scope_type: {
+              type: "string",
+              enum: ["organization", "workspace", "conversation", "person", "user", "task"]
+            },
+            scope_id: { type: "string" },
+            limit: { type: "number" }
+          }
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "write_note",
+        description: "Write an agent memory note scoped to org/workspace/conversation/person/user/task.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          required: ["scope_type", "scope_id", "visibility", "content"],
+          properties: {
+            scope_type: {
+              type: "string",
+              enum: ["organization", "workspace", "conversation", "person", "user", "task"]
+            },
+            scope_id: { type: "string" },
+            visibility: {
+              type: "string",
+              enum: ["private", "organization", "conversation_acl"]
+            },
+            content: { type: "string" }
+          }
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_conversation_context",
+        description: "Read recent messages from a readable conversation.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            conversation_source_id: { type: "string" },
+            limit: { type: "number" }
+          }
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "create_task",
+        description: "Create a new task from conversational intent.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          required: ["title"],
+          properties: {
+            title: { type: "string" },
+            description: { type: "string" },
+            assignee_user_id: { type: "string" },
+            urgency: { type: "string", enum: ["low", "medium", "high", "critical"] },
+            difficulty: { type: "string", enum: ["low", "medium", "high"] },
+            due_at: { type: "string" }
+          }
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "update_task",
+        description: "Apply a task action to an existing task when state changed from conversation.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          required: ["task_id", "action_type"],
+          properties: {
+            task_id: { type: "string" },
+            action_type: {
+              type: "string",
+              enum: ["mark_done", "mark_cancelled", "mark_blocked", "reopen", "merge_into", "edit"]
+            },
+            status: {
+              type: "string",
+              enum: ["incomplete", "in_progress", "blocked", "done", "cancelled"]
+            },
+            title: { type: "string" },
+            description: { type: "string" },
+            due_at: { type: "string" },
+            target_task_id: { type: "string" }
+          }
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "request_permission_waiver",
+        description: "Record a permission waiver request for widening visibility.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          required: ["resource_type", "resource_id", "requested_scope_type", "requested_scope_id"],
+          properties: {
+            resource_type: { type: "string" },
+            resource_id: { type: "string" },
+            requested_scope_type: {
+              type: "string",
+              enum: ["organization", "workspace", "conversation", "person", "user", "task"]
+            },
+            requested_scope_id: { type: "string" },
+            reason: { type: "string" }
+          }
+        }
+      }
+    }
+  ] as const;
+}
+
+function systemPrompt(): string {
+  return [
+    "You are Thane, an autonomous conversational task-tracking agent.",
+    "You may call tools multiple times to read context, search tasks, read/write notes, and mutate task state.",
+    "Only use data accessible by tool outputs; never assume hidden context.",
+    "Treat reactions, mentions, and historical notes as signals, not certainty.",
+    "If task completion/cancellation is asserted in private context and visibility is unclear, create a permission waiver request.",
+    "When writing notes, prefer short durable facts (skills, ownership patterns, constraints).",
+    "Avoid duplicate tasks for same intent/source message.",
+    "Final response must be short JSON with keys: summary, created_task_ids, updated_task_ids, notes_written, waivers_requested."
+  ].join(" ");
+}
+
+async function resolveBotToken(input: {
+  env: BotEnv;
+  installStore: SlackInstallStore;
+  externalWorkspaceId: string;
+}): Promise<string | null> {
+  const installed = await input.installStore.getBotTokenByExternalWorkspaceId(input.externalWorkspaceId);
+  return installed ?? input.env.SLACK_BOT_TOKEN ?? null;
+}
+
+function permissionError(tool: string, reason: string): Record<string, unknown> {
+  return { ok: false, tool, error: "permission_denied", reason };
+}
+
+async function executeTool(
+  toolCall: ChatCompletionToolCall,
+  ctx: ToolContext,
+  updatedTaskIds: Set<string>,
+  notesWrittenCountRef: { count: number },
+  waiversRequestedCountRef: { count: number }
+): Promise<Record<string, unknown>> {
+  let args: Record<string, unknown> = {};
+  try {
+    args = JSON.parse(toolCall.function.arguments || "{}") as Record<string, unknown>;
+  } catch {
+    return { ok: false, error: "invalid_tool_arguments_json" };
+  }
+
+  switch (toolCall.function.name) {
+    case "search_tasks": {
+      const searchInput: AclTaskSearchInput = {
+        organizationId: ctx.organizationId,
+        readableConversationSourceIds: ctx.readableConversationSourceIds,
+        allowUnscoped: true,
+        limit: clampLimit(args.limit, 20, 100)
+      };
+      if (typeof args.query === "string" && args.query.trim()) {
+        searchInput.query = args.query.trim();
+      }
+      if (typeof args.assignee_user_id === "string" && args.assignee_user_id.trim()) {
+        searchInput.assigneeId = args.assignee_user_id.trim();
+      }
+      const statuses = asTaskStatusList(args.statuses);
+      if (statuses) {
+        searchInput.statuses = statuses;
+      }
+
+      const tasks = await ctx.repo.searchTasksWithAcl(searchInput);
+      return { ok: true, tasks: tasks.map((task) => summarizeTask(task)) };
+    }
+
+    case "get_notes": {
+      const scopeType = asNoteScopeType(args.scope_type);
+      const scopeId = typeof args.scope_id === "string" ? args.scope_id.trim() : "";
+      if (!scopeType || !scopeId) {
+        return { ok: false, error: "invalid_scope" };
+      }
+
+      if (scopeType === "conversation" && !ctx.readableConversationSourceIds.includes(scopeId)) {
+        return permissionError(toolCall.function.name, "conversation_not_readable");
+      }
+
+      const notes = await ctx.repo.listAgentNotes({
+        organizationId: ctx.organizationId,
+        scopeType,
+        scopeId,
+        limit: clampLimit(args.limit, 20, 100)
+      });
+      return {
+        ok: true,
+        notes: notes.map((note) => ({
+          id: note.id,
+          content: note.content,
+          visibility: note.visibility,
+          author_type: note.authorType,
+          created_at: note.createdAt
+        }))
+      };
+    }
+
+    case "write_note": {
+      const scopeType = asNoteScopeType(args.scope_type);
+      const scopeId = typeof args.scope_id === "string" ? args.scope_id.trim() : "";
+      const visibility = asVisibility(args.visibility);
+      const content = typeof args.content === "string" ? args.content.trim() : "";
+      if (!scopeType || !scopeId || !visibility || !content) {
+        return { ok: false, error: "invalid_note_input" };
+      }
+
+      if (scopeType === "conversation" && !ctx.readableConversationSourceIds.includes(scopeId)) {
+        return permissionError(toolCall.function.name, "conversation_not_readable");
+      }
+      if (scopeType === "user" && scopeId !== ctx.actorInternalUserId) {
+        return permissionError(toolCall.function.name, "user_scope_not_allowed");
+      }
+      if (scopeType === "person" && ctx.actorPersonId && scopeId !== ctx.actorPersonId) {
+        return permissionError(toolCall.function.name, "person_scope_not_allowed");
+      }
+
+      await ctx.repo.addAgentNote({
+        id: crypto.randomUUID(),
+        organizationId: ctx.organizationId,
+        scopeType,
+        scopeId,
+        visibility,
+        content,
+        authorType: "agent",
+        sourceConversationSourceId: ctx.currentConversationSourceId,
+        metadata: {
+          source: "tool_agent_runtime"
+        },
+        createdAt: new Date().toISOString()
+      });
+
+      notesWrittenCountRef.count += 1;
+      return { ok: true };
+    }
+
+    case "get_conversation_context": {
+      const requestedSourceId =
+        typeof args.conversation_source_id === "string" && args.conversation_source_id.trim()
+          ? args.conversation_source_id.trim()
+          : ctx.currentConversationSourceId;
+
+      if (!ctx.readableConversationSourceIds.includes(requestedSourceId)) {
+        return permissionError(toolCall.function.name, "conversation_not_readable");
+      }
+
+      const source = await ctx.resolver.getConversationSourceById({
+        organizationId: ctx.organizationId,
+        conversationSourceId: requestedSourceId
+      });
+      if (!source) {
+        return { ok: false, error: "conversation_source_not_found" };
+      }
+      if (source.workspaceId !== ctx.workspaceId) {
+        return permissionError(toolCall.function.name, "cross_workspace_not_allowed");
+      }
+
+      const messages = await fetchSlackConversationHistory({
+        botToken: ctx.botToken,
+        channelId: source.providerConversationId,
+        limit: clampLimit(args.limit, 30, 120),
+        maxPages: 2
+      });
+
+      return {
+        ok: true,
+        conversation_source_id: source.id,
+        messages: messages
+          .slice(-clampLimit(args.limit, 30, 120))
+          .map((message) => ({
+            user: message.user ?? null,
+            ts: message.ts ?? null,
+            text: message.text ?? null,
+            reactions: (message.reactions ?? []).map((reaction) => ({
+              name: reaction.name ?? null,
+              users: reaction.users ?? []
+            }))
+          }))
+      };
+    }
+
+    case "create_task": {
+      const title = typeof args.title === "string" ? args.title.trim() : "";
+      if (!title) {
+        return { ok: false, error: "title_required" };
+      }
+
+      const assigneeExternal =
+        typeof args.assignee_user_id === "string" && args.assignee_user_id.trim()
+          ? args.assignee_user_id.trim()
+          : ctx.actorExternalUserId;
+
+      const task: TaskRecord = {
+        id: crypto.randomUUID(),
+        workspaceId: ctx.workspaceId,
+        channelId: ctx.event.channelId,
+        sourceMessageId: ctx.event.messageId,
+        title,
+        assignee: {
+          platform: "slack",
+          platformUserId: assigneeExternal
+        },
+        assigner: {
+          platform: "slack",
+          platformUserId: ctx.actorExternalUserId
+        },
+        createdAt: new Date().toISOString(),
+        urgency: asUrgency(args.urgency),
+        difficulty: asDifficulty(args.difficulty),
+        status: "incomplete",
+        confidence: 0.7,
+        metadata: {
+          extractor: "tool_agent_runtime",
+          message_id: ctx.event.messageId
+        }
+      };
+
+      if (typeof args.description === "string" && args.description.trim()) {
+        task.description = args.description.trim();
+      }
+      if (typeof args.due_at === "string" && args.due_at.trim()) {
+        const parsed = new Date(args.due_at);
+        if (!Number.isNaN(parsed.valueOf())) {
+          task.dueAt = parsed.toISOString();
+        }
+      }
+
+      await ctx.repo.save(task);
+      await ctx.repo.performTaskAction({
+        id: crypto.randomUUID(),
+        organizationId: ctx.organizationId,
+        workspaceId: ctx.workspaceId,
+        taskId: task.id,
+        actionType: "create",
+        actorPlatform: "slack",
+        actorId: ctx.actorExternalUserId,
+        sourceConversationSourceId: ctx.currentConversationSourceId,
+        payload: {
+          tool: "create_task"
+        },
+        createdAt: new Date().toISOString()
+      });
+
+      ctx.createdTaskIds.push(task.id);
+      return { ok: true, task: summarizeTask(task) };
+    }
+
+    case "update_task": {
+      const taskId = typeof args.task_id === "string" ? args.task_id.trim() : "";
+      const actionType = asTaskActionType(args.action_type);
+      if (!taskId || !actionType || actionType === "create") {
+        return { ok: false, error: "invalid_task_update_input" };
+      }
+
+      const readableTask = await ctx.repo.getTaskByIdWithAcl({
+        organizationId: ctx.organizationId,
+        taskId,
+        readableConversationSourceIds: ctx.readableConversationSourceIds,
+        allowUnscoped: true
+      });
+      if (!readableTask) {
+        return permissionError(toolCall.function.name, "task_not_readable");
+      }
+
+      let status: TaskStatus | undefined;
+      if (
+        args.status === "incomplete" ||
+        args.status === "in_progress" ||
+        args.status === "blocked" ||
+        args.status === "done" ||
+        args.status === "cancelled"
+      ) {
+        status = args.status;
+      }
+
+      const updateInput: {
+        id: string;
+        organizationId: string;
+        workspaceId: string;
+        taskId: string;
+        actionType: TaskActionType;
+        actorPlatform: "slack";
+        actorId: string;
+        sourceConversationSourceId: string;
+        status?: TaskStatus;
+        title?: string;
+        description?: string;
+        dueAt?: string;
+        targetTaskId?: string;
+        payload: Record<string, unknown>;
+        createdAt: string;
+      } = {
+        id: crypto.randomUUID(),
+        organizationId: ctx.organizationId,
+        workspaceId: ctx.workspaceId,
+        taskId,
+        actionType,
+        actorPlatform: "slack",
+        actorId: ctx.actorExternalUserId,
+        sourceConversationSourceId: ctx.currentConversationSourceId,
+        payload: {
+          tool: "update_task"
+        },
+        createdAt: new Date().toISOString()
+      };
+
+      if (status) {
+        updateInput.status = status;
+      }
+      if (typeof args.title === "string") {
+        updateInput.title = args.title;
+      }
+      if (typeof args.description === "string") {
+        updateInput.description = args.description;
+      }
+      if (typeof args.due_at === "string") {
+        updateInput.dueAt = args.due_at;
+      }
+      if (typeof args.target_task_id === "string") {
+        updateInput.targetTaskId = args.target_task_id;
+      }
+
+      await ctx.repo.performTaskAction(updateInput);
+
+      updatedTaskIds.add(taskId);
+      return { ok: true, task_id: taskId, action_type: actionType };
+    }
+
+    case "request_permission_waiver": {
+      const resourceType = typeof args.resource_type === "string" ? args.resource_type.trim() : "";
+      const resourceId = typeof args.resource_id === "string" ? args.resource_id.trim() : "";
+      const requestedScopeType = asNoteScopeType(args.requested_scope_type);
+      const requestedScopeId = typeof args.requested_scope_id === "string" ? args.requested_scope_id.trim() : "";
+      const reason = typeof args.reason === "string" ? args.reason.trim() : undefined;
+
+      if (!resourceType || !resourceId || !requestedScopeType || !requestedScopeId) {
+        return { ok: false, error: "invalid_waiver_input" };
+      }
+
+      if (requestedScopeType === "conversation" && !ctx.readableConversationSourceIds.includes(requestedScopeId)) {
+        return permissionError(toolCall.function.name, "conversation_scope_not_readable");
+      }
+
+      const waiverInput: {
+        id: string;
+        organizationId: string;
+        resourceType: string;
+        resourceId: string;
+        requesterUserId: string;
+        requestedScopeType: NoteScopeType;
+        requestedScopeId: string;
+        requestReason?: string;
+        requestedAt: string;
+        metadata: Record<string, unknown>;
+      } = {
+        id: crypto.randomUUID(),
+        organizationId: ctx.organizationId,
+        resourceType,
+        resourceId,
+        requesterUserId: ctx.actorInternalUserId,
+        requestedScopeType,
+        requestedScopeId,
+        requestedAt: new Date().toISOString(),
+        metadata: {
+          source: "tool_agent_runtime"
+        }
+      };
+      if (reason) {
+        waiverInput.requestReason = reason;
+      }
+
+      await ctx.repo.requestPermissionWaiver(waiverInput);
+
+      waiversRequestedCountRef.count += 1;
+      return { ok: true };
+    }
+
+    default:
+      return { ok: false, error: `unknown_tool:${toolCall.function.name}` };
+  }
+}
+
+export async function runConversationalAgentForSlackMessage(input: AgentRuntimeInput): Promise<AgentRunResult> {
+  if ((input.env.DEFAULT_LLM_PROVIDER ?? "openai") !== "openai") {
+    return { usedTools: false, createdTaskIds: [] };
+  }
+  if (!input.env.OPENAI_API_KEY) {
+    return { usedTools: false, createdTaskIds: [] };
+  }
+
+  const repo = new D1TaskRepository(input.env.DB);
+  const resolver = new ConversationAccessResolver(input.env.DB);
+  const installStore = new SlackInstallStore(input.env.DB);
+
+  const actorUser = await resolver.ensureSlackUser({
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    platformUserId: input.event.author.platformUserId,
+    nowIso: new Date().toISOString()
+  });
+
+  const actorPerson = await repo.resolveOrCreatePersonForIdentity({
+    organizationId: input.organizationId,
+    provider: "slack",
+    externalWorkspaceId: input.externalWorkspaceId,
+    externalUserId: input.event.author.platformUserId,
+    linkedUserId: actorUser.userId,
+    confidence: 0.85,
+    nowIso: new Date().toISOString()
+  });
+
+  const readableConversationSourceIds = await resolver.listReadableConversationSourceIds({
+    organizationId: input.organizationId,
+    userId: actorUser.userId
+  });
+
+  const botToken = await resolveBotToken({
+    env: input.env,
+    installStore,
+    externalWorkspaceId: input.externalWorkspaceId
+  });
+
+  if (!botToken) {
+    return { usedTools: false, createdTaskIds: [] };
+  }
+
+  const recentMessages = await fetchSlackConversationHistory({
+    botToken,
+    channelId: input.event.channelId,
+    limit: 40,
+    maxPages: 2
+  });
+
+  const searchSeed = input.event.text
+    .replace(/<@[A-Z0-9]+>/g, " ")
+    .replace(/[^a-zA-Z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length >= 4)
+    .slice(0, 4)
+    .join(" ");
+
+  const visibleTasks = await repo.searchTasksWithAcl({
+    organizationId: input.organizationId,
+    readableConversationSourceIds,
+    allowUnscoped: true,
+    query: searchSeed || input.event.text.slice(0, 60),
+    limit: 20
+  });
+
+  const organizationNotes = await repo.listAgentNotes({
+    organizationId: input.organizationId,
+    scopeType: "organization",
+    scopeId: input.organizationId,
+    limit: 15
+  });
+  const workspaceNotes = await repo.listAgentNotes({
+    organizationId: input.organizationId,
+    scopeType: "workspace",
+    scopeId: input.workspaceId,
+    limit: 15
+  });
+  const conversationNotes = await repo.listAgentNotes({
+    organizationId: input.organizationId,
+    scopeType: "conversation",
+    scopeId: input.conversationSourceId,
+    limit: 15
+  });
+  const userNotes = await repo.listAgentNotes({
+    organizationId: input.organizationId,
+    scopeType: "user",
+    scopeId: actorUser.userId,
+    limit: 15
+  });
+  const personNotes = await repo.listAgentNotes({
+    organizationId: input.organizationId,
+    scopeType: "person",
+    scopeId: actorPerson.id,
+    limit: 15
+  });
+
+  const readableConversations = await resolver.listReadableConversationSources({
+    organizationId: input.organizationId,
+    userId: actorUser.userId,
+    limit: 50
+  });
+
+  const initialContext = {
+    organization_id: input.organizationId,
+    workspace_id: input.workspaceId,
+    external_workspace_id: input.externalWorkspaceId,
+    actor: {
+      external_user_id: input.event.author.platformUserId,
+      internal_user_id: actorUser.userId,
+      person_id: actorPerson.id
+    },
+    current_event: {
+      channel_id: input.event.channelId,
+      message_id: input.event.messageId,
+      occurred_at: input.event.occurredAt,
+      text: input.event.text
+    },
+    readable_conversation_source_ids: readableConversationSourceIds,
+    readable_conversations: readableConversations.map((source) => ({
+      id: source.id,
+      provider_conversation_id: source.providerConversationId,
+      kind: source.conversationKind,
+      is_public: source.isPublic
+    })),
+    recent_channel_messages: recentMessages.slice(-30).map((message) => ({
+      ts: message.ts ?? null,
+      user: message.user ?? null,
+      text: message.text ?? null,
+      reactions: (message.reactions ?? []).map((reaction) => ({
+        name: reaction.name ?? null,
+        users: reaction.users ?? []
+      }))
+    })),
+    visible_tasks_seed: visibleTasks.map((task) => summarizeTask(task)),
+    notes: {
+      organization: organizationNotes.map((note) => note.content),
+      workspace: workspaceNotes.map((note) => note.content),
+      conversation: conversationNotes.map((note) => note.content),
+      user: userNotes.map((note) => note.content),
+      person: personNotes.map((note) => note.content)
+    }
+  };
+
+  const messages: Array<Record<string, unknown>> = [
+    {
+      role: "system",
+      content: systemPrompt()
+    },
+    {
+      role: "user",
+      content: `Context JSON:\n${JSON.stringify(initialContext)}\n\nAnalyze the event and use tools to read/write as needed.`
+    }
+  ];
+
+  const createdTaskIds: string[] = [];
+  const updatedTaskIds = new Set<string>();
+  const notesWrittenCountRef = { count: 0 };
+  const waiversRequestedCountRef = { count: 0 };
+  let usedTools = false;
+  let finalSummary: string | undefined;
+
+  const ctx: ToolContext = {
+    env: input.env,
+    repo,
+    resolver,
+    installStore,
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    externalWorkspaceId: input.externalWorkspaceId,
+    actorExternalUserId: input.event.author.platformUserId,
+    actorInternalUserId: actorUser.userId,
+    actorPersonId: actorPerson.id,
+    readableConversationSourceIds,
+    currentConversationSourceId: input.conversationSourceId,
+    botToken,
+    createdTaskIds,
+    event: input.event
+  };
+
+  for (let turn = 0; turn < 8; turn += 1) {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${input.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: input.env.DEFAULT_LLM_MODEL ?? "gpt-4.1-mini",
+        temperature: 0,
+        tool_choice: "auto",
+        parallel_tool_calls: false,
+        tools: toolDefinitions(),
+        messages
+      })
+    });
+
+    const payload = (await response.json()) as ChatCompletionResponse;
+    if (!response.ok) {
+      const code = payload.error?.code ?? payload.error?.type ?? String(response.status);
+      throw new Error(`agent_completion_failed:${code}`);
+    }
+
+    const assistantMessage = payload.choices?.[0]?.message;
+    if (!assistantMessage) {
+      break;
+    }
+
+    const toolCalls = assistantMessage.tool_calls ?? [];
+    messages.push({
+      role: "assistant",
+      content: assistantMessage.content ?? "",
+      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {})
+    });
+
+    if (toolCalls.length === 0) {
+      if (typeof assistantMessage.content === "string" && assistantMessage.content.trim()) {
+        finalSummary = assistantMessage.content.trim();
+      }
+      break;
+    }
+
+    usedTools = true;
+
+    for (const toolCall of toolCalls) {
+      const result = await executeTool(toolCall, ctx, updatedTaskIds, notesWrittenCountRef, waiversRequestedCountRef);
+      messages.push({
+        role: "tool",
+        tool_call_id: toolCall.id,
+        content: JSON.stringify(result)
+      });
+    }
+  }
+
+  const summaryObject = {
+    summary: finalSummary ?? "agent_run_complete",
+    created_task_ids: createdTaskIds,
+    updated_task_ids: Array.from(updatedTaskIds),
+    notes_written: notesWrittenCountRef.count,
+    waivers_requested: waiversRequestedCountRef.count
+  };
+
+  return {
+    usedTools,
+    createdTaskIds,
+    finalSummary: JSON.stringify(summaryObject)
+  };
+}

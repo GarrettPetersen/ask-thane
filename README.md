@@ -131,3 +131,5 @@ npm run landing:deploy
   [docs/integration-env-cloudflare-checklist.md](/Users/garrettpetersen/ask-thane/docs/integration-env-cloudflare-checklist.md)
 - Core data model for cross-platform identity, agent memory, task actions, and permission waivers:
   [docs/identity-memory-actions-permissions.md](/Users/garrettpetersen/ask-thane/docs/identity-memory-actions-permissions.md)
+- Tool-calling conversational runtime design and permissions model:
+  [docs/agent-runtime.md](/Users/garrettpetersen/ask-thane/docs/agent-runtime.md)

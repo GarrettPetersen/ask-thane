@@ -5,6 +5,7 @@ import {
   normalizeSlackMembershipEvent,
   type SlackEnvelope
 } from "@ask-thane/integrations";
+import { runConversationalAgentForSlackMessage } from "../services/agent-runtime";
 import { inferAndPersistTasks, type BotEnv } from "../services/task-inference";
 import { ConversationAccessResolver } from "../services/conversation-access";
 import { OrgRegistry } from "../services/org-registry";
@@ -166,7 +167,7 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
   }
 
   const conversationMeta = inferSlackConversationKind(event.channelId, payload.event?.channel_type);
-  await resolver.upsertSlackConversationSource({
+  const conversationSource = await resolver.upsertSlackConversationSource({
     organizationId,
     workspaceId: workspaceRef.workspaceId,
     channelId: event.channelId,
@@ -175,14 +176,46 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
     nowIso: event.occurredAt
   });
 
-  const tasks = await inferAndPersistTasks(
-    {
-      ...event,
-      workspaceId: workspaceRef.workspaceId
-    },
-    env
-  );
-  if (tasks.length > 0) {
+  let tasksCreatedByFallback = 0;
+  let agentUsed = false;
+  let tasksCreatedByAgent = 0;
+  let agentSummary: string | undefined;
+
+  try {
+    const agentRun = await runConversationalAgentForSlackMessage({
+      env,
+      organizationId,
+      workspaceId: workspaceRef.workspaceId,
+      externalWorkspaceId,
+      conversationSourceId: conversationSource.id,
+      event: {
+        ...event,
+        workspaceId: workspaceRef.workspaceId
+      }
+    });
+    agentUsed = agentRun.usedTools;
+    tasksCreatedByAgent = agentRun.createdTaskIds.length;
+    agentSummary = agentRun.finalSummary;
+  } catch (error) {
+    console.error("agent_runtime_failed", {
+      organizationId,
+      workspaceId: workspaceRef.workspaceId,
+      reason: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  if (!agentUsed) {
+    const tasks = await inferAndPersistTasks(
+      {
+        ...event,
+        workspaceId: workspaceRef.workspaceId
+      },
+      env
+    );
+    tasksCreatedByFallback = tasks.length;
+  }
+
+  if (tasksCreatedByAgent > 0 || tasksCreatedByFallback > 0) {
     // Non-blocking acknowledgement in Slack when a message produced at least one task.
     try {
       await addSlackTaskCapturedReaction({
@@ -203,5 +236,13 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
   }
   await ingestRepo.markIngestEventProcessed(organizationId, "slack", providerEventId, new Date().toISOString());
 
-  return Response.json({ ok: true, taskCount: tasks.length }, { status: 200 });
+  return Response.json(
+    {
+      ok: true,
+      taskCount: tasksCreatedByAgent + tasksCreatedByFallback,
+      agentUsed,
+      agentSummary: agentSummary ?? null
+    },
+    { status: 200 }
+  );
 }

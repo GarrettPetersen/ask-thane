@@ -176,7 +176,8 @@ Then:
 - [ ] Keep provider/model defaults in bot `wrangler.toml` aligned with your preference.
 
 Reality check:
-- Current `packages/ai` is still stubbed, so keys are pre-provisioning for upcoming implementation.
+- Webhook path now uses OpenAI for the tool-calling agent runtime when `DEFAULT_LLM_PROVIDER=openai` and `OPENAI_API_KEY` is set.
+- Scheduled polling path remains heuristic/non-LLM for lower background cost.
 
 ## 9) Cloudflare routing and domains
 - [ ] Keep landing Worker on `askthane.com` (already done).

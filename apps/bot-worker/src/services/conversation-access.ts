@@ -6,6 +6,14 @@ interface ConversationSourceRef {
   isPublic: boolean;
 }
 
+export interface ReadableConversationSource {
+  id: string;
+  workspaceId: string;
+  providerConversationId: string;
+  conversationKind: string;
+  isPublic: boolean;
+}
+
 export class ConversationAccessResolver {
   constructor(private readonly db: D1Database) {}
 
@@ -117,6 +125,70 @@ export class ConversationAccessResolver {
 
     const result = await query.bind(params.userId, params.organizationId).all<Record<string, unknown>>();
     return (result.results ?? []).map((row) => String(row.id));
+  }
+
+  async listReadableConversationSources(params: {
+    organizationId: string;
+    userId: string;
+    limit?: number;
+  }): Promise<ReadableConversationSource[]> {
+    const limit = Math.min(Math.max(params.limit ?? 50, 1), 250);
+    const query = this.db.prepare(
+      `SELECT DISTINCT
+         cs.id,
+         cs.workspace_id,
+         cs.provider_conversation_id,
+         cs.conversation_kind,
+         cs.is_public
+       FROM conversation_sources cs
+       LEFT JOIN conversation_memberships cm
+         ON cm.conversation_source_id = cs.id
+        AND cm.user_id = ?
+        AND cm.is_active = 1
+       WHERE cs.organization_id = ?
+         AND (
+           cs.is_public = 1
+           OR cm.id IS NOT NULL
+         )
+       ORDER BY cs.updated_at DESC
+       LIMIT ?`
+    );
+
+    const result = await query.bind(params.userId, params.organizationId, limit).all<Record<string, unknown>>();
+    return (result.results ?? []).map((row) => ({
+      id: String(row.id),
+      workspaceId: String(row.workspace_id),
+      providerConversationId: String(row.provider_conversation_id),
+      conversationKind: String(row.conversation_kind),
+      isPublic: Number(row.is_public) === 1
+    }));
+  }
+
+  async getConversationSourceById(params: {
+    organizationId: string;
+    conversationSourceId: string;
+  }): Promise<ReadableConversationSource | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT id, workspace_id, provider_conversation_id, conversation_kind, is_public
+         FROM conversation_sources
+         WHERE organization_id = ? AND id = ?
+         LIMIT 1`
+      )
+      .bind(params.organizationId, params.conversationSourceId)
+      .first<Record<string, unknown>>();
+
+    if (!row?.id) {
+      return null;
+    }
+
+    return {
+      id: String(row.id),
+      workspaceId: String(row.workspace_id),
+      providerConversationId: String(row.provider_conversation_id),
+      conversationKind: String(row.conversation_kind),
+      isPublic: Number(row.is_public) === 1
+    };
   }
 
   async resolveInternalUserId(params: {
