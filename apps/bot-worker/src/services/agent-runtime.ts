@@ -500,7 +500,18 @@ function extractSlackMentionIds(text: string): string[] {
   return Array.from(mentions);
 }
 
-function inferAssigneeFromConversationContext(ctx: ToolContext): string {
+function isSecondPersonRequest(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return (
+    normalized.startsWith("can you ") ||
+    normalized.startsWith("could you ") ||
+    normalized.startsWith("would you ") ||
+    normalized.startsWith("will you ") ||
+    normalized.startsWith("please ")
+  );
+}
+
+async function inferAssigneeFromConversationContext(ctx: ToolContext): Promise<string> {
   const explicitMentions = extractSlackMentionIds(ctx.event.text).filter((id) => id !== ctx.actorExternalUserId);
   if (explicitMentions.length > 0) {
     return explicitMentions[0] ?? ctx.actorExternalUserId;
@@ -535,6 +546,17 @@ function inferAssigneeFromConversationContext(ctx: ToolContext): string {
 
   if (candidates.length > 0) {
     return candidates[0] ?? ctx.actorExternalUserId;
+  }
+
+  if (isSecondPersonRequest(ctx.event.text)) {
+    const activeMembers = await ctx.resolver.listActiveSlackConversationExternalUsers({
+      organizationId: ctx.organizationId,
+      conversationSourceId: ctx.currentConversationSourceId
+    });
+    const nonActorMembers = activeMembers.filter((id) => id !== ctx.actorExternalUserId);
+    if (nonActorMembers.length > 0) {
+      return nonActorMembers[0] ?? ctx.actorExternalUserId;
+    }
   }
 
   return ctx.actorExternalUserId;
@@ -854,7 +876,7 @@ async function executeTool(
       const assigneeExternal =
         typeof args.assignee_user_id === "string" && args.assignee_user_id.trim()
           ? args.assignee_user_id.trim()
-          : inferAssigneeFromConversationContext(ctx);
+          : await inferAssigneeFromConversationContext(ctx);
 
       const task: TaskRecord = {
         id: crypto.randomUUID(),
