@@ -37,6 +37,11 @@ interface SlackPostMessageResponse {
   ts?: string;
 }
 
+interface SlackAddReactionResponse {
+  ok?: boolean;
+  error?: string;
+}
+
 export async function fetchSlackConversationHistory(input: {
   botToken: string;
   channelId: string;
@@ -155,4 +160,35 @@ export async function postSlackMessage(input: {
     channelId: payload.channel,
     ts: payload.ts
   };
+}
+
+export async function addSlackReaction(input: {
+  botToken: string;
+  channelId: string;
+  messageTs: string;
+  reaction: string;
+}): Promise<void> {
+  const body = new URLSearchParams({
+    channel: input.channelId,
+    timestamp: input.messageTs,
+    name: input.reaction
+  });
+
+  const response = await fetch("https://slack.com/api/reactions.add", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.botToken}`,
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body
+  });
+
+  if (!response.ok) {
+    throw new Error(`slack_reaction_http_error:${response.status}`);
+  }
+
+  const payload = (await response.json()) as SlackAddReactionResponse;
+  if (!payload.ok && payload.error !== "already_reacted") {
+    throw new Error(`slack_reaction_error:${payload.error ?? "unknown"}`);
+  }
 }

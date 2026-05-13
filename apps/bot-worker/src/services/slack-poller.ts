@@ -2,8 +2,9 @@ import { D1TaskRepository } from "@ask-thane/data";
 import type { MessageEvent } from "@ask-thane/domain";
 import { runConversationalAgentForSlackMessage } from "./agent-runtime";
 import { ConversationAccessResolver } from "./conversation-access";
-import { fetchSlackConversationHistory, type SlackHistoryMessage, type SlackReaction } from "./slack-api";
+import { addSlackReaction, fetchSlackConversationHistory, type SlackHistoryMessage, type SlackReaction } from "./slack-api";
 import { SlackInstallStore } from "./slack-install-store";
+import { mapTaskActionTypesToSlackReactions } from "./slack-task-reactions";
 import type { BotEnv } from "./task-inference";
 
 interface WorkspacePollTarget {
@@ -358,6 +359,26 @@ async function processWorkspaceMessages(target: WorkspacePollTarget, env: BotEnv
           event
         });
         stats.tasksCreated += agentRun.createdTaskIds.length;
+
+        const reactions = mapTaskActionTypesToSlackReactions(agentRun.taskActionTypes);
+        for (const reaction of reactions) {
+          try {
+            await addSlackReaction({
+              botToken: target.botToken,
+              channelId: channel.id,
+              messageTs: message.ts,
+              reaction
+            });
+          } catch (error) {
+            console.warn("slack_poll_add_reaction_failed", {
+              workspaceId: target.workspaceId,
+              channelId: channel.id,
+              messageTs: message.ts,
+              reaction,
+              reason: error instanceof Error ? error.message : String(error)
+            });
+          }
+        }
       }
 
       await repo.markIngestEventProcessed(target.organizationId, "slack_poll", providerEventId, nowIso);

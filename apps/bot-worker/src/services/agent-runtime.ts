@@ -54,6 +54,7 @@ interface AgentRunResult {
   usedTools: boolean;
   createdTaskIds: string[];
   updatedTaskIds: string[];
+  taskActionTypes: TaskActionType[];
   finalSummary?: string;
   replyText?: string;
 }
@@ -73,6 +74,7 @@ interface ToolContext {
   currentConversationSourceId: string;
   botToken: string;
   createdTaskIds: string[];
+  taskActionTypes: Set<TaskActionType>;
   event: MessageEvent;
   interactionMode: "passive_ingest" | "dm_reply" | "proactive_followup";
   readOnlyTools: boolean;
@@ -844,6 +846,7 @@ async function executeTool(
       });
 
       ctx.createdTaskIds.push(task.id);
+      ctx.taskActionTypes.add("create");
       return { ok: true, task: summarizeTask(task) };
     }
 
@@ -925,6 +928,7 @@ async function executeTool(
       await ctx.repo.performTaskAction(updateInput);
 
       updatedTaskIds.add(taskId);
+      ctx.taskActionTypes.add(actionType);
       return { ok: true, task_id: taskId, action_type: actionType };
     }
 
@@ -1116,10 +1120,10 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
   const maxTurns = clampEnvNumber(input.env.AGENT_MAX_TOOL_TURNS, 8, 1, 20);
 
   if ((input.env.DEFAULT_LLM_PROVIDER ?? "openai") !== "openai") {
-    return { usedTools: false, createdTaskIds: [], updatedTaskIds: [] };
+    return { usedTools: false, createdTaskIds: [], updatedTaskIds: [], taskActionTypes: [] };
   }
   if (!input.env.OPENAI_API_KEY) {
-    return { usedTools: false, createdTaskIds: [], updatedTaskIds: [] };
+    return { usedTools: false, createdTaskIds: [], updatedTaskIds: [], taskActionTypes: [] };
   }
 
   const repo = new D1TaskRepository(input.env.DB);
@@ -1155,7 +1159,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
   });
 
   if (!botToken) {
-    return { usedTools: false, createdTaskIds: [], updatedTaskIds: [] };
+    return { usedTools: false, createdTaskIds: [], updatedTaskIds: [], taskActionTypes: [] };
   }
 
   let recentMessages: Awaited<ReturnType<typeof fetchSlackConversationHistory>> = [];
@@ -1295,6 +1299,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
   ];
 
   const createdTaskIds: string[] = [];
+  const taskActionTypes = new Set<TaskActionType>();
   const updatedTaskIds = new Set<string>();
   const notesWrittenCountRef = { count: 0 };
   const waiversRequestedCountRef = { count: 0 };
@@ -1317,6 +1322,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     currentConversationSourceId: input.conversationSourceId,
     botToken,
     createdTaskIds,
+    taskActionTypes,
     event: input.event,
     interactionMode,
     readOnlyTools
@@ -1392,7 +1398,8 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
   const result: AgentRunResult = {
     usedTools,
     createdTaskIds,
-    updatedTaskIds: Array.from(updatedTaskIds)
+    updatedTaskIds: Array.from(updatedTaskIds),
+    taskActionTypes: Array.from(taskActionTypes)
   };
 
   if (interactionMode === "passive_ingest") {

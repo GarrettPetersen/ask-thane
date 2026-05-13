@@ -6,54 +6,13 @@ import {
   type SlackEnvelope
 } from "@ask-thane/integrations";
 import { runConversationalAgentForSlackMessage } from "../services/agent-runtime";
-import { postSlackMessage } from "../services/slack-api";
+import { addSlackReaction, postSlackMessage } from "../services/slack-api";
+import { mapTaskActionTypesToSlackReactions } from "../services/slack-task-reactions";
 import type { BotEnv } from "../services/task-inference";
 import { ConversationAccessResolver } from "../services/conversation-access";
 import { OrgRegistry } from "../services/org-registry";
 import { SlackInstallStore } from "../services/slack-install-store";
 import { verifySlackRequestSignature } from "../services/slack-signature";
-
-async function addSlackTaskCapturedReaction(input: {
-  env: BotEnv;
-  externalWorkspaceId: string;
-  channelId: string;
-  messageTs: string;
-  reaction: string;
-}): Promise<void> {
-  const installStore = new SlackInstallStore(input.env.DB);
-  const installedToken = await installStore.getBotTokenByExternalWorkspaceId(input.externalWorkspaceId);
-  const token = installedToken ?? input.env.SLACK_BOT_TOKEN;
-  if (!token) {
-    return;
-  }
-
-  const body = new URLSearchParams({
-    channel: input.channelId,
-    timestamp: input.messageTs,
-    name: input.reaction
-  });
-
-  const response = await fetch("https://slack.com/api/reactions.add", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/x-www-form-urlencoded"
-    },
-    body
-  });
-
-  if (!response.ok) {
-    throw new Error(`slack_reaction_http_error:${response.status}`);
-  }
-
-  const payload = (await response.json()) as {
-    ok?: boolean;
-    error?: string;
-  };
-  if (!payload.ok && payload.error !== "already_reacted") {
-    throw new Error(`slack_reaction_error:${payload.error ?? "unknown"}`);
-  }
-}
 
 async function resolveSlackBotToken(input: {
   env: BotEnv;
@@ -195,6 +154,7 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
 
   let agentUsed = false;
   let tasksCreatedByAgent = 0;
+  let taskActionTypes: ReturnType<typeof mapTaskActionTypesToSlackReactions> = [];
   let agentSummary: string | undefined;
 
   try {
@@ -212,6 +172,7 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
     });
     agentUsed = agentRun.usedTools;
     tasksCreatedByAgent = agentRun.createdTaskIds.length;
+    taskActionTypes = mapTaskActionTypesToSlackReactions(agentRun.taskActionTypes);
     agentSummary = agentRun.finalSummary;
 
     if (conversationMeta.conversationKind === "dm" && agentRun.replyText) {
@@ -239,23 +200,27 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
     );
   }
 
-  if (tasksCreatedByAgent > 0) {
-    // Non-blocking acknowledgement in Slack when a message produced at least one task.
-    try {
-      await addSlackTaskCapturedReaction({
-        env,
-        externalWorkspaceId,
-        channelId: event.channelId,
-        messageTs: event.messageId,
-        reaction: "memo"
-      });
-    } catch (error) {
-      console.warn("Failed to add task-captured reaction", {
-        externalWorkspaceId,
-        channelId: event.channelId,
-        messageTs: event.messageId,
-        reason: error instanceof Error ? error.message : String(error)
-      });
+  if (taskActionTypes.length > 0) {
+    const token = await resolveSlackBotToken({ env, externalWorkspaceId });
+    if (token) {
+      for (const reaction of taskActionTypes) {
+        try {
+          await addSlackReaction({
+            botToken: token,
+            channelId: event.channelId,
+            messageTs: event.messageId,
+            reaction
+          });
+        } catch (error) {
+          console.warn("Failed to add task-event reaction", {
+            externalWorkspaceId,
+            channelId: event.channelId,
+            messageTs: event.messageId,
+            reaction,
+            reason: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
     }
   }
   await ingestRepo.markIngestEventProcessed(organizationId, "slack", providerEventId, new Date().toISOString());
