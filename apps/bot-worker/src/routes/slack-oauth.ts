@@ -3,7 +3,7 @@ import { SlackInstallStore } from "../services/slack-install-store";
 import type { BotEnv } from "../services/task-inference";
 
 const DEFAULT_SCOPES =
-  "channels:history,groups:history,channels:read,groups:read,im:read,mpim:read,chat:write,chat:write.public,im:write,reactions:write";
+  "channels:history,groups:history,im:history,mpim:history,channels:read,groups:read,im:read,mpim:read,chat:write,chat:write.public,im:write,reactions:write";
 const STATE_TTL_MS = 10 * 60 * 1000;
 
 interface StatePayload {

@@ -158,6 +158,8 @@ In Slack app settings:
 - [ ] `mpim:read`
 - [ ] `channels:history`
 - [ ] `groups:history`
+- [ ] `im:history`
+- [ ] `mpim:history`
 - [ ] `chat:write`
 - [ ] `reactions:write`
 
@@ -165,6 +167,7 @@ In Slack app settings:
 Minimum useful starting set:
 - [ ] `message.channels`
 - [ ] `message.groups`
+- [ ] `message.im`
 - [ ] `member_joined_channel`
 - [ ] `member_left_channel`
 
