@@ -8,12 +8,45 @@ import {
 import { inferAndPersistTasks, type BotEnv } from "../services/task-inference";
 import { ConversationAccessResolver } from "../services/conversation-access";
 import { OrgRegistry } from "../services/org-registry";
+import { verifySlackRequestSignature } from "../services/slack-signature";
 
 export async function handleSlackEvents(request: Request, env: BotEnv): Promise<Response> {
-  const payload = (await request.json()) as SlackEnvelope & {
+  const rawBody = await request.text();
+  const verificationInput: {
+    signingSecret?: string;
+    timestampHeader: string | null;
+    signatureHeader: string | null;
+    rawBody: string;
+  } = {
+    timestampHeader: request.headers.get("x-slack-request-timestamp"),
+    signatureHeader: request.headers.get("x-slack-signature"),
+    rawBody
+  };
+  if (env.SLACK_SIGNING_SECRET) {
+    verificationInput.signingSecret = env.SLACK_SIGNING_SECRET;
+  }
+  const signatureVerification = await verifySlackRequestSignature({
+    ...verificationInput
+  });
+  if (!signatureVerification.ok) {
+    return Response.json(
+      { ok: false, error: "invalid_slack_signature", reason: signatureVerification.reason },
+      { status: 401 }
+    );
+  }
+
+  let payload: (SlackEnvelope & {
     type?: string;
     challenge?: string;
-  };
+  }) | null = null;
+  try {
+    payload = JSON.parse(rawBody) as SlackEnvelope & {
+      type?: string;
+      challenge?: string;
+    };
+  } catch {
+    return Response.json({ ok: false, error: "invalid_json_body" }, { status: 400 });
+  }
 
   if (payload.type === "url_verification" && payload.challenge) {
     return new Response(payload.challenge, { status: 200 });
