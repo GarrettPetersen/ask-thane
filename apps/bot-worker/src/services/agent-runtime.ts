@@ -452,7 +452,7 @@ function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"
     "Examples: 'I am done the dishes, but I still need to water the gnomes' => mark_done(dishes) + create_task(water gnomes) if missing.",
     "Examples: 'I'm done watering the gnomes, but I still need to elevate the cake and bloviate the sneed' => mark_done(water gnomes) + create_task(elevate cake) + create_task(bloviate sneed).",
     "Examples: 'I froze the beef last night' should update existing freeze-beef task to done when a matching open task exists.",
-    "For second-person asks in shared channels (for example, 'can you please change the sheets?'), infer assignee from mentions/recent speaker context; do not default to the author unless context is genuinely ambiguous.",
+    "When assignee is not explicit in shared channels, infer from candidate people in context: prioritize recent speakers, then other active channel members; only default to author if still ambiguous.",
     "Ignore non-task chatter such as weather commentary unless it changes a task state.",
     "If task completion/cancellation is asserted in private context and visibility is unclear, create a permission waiver request.",
     "When writing notes, prefer short durable facts (skills, ownership patterns, constraints).",
@@ -500,17 +500,6 @@ function extractSlackMentionIds(text: string): string[] {
   return Array.from(mentions);
 }
 
-function isSecondPersonRequest(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  return (
-    normalized.startsWith("can you ") ||
-    normalized.startsWith("could you ") ||
-    normalized.startsWith("would you ") ||
-    normalized.startsWith("will you ") ||
-    normalized.startsWith("please ")
-  );
-}
-
 async function inferAssigneeFromConversationContext(ctx: ToolContext): Promise<string> {
   const explicitMentions = extractSlackMentionIds(ctx.event.text).filter((id) => id !== ctx.actorExternalUserId);
   if (explicitMentions.length > 0) {
@@ -522,7 +511,8 @@ async function inferAssigneeFromConversationContext(ctx: ToolContext): Promise<s
     return ctx.actorExternalUserId;
   }
 
-  // In shared channels, prefer recent non-actor human speakers over the actor.
+  // In shared channels, rank candidates as:
+  // 1) recent non-actor speakers, 2) other active channel members.
   const candidates: string[] = [];
   const seen = new Set<string>();
   for (let i = ctx.recentMessages.length - 1; i >= 0; i -= 1) {
@@ -544,19 +534,21 @@ async function inferAssigneeFromConversationContext(ctx: ToolContext): Promise<s
     candidates.push(userId);
   }
 
-  if (candidates.length > 0) {
-    return candidates[0] ?? ctx.actorExternalUserId;
+  const activeMembers = await ctx.resolver.listActiveSlackConversationExternalUsers({
+    organizationId: ctx.organizationId,
+    conversationSourceId: ctx.currentConversationSourceId
+  });
+  for (const memberId of activeMembers) {
+    const normalized = memberId.trim();
+    if (!normalized || normalized === ctx.actorExternalUserId || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    candidates.push(normalized);
   }
 
-  if (isSecondPersonRequest(ctx.event.text)) {
-    const activeMembers = await ctx.resolver.listActiveSlackConversationExternalUsers({
-      organizationId: ctx.organizationId,
-      conversationSourceId: ctx.currentConversationSourceId
-    });
-    const nonActorMembers = activeMembers.filter((id) => id !== ctx.actorExternalUserId);
-    if (nonActorMembers.length > 0) {
-      return nonActorMembers[0] ?? ctx.actorExternalUserId;
-    }
+  if (candidates.length > 0) {
+    return candidates[0] ?? ctx.actorExternalUserId;
   }
 
   return ctx.actorExternalUserId;
@@ -1321,6 +1313,25 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     userId: actorUser.userId,
     limit: 50
   });
+  const activeConversationMembers = await resolver.listActiveSlackConversationExternalUsers({
+    organizationId: input.organizationId,
+    conversationSourceId: input.conversationSourceId
+  });
+
+  const recentSpeakerCandidates: string[] = [];
+  const speakerSeen = new Set<string>();
+  for (let i = recentMessages.length - 1; i >= 0; i -= 1) {
+    const message = recentMessages[i];
+    if (!message) {
+      continue;
+    }
+    const userId = message.user?.trim();
+    if (!userId || userId === input.event.author.platformUserId || message.subtype || speakerSeen.has(userId)) {
+      continue;
+    }
+    speakerSeen.add(userId);
+    recentSpeakerCandidates.push(userId);
+  }
 
   const initialContext = {
     organization_id: input.organizationId,
@@ -1353,6 +1364,10 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
         users: reaction.users ?? []
       }))
     })),
+    assignee_candidates: {
+      recent_speakers: recentSpeakerCandidates,
+      active_channel_members: activeConversationMembers.filter((id) => id !== input.event.author.platformUserId)
+    },
     visible_tasks_seed: visibleTasks.map((task) => summarizeTask(task)),
     notes: {
       organization: organizationNotes.map((note) => note.content),
