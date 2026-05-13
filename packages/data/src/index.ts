@@ -199,17 +199,51 @@ export interface UserWithOpenTasksRow {
   openTaskCount: number;
 }
 
+function buildReadableTaskStatusSubquery(
+  taskAlias: string,
+  readableConversationSourceIds: string[]
+): { sql: string; bindings: string[] } {
+  const uniqueReadableIds = Array.from(new Set(readableConversationSourceIds));
+  const hasReadableScopes = uniqueReadableIds.length > 0;
+  const placeholders = uniqueReadableIds.map(() => "?").join(", ");
+  const readablePredicate = hasReadableScopes
+    ? `ta.source_conversation_source_id IS NULL OR ta.source_conversation_source_id IN (${placeholders})`
+    : "ta.source_conversation_source_id IS NULL";
+
+  return {
+    sql: `(SELECT ta.resulted_status
+           FROM task_actions ta
+           WHERE ta.organization_id = ${taskAlias}.organization_id
+             AND ta.task_id = ${taskAlias}.id
+             AND (${readablePredicate})
+           ORDER BY ta.created_at DESC
+           LIMIT 1)`,
+    bindings: hasReadableScopes ? uniqueReadableIds : []
+  };
+}
+
+function buildEffectiveTaskStatusExpression(
+  taskAlias: string,
+  readableConversationSourceIds: string[]
+): { sql: string; bindings: string[] } {
+  const readableSubquery = buildReadableTaskStatusSubquery(taskAlias, readableConversationSourceIds);
+  return {
+    sql: `COALESCE(${readableSubquery.sql}, ${taskAlias}.status)`,
+    bindings: readableSubquery.bindings
+  };
+}
+
 export class D1TaskRepository implements TaskRepository {
   constructor(private readonly db: D1Database) {}
 
   async save(task: TaskRecord): Promise<void> {
     const stmt = this.db.prepare(
       `INSERT INTO tasks (
-         id, organization_id, workspace_id, channel_id, source_message_id, title, description,
+         id, organization_id, workspace_id, primary_conversation_source_id, channel_id, source_message_id, title, description,
          assignee_platform, assignee_id, assignee_name,
          assigner_platform, assigner_id, assigner_name,
          created_at, due_at, urgency, difficulty, status, confidence, metadata_json
-       ) VALUES (?, (SELECT organization_id FROM workspaces WHERE id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       ) VALUES (?, (SELECT organization_id FROM workspaces WHERE id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
 
     await stmt
@@ -217,6 +251,7 @@ export class D1TaskRepository implements TaskRepository {
         task.id,
         task.workspaceId,
         task.workspaceId,
+        task.primaryConversationSourceId ?? null,
         task.channelId ?? null,
         task.sourceMessageId ?? null,
         task.title,
@@ -340,6 +375,7 @@ export class D1TaskRepository implements TaskRepository {
     const allowUnscoped = Boolean(input.allowUnscoped);
     const placeholders = readableConversationSourceIds.map(() => "?").join(", ");
     const hasReadableScopes = readableConversationSourceIds.length > 0;
+    const effectiveStatus = buildEffectiveTaskStatusExpression("t", readableConversationSourceIds);
 
     const aclReadableCondition = hasReadableScopes
       ? `ra.conversation_source_id IS NULL OR ra.conversation_source_id IN (${placeholders})`
@@ -355,35 +391,40 @@ export class D1TaskRepository implements TaskRepository {
     const fallbackVisibility = fallbackVisibilityParts.length > 0 ? fallbackVisibilityParts.join(" OR ") : "0";
 
     const query = this.db.prepare(
-      `SELECT t.*
-       FROM tasks t
-       WHERE t.organization_id = ?
-         AND t.assignee_id = ?
-         AND t.status IN ('incomplete', 'in_progress', 'blocked')
-         AND (
-           EXISTS (
-             SELECT 1
-             FROM resource_acl ra
-             WHERE ra.organization_id = t.organization_id
-               AND ra.resource_type = 'task'
-               AND ra.resource_id = t.id
-               AND (${aclReadableCondition})
-           )
-           OR (
-             NOT EXISTS (
+      `WITH visible_tasks AS (
+         SELECT t.*,
+                ${effectiveStatus.sql} AS effective_status
+         FROM tasks t
+         WHERE t.organization_id = ?
+           AND t.assignee_id = ?
+           AND (
+             EXISTS (
                SELECT 1
-               FROM resource_acl ra2
-               WHERE ra2.organization_id = t.organization_id
-                 AND ra2.resource_type = 'task'
-                 AND ra2.resource_id = t.id
+               FROM resource_acl ra
+               WHERE ra.organization_id = t.organization_id
+                 AND ra.resource_type = 'task'
+                 AND ra.resource_id = t.id
+                 AND (${aclReadableCondition})
              )
-             AND (${fallbackVisibility})
+             OR (
+               NOT EXISTS (
+                 SELECT 1
+                 FROM resource_acl ra2
+                 WHERE ra2.organization_id = t.organization_id
+                   AND ra2.resource_type = 'task'
+                   AND ra2.resource_id = t.id
+               )
+               AND (${fallbackVisibility})
+             )
            )
-         )
-       ORDER BY t.created_at DESC`
+       )
+       SELECT *
+       FROM visible_tasks
+       WHERE effective_status IN ('incomplete', 'in_progress', 'blocked')
+       ORDER BY created_at DESC`
     );
 
-    const bindings: Array<string> = [input.organizationId, input.assigneeId];
+    const bindings: Array<string> = [...effectiveStatus.bindings, input.organizationId, input.assigneeId];
     if (hasReadableScopes) {
       bindings.push(...readableConversationSourceIds);
       bindings.push(...readableConversationSourceIds);
@@ -398,6 +439,7 @@ export class D1TaskRepository implements TaskRepository {
     const allowUnscoped = Boolean(input.allowUnscoped);
     const hasReadableScopes = readableConversationSourceIds.length > 0;
     const scopePlaceholders = readableConversationSourceIds.map(() => "?").join(", ");
+    const effectiveStatus = buildEffectiveTaskStatusExpression("t", readableConversationSourceIds);
 
     const aclReadableCondition = hasReadableScopes
       ? `ra.conversation_source_id IS NULL OR ra.conversation_source_id IN (${scopePlaceholders})`
@@ -405,62 +447,62 @@ export class D1TaskRepository implements TaskRepository {
 
     const fallbackVisibilityParts: string[] = [];
     if (hasReadableScopes) {
-      fallbackVisibilityParts.push(`t.primary_conversation_source_id IN (${scopePlaceholders})`);
+      fallbackVisibilityParts.push(`vt.primary_conversation_source_id IN (${scopePlaceholders})`);
     }
     if (allowUnscoped) {
-      fallbackVisibilityParts.push("t.primary_conversation_source_id IS NULL");
+      fallbackVisibilityParts.push("vt.primary_conversation_source_id IS NULL");
     }
     const fallbackVisibility = fallbackVisibilityParts.length > 0 ? fallbackVisibilityParts.join(" OR ") : "0";
 
     const whereParts: string[] = [
-      "t.organization_id = ?",
+      "vt.organization_id = ?",
       `(
          EXISTS (
            SELECT 1
            FROM resource_acl ra
-           WHERE ra.organization_id = t.organization_id
+           WHERE ra.organization_id = vt.organization_id
              AND ra.resource_type = 'task'
-             AND ra.resource_id = t.id
+             AND ra.resource_id = vt.id
              AND (${aclReadableCondition})
          )
          OR (
            NOT EXISTS (
              SELECT 1
              FROM resource_acl ra2
-             WHERE ra2.organization_id = t.organization_id
+             WHERE ra2.organization_id = vt.organization_id
                AND ra2.resource_type = 'task'
-               AND ra2.resource_id = t.id
+               AND ra2.resource_id = vt.id
            )
            AND (${fallbackVisibility})
          )
        )`
     ];
 
-    const bindings: Array<string | number> = [input.organizationId];
+    const bindings: Array<string | number> = [...effectiveStatus.bindings, input.organizationId];
     if (hasReadableScopes) {
       bindings.push(...readableConversationSourceIds);
       bindings.push(...readableConversationSourceIds);
     }
 
     if (input.workspaceId) {
-      whereParts.push("t.workspace_id = ?");
+      whereParts.push("vt.workspace_id = ?");
       bindings.push(input.workspaceId);
     }
 
     if (input.assigneeId) {
-      whereParts.push("t.assignee_id = ?");
+      whereParts.push("vt.assignee_id = ?");
       bindings.push(input.assigneeId);
     }
 
     const statuses = input.statuses && input.statuses.length > 0 ? input.statuses : null;
     if (statuses) {
-      whereParts.push(`t.status IN (${statuses.map(() => "?").join(", ")})`);
+      whereParts.push(`vt.effective_status IN (${statuses.map(() => "?").join(", ")})`);
       bindings.push(...statuses);
     }
 
     const query = input.query?.trim();
     if (query) {
-      whereParts.push("(LOWER(t.title) LIKE ? OR LOWER(COALESCE(t.description, '')) LIKE ?)");
+      whereParts.push("(LOWER(vt.title) LIKE ? OR LOWER(COALESCE(vt.description, '')) LIKE ?)");
       const like = `%${query.toLowerCase()}%`;
       bindings.push(like, like);
     }
@@ -468,10 +510,14 @@ export class D1TaskRepository implements TaskRepository {
     const limit = Math.min(Math.max(input.limit ?? 30, 1), 200);
     bindings.push(limit);
 
-    const sql = `SELECT t.*
-       FROM tasks t
+    const sql = `SELECT *
+       FROM (
+         SELECT t.*,
+                ${effectiveStatus.sql} AS effective_status
+         FROM tasks t
+       ) vt
        WHERE ${whereParts.join("\n         AND ")}
-       ORDER BY t.created_at DESC
+       ORDER BY vt.created_at DESC
        LIMIT ?`;
 
     const result = await this.db.prepare(sql).bind(...bindings).all<Record<string, unknown>>();
@@ -483,6 +529,7 @@ export class D1TaskRepository implements TaskRepository {
     const allowUnscoped = Boolean(input.allowUnscoped);
     const hasReadableScopes = readableConversationSourceIds.length > 0;
     const scopePlaceholders = readableConversationSourceIds.map(() => "?").join(", ");
+    const effectiveStatus = buildEffectiveTaskStatusExpression("t", readableConversationSourceIds);
 
     const aclReadableCondition = hasReadableScopes
       ? `ra.conversation_source_id IS NULL OR ra.conversation_source_id IN (${scopePlaceholders})`
@@ -497,7 +544,8 @@ export class D1TaskRepository implements TaskRepository {
     }
     const fallbackVisibility = fallbackVisibilityParts.length > 0 ? fallbackVisibilityParts.join(" OR ") : "0";
 
-    const sql = `SELECT t.*
+    const sql = `SELECT t.*,
+                        ${effectiveStatus.sql} AS effective_status
       FROM tasks t
       WHERE t.organization_id = ?
         AND t.id = ?
@@ -523,7 +571,7 @@ export class D1TaskRepository implements TaskRepository {
         )
       LIMIT 1`;
 
-    const bindings: Array<string> = [input.organizationId, input.taskId];
+    const bindings: Array<string> = [...effectiveStatus.bindings, input.organizationId, input.taskId];
     if (hasReadableScopes) {
       bindings.push(...readableConversationSourceIds);
       bindings.push(...readableConversationSourceIds);
@@ -726,7 +774,7 @@ export class D1TaskRepository implements TaskRepository {
 
     const task = await this.db
       .prepare(
-        `SELECT id, status
+        `SELECT id, status, primary_conversation_source_id
          FROM tasks
          WHERE id = ? AND organization_id = ? AND workspace_id = ?
          LIMIT 1`
@@ -762,6 +810,15 @@ export class D1TaskRepository implements TaskRepository {
         },
         resultedStatus: "cancelled"
       });
+      await this.maybeEmitDeclassifiedTaskAction({
+        input,
+        task,
+        resultedStatus: "cancelled",
+        nowIso,
+        metadata: {
+          merge_target_task_id: input.targetTaskId
+        }
+      });
 
       return;
     }
@@ -782,6 +839,12 @@ export class D1TaskRepository implements TaskRepository {
         ...input,
         resultedStatus: String(task.status) as TaskStatus
       });
+      await this.maybeEmitDeclassifiedTaskAction({
+        input,
+        task,
+        resultedStatus: String(task.status) as TaskStatus,
+        nowIso
+      });
 
       return;
     }
@@ -801,6 +864,12 @@ export class D1TaskRepository implements TaskRepository {
     await this.recordTaskAction({
       ...input,
       resultedStatus: nextStatus
+    });
+    await this.maybeEmitDeclassifiedTaskAction({
+      input,
+      task,
+      resultedStatus: nextStatus,
+      nowIso
     });
   }
 
@@ -1018,6 +1087,80 @@ export class D1TaskRepository implements TaskRepository {
       )
       .run();
   }
+
+  private async maybeEmitDeclassifiedTaskAction(input: {
+    input: TaskActionInput;
+    task: Record<string, unknown>;
+    resultedStatus: TaskStatus;
+    nowIso: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<void> {
+    const taskId = input.input.taskId;
+    if (!taskId) {
+      return;
+    }
+
+    const sourceConversationSourceId = input.input.sourceConversationSourceId ?? null;
+    const primaryConversationSourceId = input.task.primary_conversation_source_id
+      ? String(input.task.primary_conversation_source_id)
+      : null;
+
+    if (!sourceConversationSourceId || !primaryConversationSourceId || sourceConversationSourceId === primaryConversationSourceId) {
+      return;
+    }
+
+    if (
+      input.input.actionType !== "mark_done" &&
+      input.input.actionType !== "mark_cancelled" &&
+      input.input.actionType !== "mark_blocked" &&
+      input.input.actionType !== "reopen"
+    ) {
+      return;
+    }
+
+    const visibilityRows = await this.db
+      .prepare(
+        `SELECT id, is_public
+         FROM conversation_sources
+         WHERE organization_id = ?
+           AND id IN (?, ?)`
+      )
+      .bind(input.input.organizationId, sourceConversationSourceId, primaryConversationSourceId)
+      .all<Record<string, unknown>>();
+
+    const byId = new Map(
+      (visibilityRows.results ?? []).map((row) => [String(row.id), Number(row.is_public) === 1] as const)
+    );
+    const sourceIsPublic = byId.get(sourceConversationSourceId);
+    const primaryIsPublic = byId.get(primaryConversationSourceId);
+
+    if (sourceIsPublic === undefined || primaryIsPublic === undefined) {
+      return;
+    }
+    if (sourceIsPublic || !primaryIsPublic) {
+      return;
+    }
+
+    await this.recordTaskAction({
+      id: crypto.randomUUID(),
+      organizationId: input.input.organizationId,
+      workspaceId: input.input.workspaceId,
+      taskId,
+      actionType: input.input.actionType,
+      actorPlatform: "system",
+      actorId: "thane_declassifier",
+      actorName: "Thane",
+      sourceConversationSourceId: primaryConversationSourceId,
+      payload: {
+        source: "declassified_projection",
+        redacted: true,
+        original_source_conversation_source_id: sourceConversationSourceId,
+        ...(input.metadata ?? {})
+      },
+      resultedStatus: input.resultedStatus,
+      createdAt: input.nowIso
+    });
+  }
 }
 
 function resolveStatusTransition(actionType: TaskActionType, explicitStatus?: TaskStatus): TaskStatus {
@@ -1078,10 +1221,13 @@ function toTaskRecord(row: Record<string, unknown>): TaskRecord {
     createdAt: String(row.created_at),
     urgency: String(row.urgency) as TaskRecord["urgency"],
     difficulty: String(row.difficulty) as TaskRecord["difficulty"],
-    status: String(row.status) as TaskRecord["status"],
+    status: String(row.effective_status ?? row.status) as TaskRecord["status"],
     confidence: Number(row.confidence)
   };
 
+  if (row.primary_conversation_source_id) {
+    task.primaryConversationSourceId = String(row.primary_conversation_source_id);
+  }
   if (row.channel_id) {
     task.channelId = String(row.channel_id);
   }

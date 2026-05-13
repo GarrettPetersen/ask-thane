@@ -9,6 +9,7 @@ crons = ["*/15 * * * *"]
 binding = "DB"
 database_name = "ask-thane"
 database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"
+migrations_dir = "../../infra/d1/migrations"
 
 [vars]
 DEFAULT_LLM_PROVIDER = "openai"

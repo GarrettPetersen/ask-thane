@@ -538,6 +538,7 @@ async function executeTool(
       const task: TaskRecord = {
         id: crypto.randomUUID(),
         workspaceId: ctx.workspaceId,
+        primaryConversationSourceId: ctx.currentConversationSourceId,
         channelId: ctx.event.channelId,
         sourceMessageId: ctx.event.messageId,
         title,

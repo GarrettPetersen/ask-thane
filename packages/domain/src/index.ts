@@ -24,6 +24,7 @@ export interface UserRef {
 export interface TaskRecord {
   id: string;
   workspaceId: string;
+  primaryConversationSourceId?: string;
   channelId?: string;
   sourceMessageId?: string;
   title: string;
