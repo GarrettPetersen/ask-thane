@@ -73,6 +73,30 @@ export class SlackInstallStore {
     return row?.bot_token ? String(row.bot_token) : null;
   }
 
+  async getInstallByExternalWorkspaceId(externalWorkspaceId: string): Promise<SlackWorkspaceInstallRecord | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT organization_id, workspace_id, external_workspace_id, bot_token, bot_user_id
+         FROM slack_workspace_installs
+         WHERE external_workspace_id = ?
+         LIMIT 1`
+      )
+      .bind(externalWorkspaceId)
+      .first<Record<string, unknown>>();
+
+    if (!row?.organization_id || !row.workspace_id || !row.external_workspace_id || !row.bot_token) {
+      return null;
+    }
+
+    return {
+      organizationId: String(row.organization_id),
+      workspaceId: String(row.workspace_id),
+      externalWorkspaceId: String(row.external_workspace_id),
+      botToken: String(row.bot_token),
+      ...(row.bot_user_id ? { botUserId: String(row.bot_user_id) } : {})
+    };
+  }
+
   async listWorkspaceInstalls(): Promise<SlackWorkspaceInstallRecord[]> {
     const result = await this.db
       .prepare(

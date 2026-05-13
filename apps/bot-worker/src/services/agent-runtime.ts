@@ -79,6 +79,7 @@ interface ToolContext {
   event: MessageEvent;
   interactionMode: "passive_ingest" | "dm_reply" | "proactive_followup";
   readOnlyTools: boolean;
+  botExternalUserId?: string;
 }
 
 function clampLimit(limit: unknown, fallback: number, max: number): number {
@@ -453,6 +454,7 @@ function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"
     "Examples: 'I'm done watering the gnomes, but I still need to elevate the cake and bloviate the sneed' => mark_done(water gnomes) + create_task(elevate cake) + create_task(bloviate sneed).",
     "Examples: 'I froze the beef last night' should update existing freeze-beef task to done when a matching open task exists.",
     "When assignee is not explicit in shared channels, infer from candidate people in context: prioritize recent speakers, then other active channel members; only default to author if still ambiguous.",
+    "Interpret deictic second-person address using conversation context: when the speaker addresses another participant (for example 'you' in a shared channel), do not assign to the speaker unless context explicitly indicates self-assignment.",
     "Ignore non-task chatter such as weather commentary unless it changes a task state.",
     "If task completion/cancellation is asserted in private context and visibility is unclear, create a permission waiver request.",
     "When writing notes, prefer short durable facts (skills, ownership patterns, constraints).",
@@ -467,13 +469,19 @@ function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"
     .join(" ");
 }
 
-async function resolveBotToken(input: {
+async function resolveSlackInstall(input: {
   env: BotEnv;
   installStore: SlackInstallStore;
   externalWorkspaceId: string;
-}): Promise<string | null> {
-  const installed = await input.installStore.getBotTokenByExternalWorkspaceId(input.externalWorkspaceId);
-  return installed ?? input.env.SLACK_BOT_TOKEN ?? null;
+}): Promise<{ botToken: string | null; botUserId?: string }> {
+  const installed = await input.installStore.getInstallByExternalWorkspaceId(input.externalWorkspaceId);
+  if (installed?.botToken) {
+    return {
+      botToken: installed.botToken,
+      ...(installed.botUserId ? { botUserId: installed.botUserId } : {})
+    };
+  }
+  return { botToken: input.env.SLACK_BOT_TOKEN ?? null };
 }
 
 function permissionError(tool: string, reason: string): Record<string, unknown> {
@@ -501,7 +509,9 @@ function extractSlackMentionIds(text: string): string[] {
 }
 
 async function inferAssigneeFromConversationContext(ctx: ToolContext): Promise<string> {
-  const explicitMentions = extractSlackMentionIds(ctx.event.text).filter((id) => id !== ctx.actorExternalUserId);
+  const explicitMentions = extractSlackMentionIds(ctx.event.text).filter(
+    (id) => id !== ctx.actorExternalUserId && (!ctx.botExternalUserId || id !== ctx.botExternalUserId)
+  );
   if (explicitMentions.length > 0) {
     return explicitMentions[0] ?? ctx.actorExternalUserId;
   }
@@ -521,7 +531,7 @@ async function inferAssigneeFromConversationContext(ctx: ToolContext): Promise<s
       continue;
     }
     const userId = message.user?.trim();
-    if (!userId || userId === ctx.actorExternalUserId || message.subtype) {
+    if (!userId || userId === ctx.actorExternalUserId || userId === ctx.botExternalUserId || message.subtype) {
       continue;
     }
     if (message.ts && message.ts === ctx.event.messageId) {
@@ -540,7 +550,12 @@ async function inferAssigneeFromConversationContext(ctx: ToolContext): Promise<s
   });
   for (const memberId of activeMembers) {
     const normalized = memberId.trim();
-    if (!normalized || normalized === ctx.actorExternalUserId || seen.has(normalized)) {
+    if (
+      !normalized ||
+      normalized === ctx.actorExternalUserId ||
+      normalized === ctx.botExternalUserId ||
+      seen.has(normalized)
+    ) {
       continue;
     }
     seen.add(normalized);
@@ -1229,11 +1244,13 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     userId: actorUser.userId
   });
 
-  const botToken = await resolveBotToken({
+  const slackInstall = await resolveSlackInstall({
     env: input.env,
     installStore,
     externalWorkspaceId: input.externalWorkspaceId
   });
+  const botToken = slackInstall.botToken;
+  const botUserId = slackInstall.botUserId;
 
   if (!botToken) {
     return { usedTools: false, createdTaskIds: [], updatedTaskIds: [], taskActionTypes: [] };
@@ -1313,10 +1330,13 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     userId: actorUser.userId,
     limit: 50
   });
-  const activeConversationMembers = await resolver.listActiveSlackConversationExternalUsers({
+  const activeConversationParticipants = await resolver.listActiveSlackConversationParticipants({
     organizationId: input.organizationId,
     conversationSourceId: input.conversationSourceId
   });
+  const activeConversationMembers = activeConversationParticipants
+    .map((participant) => participant.externalUserId)
+    .filter((id) => id !== botUserId);
 
   const recentSpeakerCandidates: string[] = [];
   const speakerSeen = new Set<string>();
@@ -1368,6 +1388,13 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
       recent_speakers: recentSpeakerCandidates,
       active_channel_members: activeConversationMembers.filter((id) => id !== input.event.author.platformUserId)
     },
+    conversation_participants: activeConversationParticipants
+      .filter((participant) => participant.externalUserId !== botUserId)
+      .map((participant) => ({
+        external_user_id: participant.externalUserId,
+        display_name: participant.displayName ?? null,
+        is_actor: participant.externalUserId === input.event.author.platformUserId
+      })),
     visible_tasks_seed: visibleTasks.map((task) => summarizeTask(task)),
     notes: {
       organization: organizationNotes.map((note) => note.content),
@@ -1426,7 +1453,8 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     recentMessages,
     event: input.event,
     interactionMode,
-    readOnlyTools
+    readOnlyTools,
+    ...(botUserId ? { botExternalUserId: botUserId } : {})
   };
 
   for (let turn = 0; turn < maxTurns; turn += 1) {

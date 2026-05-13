@@ -14,6 +14,11 @@ export interface ReadableConversationSource {
   isPublic: boolean;
 }
 
+export interface ActiveSlackConversationParticipant {
+  externalUserId: string;
+  displayName?: string;
+}
+
 export class ConversationAccessResolver {
   constructor(private readonly db: D1Database) {}
 
@@ -43,6 +48,41 @@ export class ConversationAccessResolver {
       }
     }
     return Array.from(ids);
+  }
+
+  async listActiveSlackConversationParticipants(params: {
+    organizationId: string;
+    conversationSourceId: string;
+  }): Promise<ActiveSlackConversationParticipant[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT u.external_user_id, u.display_name
+         FROM conversation_memberships cm
+         JOIN users u ON u.id = cm.user_id
+         WHERE cm.organization_id = ?
+           AND cm.conversation_source_id = ?
+           AND cm.is_active = 1
+           AND u.platform = 'slack'
+         ORDER BY cm.synced_at DESC`
+      )
+      .bind(params.organizationId, params.conversationSourceId)
+      .all<Record<string, unknown>>();
+
+    const seen = new Set<string>();
+    const participants: ActiveSlackConversationParticipant[] = [];
+    for (const row of result.results ?? []) {
+      const externalUserId = row.external_user_id ? String(row.external_user_id).trim() : "";
+      if (!externalUserId || seen.has(externalUserId)) {
+        continue;
+      }
+      seen.add(externalUserId);
+      const displayName = row.display_name ? String(row.display_name).trim() : "";
+      participants.push({
+        externalUserId,
+        ...(displayName ? { displayName } : {})
+      });
+    }
+    return participants;
   }
 
   async upsertSlackConversationSource(params: {

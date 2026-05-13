@@ -47,6 +47,11 @@ async function reconcileSlackMemberships(env: BotEnv): Promise<void> {
   }
 }
 
+async function runSlackPollWithMembershipRefresh(env: BotEnv) {
+  await reconcileSlackMemberships(env);
+  return pollSlackWorkspacesForTasks(env);
+}
+
 function isAdminAuthorized(request: Request, env: BotEnv): boolean {
   const requiredToken = env.ADMIN_TRIGGER_TOKEN?.trim();
   if (!requiredToken) {
@@ -166,7 +171,7 @@ export default {
       if (!isAdminAuthorized(request, env)) {
         return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
       }
-      const summary = await pollSlackWorkspacesForTasks(env);
+      const summary = await runSlackPollWithMembershipRefresh(env);
       return Response.json({ ok: true, summary }, { status: 200 });
     }
 
@@ -240,7 +245,6 @@ export default {
   async scheduled(_controller: ScheduledController, env: BotEnv, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(sendReminders(env));
     ctx.waitUntil(runScheduledFollowUpJobs(env));
-    ctx.waitUntil(reconcileSlackMemberships(env));
-    ctx.waitUntil(pollSlackWorkspacesForTasks(env));
+    ctx.waitUntil(runSlackPollWithMembershipRefresh(env));
   }
 };
