@@ -16,6 +16,7 @@ export interface SlackWorkspaceInstallRecord {
   workspaceId: string;
   externalWorkspaceId: string;
   botToken: string;
+  botUserId?: string;
 }
 
 export class SlackInstallStore {
@@ -75,7 +76,7 @@ export class SlackInstallStore {
   async listWorkspaceInstalls(): Promise<SlackWorkspaceInstallRecord[]> {
     const result = await this.db
       .prepare(
-        `SELECT organization_id, workspace_id, external_workspace_id, bot_token
+        `SELECT organization_id, workspace_id, external_workspace_id, bot_token, bot_user_id
          FROM slack_workspace_installs`
       )
       .all<Record<string, unknown>>();
@@ -84,7 +85,8 @@ export class SlackInstallStore {
       organizationId: String(row.organization_id),
       workspaceId: String(row.workspace_id),
       externalWorkspaceId: String(row.external_workspace_id),
-      botToken: String(row.bot_token)
+      botToken: String(row.bot_token),
+      ...(row.bot_user_id ? { botUserId: String(row.bot_user_id) } : {})
     }));
   }
 }

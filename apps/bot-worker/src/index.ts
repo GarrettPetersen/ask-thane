@@ -4,7 +4,7 @@ import { handleSlackEvents } from "./routes/slack-events";
 import { handleSlackInstallStart, handleSlackOAuthCallback } from "./routes/slack-oauth";
 import { ConversationAccessResolver } from "./services/conversation-access";
 import { runScheduledFollowUpJobs } from "./services/follow-up-jobs";
-import { runScheduledReminderDigests } from "./services/reminder-digests";
+import { runScheduledReminderDigests, runWorkspaceReminderDigestsNow } from "./services/reminder-digests";
 import { pollSlackWorkspacesForTasks } from "./services/slack-poller";
 import { SlackInstallStore } from "./services/slack-install-store";
 import type { BotEnv } from "./services/task-inference";
@@ -192,6 +192,30 @@ export default {
       }
       const status = await getDigestStatus(env);
       return Response.json(status, { status: 200 });
+    }
+
+    if (pathname === "/admin/reminders/run-workspace" && request.method === "POST") {
+      if (!isAdminAuthorized(request, env)) {
+        return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+      }
+      let payload: { workspaceId?: string; includeAllWorkspaceUsers?: boolean } = {};
+      try {
+        payload = (await request.json()) as { workspaceId?: string; includeAllWorkspaceUsers?: boolean };
+      } catch {
+        return Response.json({ ok: false, error: "invalid_json_body" }, { status: 400 });
+      }
+
+      const workspaceId = typeof payload.workspaceId === "string" ? payload.workspaceId.trim() : "";
+      if (!workspaceId) {
+        return Response.json({ ok: false, error: "workspace_id_required" }, { status: 400 });
+      }
+
+      const summary = await runWorkspaceReminderDigestsNow({
+        env,
+        workspaceId,
+        includeAllWorkspaceUsers: payload.includeAllWorkspaceUsers ?? false
+      });
+      return Response.json({ ok: true, summary }, { status: 200 });
     }
 
     if (pathname === "/admin/followups/run" && request.method === "POST") {
