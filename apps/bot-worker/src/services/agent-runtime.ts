@@ -455,6 +455,7 @@ function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"
     "Examples: 'I froze the beef last night' should update existing freeze-beef task to done when a matching open task exists.",
     "When assignee is not explicit in shared channels, infer from candidate people in context: prioritize recent speakers, then other active channel members; only default to author if still ambiguous.",
     "Interpret deictic second-person address using conversation context: when the speaker addresses another participant (for example 'you' in a shared channel), do not assign to the speaker unless context explicitly indicates self-assignment.",
+    "Use person-level notes and ownership patterns for disambiguation when deciding assignees in ambiguous requests.",
     "Ignore non-task chatter such as weather commentary unless it changes a task state.",
     "If task completion/cancellation is asserted in private context and visibility is unclear, create a permission waiver request.",
     "When writing notes, prefer short durable facts (skills, ownership patterns, constraints).",
@@ -1338,6 +1339,44 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     .map((participant) => participant.externalUserId)
     .filter((id) => id !== botUserId);
 
+  const participantPersonNotes = (
+    await Promise.all(
+      activeConversationParticipants
+        .filter((participant) => participant.externalUserId !== botUserId)
+        .slice(0, 12)
+        .map(async (participant) => {
+          const internalUserId = await resolver.resolveInternalUserId({
+            organizationId: input.organizationId,
+            workspaceId: input.workspaceId,
+            platform: "slack",
+            platformUserId: participant.externalUserId
+          });
+          if (!internalUserId) {
+            return null;
+          }
+          const linkedPerson = await repo.getPersonByUserId(input.organizationId, internalUserId);
+          if (!linkedPerson) {
+            return null;
+          }
+          const notes = await repo.listAgentNotes({
+            organizationId: input.organizationId,
+            scopeType: "person",
+            scopeId: linkedPerson.id,
+            limit: 5
+          });
+          if (notes.length === 0) {
+            return null;
+          }
+          return {
+            external_user_id: participant.externalUserId,
+            display_name: participant.displayName ?? null,
+            person_id: linkedPerson.id,
+            notes: notes.map((note) => note.content)
+          };
+        })
+    )
+  ).filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+
   const recentSpeakerCandidates: string[] = [];
   const speakerSeen = new Set<string>();
   for (let i = recentMessages.length - 1; i >= 0; i -= 1) {
@@ -1401,7 +1440,8 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
       workspace: workspaceNotes.map((note) => note.content),
       conversation: conversationNotes.map((note) => note.content),
       user: userNotes.map((note) => note.content),
-      person: personNotes.map((note) => note.content)
+      person: personNotes.map((note) => note.content),
+      participant_person_notes: participantPersonNotes
     },
     notification_cadence: userCadence
       ? {
