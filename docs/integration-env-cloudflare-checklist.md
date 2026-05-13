@@ -138,6 +138,8 @@ Checklist:
 
 ## 7) Slack app configuration
 In Slack app settings:
+- [ ] Upload app icon in `Basic Information` -> `Display Information`:
+  - Use `apps/bot-worker/assets/slack-bot-profile-512.png` for the bot profile image.
 
 ### Event request URL
 - [ ] Set Events API Request URL to:

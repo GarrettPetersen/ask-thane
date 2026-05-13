@@ -8,6 +8,12 @@
       name="description"
       content="Ask Thane turns team conversations into accountable execution by auto-capturing tasks, following up, and reporting progress."
     />
+    <meta name="theme-color" content="#f7f3ea" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/svg+xml" href="/brand/ask-thane-gray-logo.svg" media="(prefers-color-scheme: light)" />
+    <link rel="icon" type="image/svg+xml" href="/brand/ask-thane-white-logo.svg" media="(prefers-color-scheme: dark)" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
     <style>
       :root {
         --bg: #f7f3ea;
@@ -48,18 +54,16 @@
       .brand {
         display: inline-flex;
         align-items: center;
-        gap: 10px;
         text-decoration: none;
         color: inherit;
         font-weight: 700;
         letter-spacing: 0.02em;
       }
 
-      .dot {
-        width: 11px;
-        height: 11px;
-        border-radius: 50%;
-        background: linear-gradient(135deg, var(--brand), var(--accent));
+      .brand-mark {
+        width: 168px;
+        max-width: 100%;
+        height: auto;
       }
 
       .hero {
@@ -228,8 +232,7 @@
   <body>
     <header class="container">
       <a class="brand" href="/">
-        <span class="dot" aria-hidden="true"></span>
-        <span>Ask Thane</span>
+        <img class="brand-mark" src="/brand/ask-thane-gray-logo-with-text.svg" alt="Ask Thane" />
       </a>
     </header>
 
