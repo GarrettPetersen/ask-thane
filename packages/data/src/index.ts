@@ -270,7 +270,48 @@ function buildEffectiveTaskStatusExpression(
 export class D1TaskRepository implements TaskRepository {
   constructor(private readonly db: D1Database) {}
 
+  private async normalizeTaskUserIdentifier(input: {
+    workspaceId: string;
+    platform: UserRef["platform"];
+    userIdentifier: string;
+  }): Promise<string> {
+    const normalized = input.userIdentifier.trim();
+    if (!normalized) {
+      return input.userIdentifier;
+    }
+
+    // Canonical task user IDs as provider external IDs (e.g., Slack U* IDs).
+    const row = await this.db
+      .prepare(
+        `SELECT external_user_id
+         FROM users
+         WHERE workspace_id = ?
+           AND platform = ?
+           AND (id = ? OR external_user_id = ?)
+         LIMIT 1`
+      )
+      .bind(input.workspaceId, input.platform, normalized, normalized)
+      .first<Record<string, unknown>>();
+
+    if (row?.external_user_id) {
+      return String(row.external_user_id);
+    }
+
+    return normalized;
+  }
+
   async save(task: TaskRecord): Promise<void> {
+    const normalizedAssigneeId = await this.normalizeTaskUserIdentifier({
+      workspaceId: task.workspaceId,
+      platform: task.assignee.platform,
+      userIdentifier: task.assignee.platformUserId
+    });
+    const normalizedAssignerId = await this.normalizeTaskUserIdentifier({
+      workspaceId: task.workspaceId,
+      platform: task.assigner.platform,
+      userIdentifier: task.assigner.platformUserId
+    });
+
     const stmt = this.db.prepare(
       `INSERT INTO tasks (
          id, organization_id, workspace_id, primary_conversation_source_id, channel_id, source_message_id, title, description,
@@ -291,10 +332,10 @@ export class D1TaskRepository implements TaskRepository {
         task.title,
         task.description ?? null,
         task.assignee.platform,
-        task.assignee.platformUserId,
+        normalizedAssigneeId,
         task.assignee.displayName ?? null,
         task.assigner.platform,
-        task.assigner.platformUserId,
+        normalizedAssignerId,
         task.assigner.displayName ?? null,
         task.createdAt,
         task.dueAt ?? null,
@@ -339,7 +380,7 @@ export class D1TaskRepository implements TaskRepository {
            ON u.organization_id = t.organization_id
           AND u.workspace_id = t.workspace_id
           AND u.platform = t.assignee_platform
-          AND u.external_user_id = t.assignee_id
+          AND (u.external_user_id = t.assignee_id OR u.id = t.assignee_id)
          WHERE t.status IN ('incomplete', 'in_progress', 'blocked')
          GROUP BY
            t.organization_id,

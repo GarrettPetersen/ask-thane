@@ -150,12 +150,22 @@ async function dispatchCadenceDigest(input: {
     userId: input.cadence.userId
   });
 
-  const openTasks = await input.repo.listOpenByAssigneeWithAcl({
-    organizationId: input.cadence.organizationId,
-    assigneeId: input.cadence.externalUserId,
-    readableConversationSourceIds,
-    allowUnscoped: true
-  });
+  const assigneeIdentifiers = Array.from(
+    new Set([input.cadence.externalUserId, input.cadence.userId].map((value) => value.trim()).filter(Boolean))
+  );
+  const taskMap = new Map<string, TaskRecord>();
+  for (const assigneeId of assigneeIdentifiers) {
+    const tasks = await input.repo.listOpenByAssigneeWithAcl({
+      organizationId: input.cadence.organizationId,
+      assigneeId,
+      readableConversationSourceIds,
+      allowUnscoped: true
+    });
+    for (const task of tasks) {
+      taskMap.set(task.id, task);
+    }
+  }
+  const openTasks = Array.from(taskMap.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
   const timezone = normalizeTimezone(input.cadence.timezone);
   const normalizedCadence = normalizeCadenceSpec(input.cadence.cadenceJson);
