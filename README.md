@@ -6,7 +6,7 @@ Ask Thane is a conversational task-tracking system that listens to team communic
 - Cloudflare-first monorepo skeleton for product surfaces (landing, bot, API, billing).
 - Shared TypeScript packages for domain types, integrations, AI adapters, data repositories, and workflows.
 - Initial D1 SQL schema for workspaces, users, tasks, task events, and reminders.
-- Starter Slack webhook route + scheduled reminder hook in the bot Worker.
+- Starter Slack webhook route plus scheduled polling/reminder hooks in the bot Worker.
 - Foundational docs for architecture and roadmap.
 
 ## High-level architecture
@@ -14,7 +14,7 @@ Ask Thane is a conversational task-tracking system that listens to team communic
 2. `bot-worker` receives platform events and normalizes them into a shared message event shape.
 3. `workflows` calls AI adapters to infer task create/update intents.
 4. `data` persists task state and immutable task events in D1.
-5. `bot-worker` scheduled jobs send follow-up reminders and ingest responses.
+5. `bot-worker` scheduled jobs poll Slack channels, send follow-up reminders, and ingest responses.
 6. `api-worker` serves rollups for leadership/status views.
 7. `payments-worker` tracks subscription state via Stripe webhooks.
 
@@ -41,7 +41,7 @@ Ask Thane is a conversational task-tracking system that listens to team communic
 ```
 
 ## Application surfaces
-- `apps/bot-worker`: Slack ingress, task inference orchestration, scheduled reminder loop.
+- `apps/bot-worker`: Slack ingress, task inference orchestration, scheduled polling/reminder loop.
 - `apps/api-worker`: Internal REST endpoints for task status queries and future analytics.
 - `apps/payments-worker`: Stripe webhook ingestion and entitlement state hooks.
 - `apps/landing`: Cloudflare Worker serving static marketing assets from `public/`.

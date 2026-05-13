@@ -8,8 +8,8 @@ This checklist is for standing up a working dev/test backend for the current cod
   - `apps/bot-worker`
   - `apps/api-worker`
   - `apps/payments-worker`
-- Slack request signature verification is not implemented yet in code, so use this only in controlled test environments for now.
-- LLM extraction is currently stubbed, so OpenAI/Anthropic keys are not yet exercised by runtime logic.
+- Slack request signature verification is implemented in the bot worker.
+- Bot worker now supports scheduled Slack polling and heuristic task detection (no LLM call required for polling path).
 
 ## 1) One-time accounts and access
 - [ ] Cloudflare account with Workers + D1 enabled
@@ -67,6 +67,10 @@ Apply schema and migrations (remote):
 npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/schema.sql
 npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0001_org-multitenancy.sql
 npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0002_access-control-foundations.sql
+npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0003_slack-workspace-installs.sql
+npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0004_waitlist-signups.sql
+npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0005-identity-notes-task-actions-and-waivers.sql
+npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0006-workspace-poll-cursors.sql
 ```
 
 ## 4) Configure bot Worker (`ask-thane-bot`)
@@ -148,6 +152,8 @@ In Slack app settings:
 - [ ] `groups:read`
 - [ ] `im:read`
 - [ ] `mpim:read`
+- [ ] `channels:history`
+- [ ] `groups:history`
 - [ ] `chat:write`
 - [ ] `reactions:write`
 
@@ -183,8 +189,9 @@ Reality check:
 ## 10) Final smoke test
 - [ ] Hit all three `/health` endpoints.
 - [ ] Send a message in a subscribed Slack channel and confirm bot webhook returns `{ ok: true, ... }`.
+- [ ] Wait for next cron window and confirm poll ingestion writes rows without webhook traffic.
 - [ ] Query API worker for open tasks.
-- [ ] Confirm D1 rows are being written (`tasks`, `ingest_events`, `conversation_sources`).
+- [ ] Confirm D1 rows are being written (`tasks`, `task_actions`, `ingest_events`, `conversation_sources`, `identity_accounts`, `workspace_poll_cursors`).
 
 ## 11) Recommended order from where you are now
 1. [ ] Set Cloudflare + D1 first.

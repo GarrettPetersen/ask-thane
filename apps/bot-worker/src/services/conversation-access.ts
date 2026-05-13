@@ -209,10 +209,10 @@ export class ConversationAccessResolver {
     };
   }
 
-  async listSlackWorkspaces(): Promise<Array<{ organizationId: string; workspaceId: string }>> {
+  async listSlackWorkspaces(): Promise<Array<{ organizationId: string; workspaceId: string; externalWorkspaceId: string }>> {
     const result = await this.db
       .prepare(
-        `SELECT organization_id, id
+        `SELECT organization_id, id, external_workspace_id
          FROM workspaces
          WHERE platform = 'slack'`
       )
@@ -220,15 +220,18 @@ export class ConversationAccessResolver {
 
     return (result.results ?? []).map((row) => ({
       organizationId: String(row.organization_id),
-      workspaceId: String(row.id)
+      workspaceId: String(row.id),
+      externalWorkspaceId: String(row.external_workspace_id)
     }));
   }
 
-  private async ensureSlackUser(params: {
+  async ensureSlackUser(params: {
     organizationId: string;
     workspaceId: string;
     platformUserId: string;
     nowIso: string;
+    displayName?: string;
+    email?: string;
   }): Promise<{ userId: string }> {
     const existingId = await this.resolveInternalUserId({
       organizationId: params.organizationId,
@@ -238,6 +241,18 @@ export class ConversationAccessResolver {
     });
 
     if (existingId) {
+      if (params.displayName || params.email) {
+        await this.db
+          .prepare(
+            `UPDATE users
+             SET display_name = COALESCE(?, display_name),
+                 email = COALESCE(?, email),
+                 updated_at = ?
+             WHERE id = ?`
+          )
+          .bind(params.displayName ?? null, params.email ?? null, params.nowIso, existingId)
+          .run();
+      }
       return { userId: existingId };
     }
 
@@ -247,9 +262,18 @@ export class ConversationAccessResolver {
         `INSERT INTO users (
            id, organization_id, workspace_id, platform, external_user_id,
            display_name, email, role, created_at, updated_at
-         ) VALUES (?, ?, ?, 'slack', ?, NULL, NULL, 'member', ?, ?)`
+         ) VALUES (?, ?, ?, 'slack', ?, ?, ?, 'member', ?, ?)`
       )
-      .bind(userId, params.organizationId, params.workspaceId, params.platformUserId, params.nowIso, params.nowIso)
+      .bind(
+        userId,
+        params.organizationId,
+        params.workspaceId,
+        params.platformUserId,
+        params.displayName ?? null,
+        params.email ?? null,
+        params.nowIso,
+        params.nowIso
+      )
       .run();
 
     return { userId };

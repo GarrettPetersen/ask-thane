@@ -3,6 +3,7 @@ import { healthcheck } from "./routes/health";
 import { handleSlackEvents } from "./routes/slack-events";
 import { handleSlackInstallStart, handleSlackOAuthCallback } from "./routes/slack-oauth";
 import { ConversationAccessResolver } from "./services/conversation-access";
+import { pollSlackWorkspacesForTasks } from "./services/slack-poller";
 import { SlackInstallStore } from "./services/slack-install-store";
 import type { BotEnv } from "./services/task-inference";
 
@@ -71,5 +72,6 @@ export default {
   async scheduled(_controller: ScheduledController, env: BotEnv, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(sendReminders(env));
     ctx.waitUntil(reconcileSlackMemberships(env));
+    ctx.waitUntil(pollSlackWorkspacesForTasks(env));
   }
 };
