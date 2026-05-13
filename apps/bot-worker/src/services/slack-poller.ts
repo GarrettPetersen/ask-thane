@@ -105,7 +105,7 @@ function isTaskLikeRequest(text: string): boolean {
   }
 
   return (
-    /\b(please|can you|could you|need to|needs to|todo|to-do|follow up|ship|deploy|review|update|fix|write|prepare|send|finish|complete)\b/.test(
+    /\b(please|can you|could you|need to|needs to|todo|to-do|to do|follow up|ship|deploy|review|update|fix|write|prepare|send|finish|complete)\b/.test(
       lower
     ) || /\?$/.test(lower)
   );
@@ -113,6 +113,30 @@ function isTaskLikeRequest(text: string): boolean {
 
 function isVolunteerPrompt(text: string): boolean {
   return /\b(can someone|who can|anyone able|someone to)\b/i.test(text);
+}
+
+function isSelfOwnedTaskCue(text: string): boolean {
+  const trimmed = text.trim();
+  if (
+    /^(to[\s-]?do)\s*[:\-]/i.test(trimmed) ||
+    /^(my\s+to[\s-]?do|my\s+todo)\s*[:\-]/i.test(trimmed) ||
+    /^(i\s+need\s+to|i\s+should|i\s+have\s+to|i\s+must)\b/i.test(trimmed)
+  ) {
+    return true;
+  }
+
+  // Multi-line checklist/backlog style without explicit mentions is likely self-owned.
+  if (trimmed.includes("\n") && !/<@[A-Z0-9]+>/.test(trimmed)) {
+    const lines = trimmed
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    if (lines.length >= 2) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function chooseAssignee(input: {
@@ -141,6 +165,10 @@ function chooseAssignee(input: {
   }
 
   if (/\b(i(?:'| a)?ll|i will|i can take|i can do|i got it)\b/i.test(input.text)) {
+    return input.authorUserId;
+  }
+
+  if (isSelfOwnedTaskCue(input.text)) {
     return input.authorUserId;
   }
 
