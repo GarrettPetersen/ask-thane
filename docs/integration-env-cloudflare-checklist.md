@@ -9,7 +9,7 @@ This checklist is for standing up a working dev/test backend for the current cod
   - `apps/api-worker`
   - `apps/payments-worker`
 - Slack request signature verification is implemented in the bot worker.
-- Bot worker now supports scheduled Slack polling and heuristic task detection (no LLM call required for polling path).
+- Bot worker now supports scheduled Slack polling that can run the same tool-calling agent runtime used by webhook ingestion.
 
 ## 1) One-time accounts and access
 - [ ] Cloudflare account with Workers + D1 enabled
@@ -180,8 +180,8 @@ Then:
 - [ ] Keep provider/model defaults in bot `wrangler.toml` aligned with your preference.
 
 Reality check:
-- Webhook path now uses OpenAI for the tool-calling agent runtime when `DEFAULT_LLM_PROVIDER=openai` and `OPENAI_API_KEY` is set.
-- Scheduled polling path remains heuristic/non-LLM for lower background cost.
+- Webhook path uses OpenAI for the tool-calling agent runtime when `DEFAULT_LLM_PROVIDER=openai` and `OPENAI_API_KEY` is set.
+- Scheduled polling can also invoke that runtime for context-driven interpretation.
 
 ## 9) Cloudflare routing and domains
 - [ ] Keep landing Worker on `askthane.com` (already done).

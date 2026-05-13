@@ -68,5 +68,5 @@ Runtime ensures identity linkage for actor using:
 Polling path also links identities for authors, mentions, and reactors.
 
 ## Fallback and coexistence
-- Scheduled Slack poller continues running heuristic ingestion without OpenAI.
-- Webhook agent runtime handles richer conversational state and tool use.
+- Scheduled Slack poller now also invokes the same tool-calling agent runtime per ingested message.
+- Webhook and polling paths share one reasoning layer and one command surface.

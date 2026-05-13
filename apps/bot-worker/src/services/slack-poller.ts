@@ -1,5 +1,6 @@
 import { D1TaskRepository } from "@ask-thane/data";
-import type { TaskRecord, TaskUrgency } from "@ask-thane/domain";
+import type { MessageEvent } from "@ask-thane/domain";
+import { runConversationalAgentForSlackMessage } from "./agent-runtime";
 import { ConversationAccessResolver } from "./conversation-access";
 import { fetchSlackConversationHistory, type SlackHistoryMessage, type SlackReaction } from "./slack-api";
 import { SlackInstallStore } from "./slack-install-store";
@@ -70,167 +71,6 @@ function extractMentions(text: string): string[] {
     }
   }
   return Array.from(ids);
-}
-
-function compactTitleFromMessage(text: string): string {
-  const withoutMentions = text.replace(/<@[A-Z0-9]+>/g, "").trim();
-  const withoutLinks = withoutMentions.replace(/<https?:[^>|]+\|?([^>]+)?>/g, "$1").trim();
-  const collapsed = withoutLinks.replace(/\s+/g, " ").trim();
-  const strippedLead = collapsed.replace(
-    /^(please\s+|can\s+you\s+|could\s+you\s+|we\s+need\s+to\s+|need\s+to\s+)/i,
-    ""
-  );
-  const finalTitle = strippedLead.length > 0 ? strippedLead : collapsed;
-  return finalTitle.slice(0, 180);
-}
-
-function guessUrgency(text: string): TaskUrgency {
-  const lower = text.toLowerCase();
-  if (/\b(asap|urgent|immediately|right away|today)\b/.test(lower)) {
-    return "high";
-  }
-  if (/\b(blocker|critical|sev1|p0)\b/.test(lower)) {
-    return "critical";
-  }
-  if (/\b(whenever|no rush|eventually)\b/.test(lower)) {
-    return "low";
-  }
-  return "medium";
-}
-
-function isTaskLikeRequest(text: string): boolean {
-  const lower = text.toLowerCase();
-  if (lower.length < 8) {
-    return false;
-  }
-
-  return (
-    /\b(please|can you|could you|need to|needs to|todo|to-do|to do|follow up|ship|deploy|review|update|fix|write|prepare|send|finish|complete)\b/.test(
-      lower
-    ) || /\?$/.test(lower)
-  );
-}
-
-function isVolunteerPrompt(text: string): boolean {
-  return /\b(can someone|who can|anyone able|someone to)\b/i.test(text);
-}
-
-function isSelfOwnedTaskCue(text: string): boolean {
-  const trimmed = text.trim();
-  if (
-    /^(to[\s-]?do)\s*[:\-]/i.test(trimmed) ||
-    /^(my\s+to[\s-]?do|my\s+todo)\s*[:\-]/i.test(trimmed) ||
-    /^(i\s+need\s+to|i\s+should|i\s+have\s+to|i\s+must)\b/i.test(trimmed)
-  ) {
-    return true;
-  }
-
-  // Multi-line checklist/backlog style without explicit mentions is likely self-owned.
-  if (trimmed.includes("\n") && !/<@[A-Z0-9]+>/.test(trimmed)) {
-    const lines = trimmed
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-    if (lines.length >= 2) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function chooseAssignee(input: {
-  text: string;
-  authorUserId: string;
-  mentions: string[];
-  reactions: SlackReaction[];
-}): string | null {
-  if (input.mentions.length > 0) {
-    return input.mentions[0] ?? null;
-  }
-
-  if (isVolunteerPrompt(input.text)) {
-    for (const reaction of input.reactions) {
-      const name = reaction.name?.toLowerCase() ?? "";
-      if (name !== "+1" && name !== "thumbsup") {
-        continue;
-      }
-
-      for (const reactor of reaction.users ?? []) {
-        if (reactor !== input.authorUserId) {
-          return reactor;
-        }
-      }
-    }
-  }
-
-  if (/\b(i(?:'| a)?ll|i will|i can take|i can do|i got it)\b/i.test(input.text)) {
-    return input.authorUserId;
-  }
-
-  if (isSelfOwnedTaskCue(input.text)) {
-    return input.authorUserId;
-  }
-
-  return null;
-}
-
-function inferTaskFromMessage(input: {
-  workspaceId: string;
-  channelId: string;
-  message: SlackHistoryMessage;
-  authorUserId: string;
-  mentions: string[];
-}): TaskRecord | null {
-  const text = input.message.text?.trim() ?? "";
-  if (!text || !isTaskLikeRequest(text)) {
-    return null;
-  }
-
-  const assigneeUserId = chooseAssignee({
-    text,
-    authorUserId: input.authorUserId,
-    mentions: input.mentions,
-    reactions: input.message.reactions ?? []
-  });
-
-  if (!assigneeUserId) {
-    return null;
-  }
-
-  const title = compactTitleFromMessage(text);
-  if (!title) {
-    return null;
-  }
-
-  return {
-    id: crypto.randomUUID(),
-    workspaceId: input.workspaceId,
-    channelId: input.channelId,
-    sourceMessageId: input.message.ts!,
-    title,
-    assignee: {
-      platform: "slack",
-      platformUserId: assigneeUserId
-    },
-    assigner: {
-      platform: "slack",
-      platformUserId: input.authorUserId
-    },
-    createdAt: input.message.ts ? asIsoFromSlackTs(input.message.ts) : new Date().toISOString(),
-    urgency: guessUrgency(text),
-    difficulty: "medium",
-    status: "incomplete",
-    confidence: 0.62,
-    metadata: {
-      extractor: "slack_poll_heuristic_v1",
-      reactions: (input.message.reactions ?? []).map((reaction) => ({
-        name: reaction.name ?? null,
-        users: reaction.users ?? []
-      })),
-      mention_user_ids: input.mentions
-    }
-  };
 }
 
 async function listJoinedChannels(botToken: string): Promise<Array<{ id: string; isPrivate: boolean }>> {
@@ -489,33 +329,27 @@ async function processWorkspaceMessages(target: WorkspacePollTarget, env: BotEnv
       });
 
       if (!alreadyTasked) {
-        const task = inferTaskFromMessage({
+        const event: MessageEvent = {
           workspaceId: target.workspaceId,
           channelId: channel.id,
-          message,
-          authorUserId: message.user,
-          mentions
-        });
+          messageId: message.ts,
+          text: message.text,
+          author: {
+            platform: "slack",
+            platformUserId: message.user
+          },
+          occurredAt: asIsoFromSlackTs(message.ts)
+        };
 
-        if (task) {
-          await repo.save(task);
-          await repo.performTaskAction({
-            id: crypto.randomUUID(),
-            organizationId: target.organizationId,
-            workspaceId: target.workspaceId,
-            taskId: task.id,
-            actionType: "create",
-            actorPlatform: "slack",
-            actorId: message.user,
-            sourceConversationSourceId: source.id,
-            payload: {
-              extractor: "slack_poll_heuristic_v1",
-              message_ts: message.ts
-            },
-            createdAt: nowIso
-          });
-          stats.tasksCreated += 1;
-        }
+        const agentRun = await runConversationalAgentForSlackMessage({
+          env,
+          organizationId: target.organizationId,
+          workspaceId: target.workspaceId,
+          externalWorkspaceId: target.externalWorkspaceId,
+          conversationSourceId: source.id,
+          event
+        });
+        stats.tasksCreated += agentRun.createdTaskIds.length;
       }
 
       await repo.markIngestEventProcessed(target.organizationId, "slack_poll", providerEventId, nowIso);

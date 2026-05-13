@@ -88,7 +88,11 @@ async function getPollStatus(env: BotEnv): Promise<Record<string, unknown>> {
     .prepare(
       `SELECT organization_id, workspace_id, id, title, assignee_id, created_at
        FROM tasks
-       WHERE metadata_json LIKE '%slack_poll_heuristic_v1%'
+       WHERE source_message_id IN (
+         SELECT provider_message_id
+         FROM ingest_events
+         WHERE provider = 'slack_poll'
+       )
        ORDER BY created_at DESC
        LIMIT 25`
     )
