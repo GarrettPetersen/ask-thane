@@ -8,7 +8,50 @@ import {
 import { inferAndPersistTasks, type BotEnv } from "../services/task-inference";
 import { ConversationAccessResolver } from "../services/conversation-access";
 import { OrgRegistry } from "../services/org-registry";
+import { SlackInstallStore } from "../services/slack-install-store";
 import { verifySlackRequestSignature } from "../services/slack-signature";
+
+async function addSlackTaskCapturedReaction(input: {
+  env: BotEnv;
+  externalWorkspaceId: string;
+  channelId: string;
+  messageTs: string;
+  reaction: string;
+}): Promise<void> {
+  const installStore = new SlackInstallStore(input.env.DB);
+  const installedToken = await installStore.getBotTokenByExternalWorkspaceId(input.externalWorkspaceId);
+  const token = installedToken ?? input.env.SLACK_BOT_TOKEN;
+  if (!token) {
+    return;
+  }
+
+  const body = new URLSearchParams({
+    channel: input.channelId,
+    timestamp: input.messageTs,
+    name: input.reaction
+  });
+
+  const response = await fetch("https://slack.com/api/reactions.add", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body
+  });
+
+  if (!response.ok) {
+    throw new Error(`slack_reaction_http_error:${response.status}`);
+  }
+
+  const payload = (await response.json()) as {
+    ok?: boolean;
+    error?: string;
+  };
+  if (!payload.ok && payload.error !== "already_reacted") {
+    throw new Error(`slack_reaction_error:${payload.error ?? "unknown"}`);
+  }
+}
 
 export async function handleSlackEvents(request: Request, env: BotEnv): Promise<Response> {
   const rawBody = await request.text();
@@ -139,6 +182,25 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
     },
     env
   );
+  if (tasks.length > 0) {
+    // Non-blocking acknowledgement in Slack when a message produced at least one task.
+    try {
+      await addSlackTaskCapturedReaction({
+        env,
+        externalWorkspaceId,
+        channelId: event.channelId,
+        messageTs: event.messageId,
+        reaction: "memo"
+      });
+    } catch (error) {
+      console.warn("Failed to add task-captured reaction", {
+        externalWorkspaceId,
+        channelId: event.channelId,
+        messageTs: event.messageId,
+        reason: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
   await ingestRepo.markIngestEventProcessed(organizationId, "slack", providerEventId, new Date().toISOString());
 
   return Response.json({ ok: true, taskCount: tasks.length }, { status: 200 });

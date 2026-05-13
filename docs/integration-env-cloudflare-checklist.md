@@ -148,6 +148,8 @@ In Slack app settings:
 - [ ] `groups:read`
 - [ ] `im:read`
 - [ ] `mpim:read`
+- [ ] `chat:write`
+- [ ] `reactions:write`
 
 ### Event subscriptions (bot events)
 Minimum useful starting set:

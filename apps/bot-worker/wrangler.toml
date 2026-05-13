@@ -15,7 +15,7 @@ DEFAULT_LLM_PROVIDER = "openai"
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
 DEFAULT_ORGANIZATION_ID = "org_0"
 THANE_BASE_URL = "https://askthane.com"
-SLACK_BOT_SCOPES = "channels:history,groups:history,channels:read,groups:read,im:read,mpim:read,chat:write,chat:write.public,im:write"
+SLACK_BOT_SCOPES = "channels:history,groups:history,channels:read,groups:read,im:read,mpim:read,chat:write,chat:write.public,im:write,reactions:write"
 SLACK_REDIRECT_URI = "https://bot.askthane.com/slack/oauth/callback"
 
 [[routes]]
