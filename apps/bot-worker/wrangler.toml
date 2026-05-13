@@ -18,6 +18,10 @@ DEFAULT_ORGANIZATION_ID = "org_0"
 THANE_BASE_URL = "https://askthane.com"
 SLACK_BOT_SCOPES = "channels:history,groups:history,channels:read,groups:read,im:read,mpim:read,chat:write,chat:write.public,im:write,reactions:write"
 SLACK_REDIRECT_URI = "https://bot.askthane.com/slack/oauth/callback"
+AGENT_MAX_TOOL_TURNS = "8"
+AGENT_COMPLETION_RETRIES = "2"
+AGENT_TOOL_READ_LIMIT = "100"
+AGENT_COMPLETION_TIMEOUT_MS = "45000"
 
 [[routes]]
 pattern = "bot.askthane.com"

@@ -1,7 +1,9 @@
+import { D1TaskRepository } from "@ask-thane/data";
 import { healthcheck } from "./routes/health";
 import { handleSlackEvents } from "./routes/slack-events";
 import { handleSlackInstallStart, handleSlackOAuthCallback } from "./routes/slack-oauth";
 import { ConversationAccessResolver } from "./services/conversation-access";
+import { runScheduledFollowUpJobs } from "./services/follow-up-jobs";
 import { runScheduledReminderDigests } from "./services/reminder-digests";
 import { pollSlackWorkspacesForTasks } from "./services/slack-poller";
 import { SlackInstallStore } from "./services/slack-install-store";
@@ -131,6 +133,15 @@ async function getDigestStatus(env: BotEnv): Promise<Record<string, unknown>> {
   };
 }
 
+async function getFollowUpStatus(env: BotEnv): Promise<Record<string, unknown>> {
+  const repo = new D1TaskRepository(env.DB);
+  const jobs = await repo.listRecentFollowUpJobs(50);
+  return {
+    ok: true,
+    recentFollowUpJobs: jobs
+  };
+}
+
 export default {
   async fetch(request: Request, env: BotEnv): Promise<Response> {
     const { pathname } = new URL(request.url);
@@ -183,11 +194,28 @@ export default {
       return Response.json(status, { status: 200 });
     }
 
+    if (pathname === "/admin/followups/run" && request.method === "POST") {
+      if (!isAdminAuthorized(request, env)) {
+        return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+      }
+      const summary = await runScheduledFollowUpJobs(env);
+      return Response.json({ ok: true, summary }, { status: 200 });
+    }
+
+    if (pathname === "/admin/followups/status" && request.method === "GET") {
+      if (!isAdminAuthorized(request, env)) {
+        return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+      }
+      const status = await getFollowUpStatus(env);
+      return Response.json(status, { status: 200 });
+    }
+
     return new Response("Not Found", { status: 404 });
   },
 
   async scheduled(_controller: ScheduledController, env: BotEnv, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(sendReminders(env));
+    ctx.waitUntil(runScheduledFollowUpJobs(env));
     ctx.waitUntil(reconcileSlackMemberships(env));
     ctx.waitUntil(pollSlackWorkspacesForTasks(env));
   }

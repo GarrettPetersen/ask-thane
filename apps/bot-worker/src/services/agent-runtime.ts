@@ -22,7 +22,8 @@ interface AgentRuntimeInput {
   externalWorkspaceId: string;
   conversationSourceId: string;
   event: MessageEvent;
-  interactionMode?: "passive_ingest" | "dm_reply";
+  interactionMode?: "passive_ingest" | "dm_reply" | "proactive_followup";
+  readOnlyTools?: boolean;
 }
 
 interface ChatCompletionToolCall {
@@ -73,6 +74,8 @@ interface ToolContext {
   botToken: string;
   createdTaskIds: string[];
   event: MessageEvent;
+  interactionMode: "passive_ingest" | "dm_reply" | "proactive_followup";
+  readOnlyTools: boolean;
 }
 
 function clampLimit(limit: unknown, fallback: number, max: number): number {
@@ -157,8 +160,8 @@ function summarizeTask(task: TaskRecord): Record<string, unknown> {
   };
 }
 
-function toolDefinitions() {
-  return [
+function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_followup") {
+  const tools = [
     {
       type: "function",
       function: {
@@ -236,6 +239,56 @@ function toolDefinitions() {
           additionalProperties: false,
           properties: {
             conversation_source_id: { type: "string" },
+            limit: { type: "number" }
+          }
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "search_readable_conversations",
+        description: "List readable conversations in this workspace, optionally filtered by type or text query.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            query: { type: "string" },
+            conversation_kind: {
+              type: "string",
+              enum: ["public_channel", "private_channel", "group_dm", "dm"]
+            },
+            limit: { type: "number" }
+          }
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_task_timeline",
+        description: "Read visible task action history for a task.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          required: ["task_id"],
+          properties: {
+            task_id: { type: "string" },
+            limit: { type: "number" }
+          }
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "search_workspace_people",
+        description: "Search people/users in this workspace by name/email/user id.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            query: { type: "string" },
             limit: { type: "number" }
           }
         }
@@ -339,14 +392,48 @@ function toolDefinitions() {
           }
         }
       }
+    },
+    {
+      type: "function",
+      function: {
+        name: "schedule_follow_up",
+        description:
+          "Schedule a proactive follow-up DM to the actor user at a future time so Thane can check back asynchronously.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          required: ["prompt", "schedule_at"],
+          properties: {
+            prompt: { type: "string" },
+            schedule_at: { type: "string" },
+            context: { type: "object" }
+          }
+        }
+      }
     }
   ] as const;
+
+  if (mode === "proactive_followup") {
+    return tools.filter(
+      (tool) =>
+        tool.function.name !== "create_task" &&
+        tool.function.name !== "update_task" &&
+        tool.function.name !== "write_note" &&
+        tool.function.name !== "request_permission_waiver" &&
+        tool.function.name !== "set_notification_cadence" &&
+        tool.function.name !== "schedule_follow_up"
+    );
+  }
+
+  return tools;
 }
 
-function systemPrompt(mode: "passive_ingest" | "dm_reply"): string {
+function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"): string {
   const responseInstruction =
     mode === "dm_reply"
       ? "Respond conversationally to the user in plain text. Keep it concise, helpful, and action-oriented."
+      : mode === "proactive_followup"
+        ? "Compose a useful proactive follow-up message in plain text using available task context."
       : "Final response must be short JSON with keys: summary, created_task_ids, updated_task_ids, notes_written, waivers_requested.";
 
   return [
@@ -358,8 +445,13 @@ function systemPrompt(mode: "passive_ingest" | "dm_reply"): string {
     "When writing notes, prefer short durable facts (skills, ownership patterns, constraints).",
     "Avoid duplicate tasks for same intent/source message.",
     "Use notification cadence tools when the user asks to change reminder frequency or timing.",
+    mode === "proactive_followup"
+      ? "In proactive_followup mode, do not request permission waivers or mutate tasks; focus on clarity and next actions."
+      : "",
     responseInstruction
-  ].join(" ");
+  ]
+    .filter((line) => line.length > 0)
+    .join(" ");
 }
 
 async function resolveBotToken(input: {
@@ -373,6 +465,70 @@ async function resolveBotToken(input: {
 
 function permissionError(tool: string, reason: string): Record<string, unknown> {
   return { ok: false, tool, error: "permission_denied", reason };
+}
+
+function clampEnvNumber(raw: string | undefined, fallback: number, min: number, max: number): number {
+  const parsed = Number(raw ?? "");
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(Math.max(Math.floor(parsed), min), max);
+}
+
+function parseIsoTimestamp(value: string): string | null {
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) {
+    return null;
+  }
+  return date.toISOString();
+}
+
+async function sleepMs(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function callChatCompletionWithRetry(input: {
+  env: BotEnv;
+  body: Record<string, unknown>;
+}): Promise<ChatCompletionResponse> {
+  const retries = clampEnvNumber(input.env.AGENT_COMPLETION_RETRIES, 2, 0, 5);
+  const timeoutMs = clampEnvNumber(input.env.AGENT_COMPLETION_TIMEOUT_MS, 45000, 5000, 120000);
+
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${input.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(input.body),
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+
+      const payload = (await response.json()) as ChatCompletionResponse;
+      if (response.ok) {
+        return payload;
+      }
+
+      const retryable = response.status === 429 || response.status >= 500;
+      const code = payload.error?.code ?? payload.error?.type ?? String(response.status);
+      if (!retryable || attempt === retries) {
+        throw new Error(`agent_completion_failed:${code}`);
+      }
+
+      await sleepMs(250 * (attempt + 1));
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt === retries) {
+        break;
+      }
+      await sleepMs(250 * (attempt + 1));
+    }
+  }
+
+  throw lastError ?? new Error("agent_completion_failed:unknown");
 }
 
 async function executeTool(
@@ -389,13 +545,26 @@ async function executeTool(
     return { ok: false, error: "invalid_tool_arguments_json" };
   }
 
+  const writeTools = new Set([
+    "write_note",
+    "create_task",
+    "update_task",
+    "request_permission_waiver",
+    "set_notification_cadence",
+    "schedule_follow_up"
+  ]);
+  if (ctx.readOnlyTools && writeTools.has(toolCall.function.name)) {
+    return permissionError(toolCall.function.name, "read_only_mode");
+  }
+  const readLimitMax = clampEnvNumber(ctx.env.AGENT_TOOL_READ_LIMIT, 100, 20, 500);
+
   switch (toolCall.function.name) {
     case "search_tasks": {
       const searchInput: AclTaskSearchInput = {
         organizationId: ctx.organizationId,
         readableConversationSourceIds: ctx.readableConversationSourceIds,
         allowUnscoped: true,
-        limit: clampLimit(args.limit, 20, 100)
+        limit: clampLimit(args.limit, 20, readLimitMax)
       };
       if (typeof args.query === "string" && args.query.trim()) {
         searchInput.query = args.query.trim();
@@ -427,7 +596,7 @@ async function executeTool(
         organizationId: ctx.organizationId,
         scopeType,
         scopeId,
-        limit: clampLimit(args.limit, 20, 100)
+        limit: clampLimit(args.limit, 20, readLimitMax)
       });
       return {
         ok: true,
@@ -500,18 +669,27 @@ async function executeTool(
         return permissionError(toolCall.function.name, "cross_workspace_not_allowed");
       }
 
-      const messages = await fetchSlackConversationHistory({
-        botToken: ctx.botToken,
-        channelId: source.providerConversationId,
-        limit: clampLimit(args.limit, 30, 120),
-        maxPages: 2
-      });
+      let messages: Awaited<ReturnType<typeof fetchSlackConversationHistory>> = [];
+      try {
+        messages = await fetchSlackConversationHistory({
+          botToken: ctx.botToken,
+          channelId: source.providerConversationId,
+          limit: clampLimit(args.limit, 30, readLimitMax),
+          maxPages: 2
+        });
+      } catch (error) {
+        return {
+          ok: false,
+          error: "conversation_history_fetch_failed",
+          reason: error instanceof Error ? error.message : String(error)
+        };
+      }
 
       return {
         ok: true,
         conversation_source_id: source.id,
         messages: messages
-          .slice(-clampLimit(args.limit, 30, 120))
+          .slice(-clampLimit(args.limit, 30, readLimitMax))
           .map((message) => ({
             user: message.user ?? null,
             ts: message.ts ?? null,
@@ -522,6 +700,84 @@ async function executeTool(
             }))
           }))
       };
+    }
+
+    case "search_readable_conversations": {
+      const query = typeof args.query === "string" ? args.query.trim().toLowerCase() : "";
+      const requestedKind =
+        args.conversation_kind === "public_channel" ||
+        args.conversation_kind === "private_channel" ||
+        args.conversation_kind === "group_dm" ||
+        args.conversation_kind === "dm"
+          ? args.conversation_kind
+          : null;
+
+      const sources = await ctx.resolver.listReadableConversationSources({
+        organizationId: ctx.organizationId,
+        userId: ctx.actorInternalUserId,
+        limit: clampLimit(args.limit, 50, readLimitMax)
+      });
+      const filtered = sources
+        .filter((source) => source.workspaceId === ctx.workspaceId)
+        .filter((source) => (requestedKind ? source.conversationKind === requestedKind : true))
+        .filter((source) => {
+          if (!query) {
+            return true;
+          }
+          return (
+            source.providerConversationId.toLowerCase().includes(query) ||
+            source.conversationKind.toLowerCase().includes(query)
+          );
+        });
+
+      return {
+        ok: true,
+        conversations: filtered.map((source) => ({
+          id: source.id,
+          provider_conversation_id: source.providerConversationId,
+          conversation_kind: source.conversationKind,
+          is_public: source.isPublic
+        }))
+      };
+    }
+
+    case "get_task_timeline": {
+      const taskId = typeof args.task_id === "string" ? args.task_id.trim() : "";
+      if (!taskId) {
+        return { ok: false, error: "task_id_required" };
+      }
+
+      const timeline = await ctx.repo.listTaskTimelineWithAcl({
+        organizationId: ctx.organizationId,
+        taskId,
+        readableConversationSourceIds: ctx.readableConversationSourceIds,
+        limit: clampLimit(args.limit, 40, readLimitMax)
+      });
+      return { ok: true, task_id: taskId, timeline };
+    }
+
+    case "search_workspace_people": {
+      const people = await ctx.repo.listWorkspaceUsers({
+        organizationId: ctx.organizationId,
+        workspaceId: ctx.workspaceId,
+        ...(typeof args.query === "string" ? { query: args.query } : {}),
+        limit: clampLimit(args.limit, 30, readLimitMax)
+      });
+
+      const enriched = await Promise.all(
+        people.map(async (person) => {
+          const linkedPerson = await ctx.repo.getPersonByUserId(ctx.organizationId, person.userId);
+          return {
+            user_id: person.userId,
+            external_user_id: person.externalUserId,
+            display_name: person.displayName ?? null,
+            email: person.email ?? null,
+            person_id: linkedPerson?.id ?? null
+          };
+        })
+      );
+
+      return { ok: true, people: enriched };
     }
 
     case "create_task": {
@@ -814,6 +1070,41 @@ async function executeTool(
       };
     }
 
+    case "schedule_follow_up": {
+      const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
+      const scheduleAtRaw = typeof args.schedule_at === "string" ? args.schedule_at.trim() : "";
+      if (!prompt || !scheduleAtRaw) {
+        return { ok: false, error: "invalid_follow_up_input" };
+      }
+
+      const scheduleAt = parseIsoTimestamp(scheduleAtRaw);
+      if (!scheduleAt) {
+        return { ok: false, error: "invalid_schedule_at" };
+      }
+
+      const nowIso = new Date().toISOString();
+      if (new Date(scheduleAt).valueOf() <= new Date(nowIso).valueOf()) {
+        return { ok: false, error: "schedule_at_must_be_future" };
+      }
+
+      await ctx.repo.enqueueFollowUpJob({
+        id: crypto.randomUUID(),
+        organizationId: ctx.organizationId,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.actorInternalUserId,
+        externalUserId: ctx.actorExternalUserId,
+        prompt,
+        scheduleAt,
+        sourceConversationSourceId: ctx.currentConversationSourceId,
+        ...(args.context && typeof args.context === "object"
+          ? { context: args.context as Record<string, unknown> }
+          : {}),
+        createdAt: nowIso
+      });
+
+      return { ok: true, schedule_at: scheduleAt };
+    }
+
     default:
       return { ok: false, error: `unknown_tool:${toolCall.function.name}` };
   }
@@ -821,6 +1112,8 @@ async function executeTool(
 
 export async function runConversationalAgentForSlackMessage(input: AgentRuntimeInput): Promise<AgentRunResult> {
   const interactionMode = input.interactionMode ?? "passive_ingest";
+  const readOnlyTools = input.readOnlyTools ?? interactionMode === "proactive_followup";
+  const maxTurns = clampEnvNumber(input.env.AGENT_MAX_TOOL_TURNS, 8, 1, 20);
 
   if ((input.env.DEFAULT_LLM_PROVIDER ?? "openai") !== "openai") {
     return { usedTools: false, createdTaskIds: [], updatedTaskIds: [] };
@@ -865,12 +1158,22 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     return { usedTools: false, createdTaskIds: [], updatedTaskIds: [] };
   }
 
-  const recentMessages = await fetchSlackConversationHistory({
-    botToken,
-    channelId: input.event.channelId,
-    limit: 40,
-    maxPages: 2
-  });
+  let recentMessages: Awaited<ReturnType<typeof fetchSlackConversationHistory>> = [];
+  try {
+    recentMessages = await fetchSlackConversationHistory({
+      botToken,
+      channelId: input.event.channelId,
+      limit: 40,
+      maxPages: 2
+    });
+  } catch (error) {
+    console.warn("agent_runtime_history_fetch_failed", {
+      organizationId: input.organizationId,
+      workspaceId: input.workspaceId,
+      channelId: input.event.channelId,
+      reason: error instanceof Error ? error.message : String(error)
+    });
+  }
 
   const searchSeed = input.event.text
     .replace(/<@[A-Z0-9]+>/g, " ")
@@ -1014,31 +1317,23 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     currentConversationSourceId: input.conversationSourceId,
     botToken,
     createdTaskIds,
-    event: input.event
+    event: input.event,
+    interactionMode,
+    readOnlyTools
   };
 
-  for (let turn = 0; turn < 8; turn += 1) {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${input.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
+  for (let turn = 0; turn < maxTurns; turn += 1) {
+    const payload = await callChatCompletionWithRetry({
+      env: input.env,
+      body: {
         model: input.env.DEFAULT_LLM_MODEL ?? "gpt-4.1-mini",
         temperature: 0,
         tool_choice: "auto",
         parallel_tool_calls: false,
-        tools: toolDefinitions(),
+        tools: toolDefinitions(interactionMode),
         messages
-      })
+      }
     });
-
-    const payload = (await response.json()) as ChatCompletionResponse;
-    if (!response.ok) {
-      const code = payload.error?.code ?? payload.error?.type ?? String(response.status);
-      throw new Error(`agent_completion_failed:${code}`);
-    }
 
     const assistantMessage = payload.choices?.[0]?.message;
     if (!assistantMessage) {
@@ -1067,7 +1362,17 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     usedTools = true;
 
     for (const toolCall of toolCalls) {
-      const result = await executeTool(toolCall, ctx, updatedTaskIds, notesWrittenCountRef, waiversRequestedCountRef);
+      let result: Record<string, unknown>;
+      try {
+        result = await executeTool(toolCall, ctx, updatedTaskIds, notesWrittenCountRef, waiversRequestedCountRef);
+      } catch (error) {
+        result = {
+          ok: false,
+          error: "tool_execution_failed",
+          tool: toolCall.function.name,
+          reason: error instanceof Error ? error.message : String(error)
+        };
+      }
       messages.push({
         role: "tool",
         tool_call_id: toolCall.id,
@@ -1101,4 +1406,38 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
   }
 
   return result;
+}
+
+export async function runProactiveFollowUpForSlackUser(input: {
+  env: BotEnv;
+  organizationId: string;
+  workspaceId: string;
+  externalWorkspaceId: string;
+  conversationSourceId: string;
+  channelId: string;
+  externalUserId: string;
+  prompt: string;
+  context?: Record<string, unknown>;
+}): Promise<AgentRunResult> {
+  const promptContext = input.context ? `\n\nContext JSON:\n${JSON.stringify(input.context)}` : "";
+  return runConversationalAgentForSlackMessage({
+    env: input.env,
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    externalWorkspaceId: input.externalWorkspaceId,
+    conversationSourceId: input.conversationSourceId,
+    interactionMode: "proactive_followup",
+    readOnlyTools: true,
+    event: {
+      workspaceId: input.workspaceId,
+      channelId: input.channelId,
+      messageId: `followup:${crypto.randomUUID()}`,
+      occurredAt: new Date().toISOString(),
+      text: `Proactive follow-up instruction: ${input.prompt}${promptContext}`,
+      author: {
+        platform: "slack",
+        platformUserId: input.externalUserId
+      }
+    }
+  });
 }

@@ -189,6 +189,40 @@ export interface DigestDeliveryRecord {
   metadata?: Record<string, unknown>;
 }
 
+export interface FollowUpJobInput {
+  id: string;
+  organizationId: string;
+  workspaceId: string;
+  userId: string;
+  externalUserId: string;
+  prompt: string;
+  scheduleAt: string;
+  sourceConversationSourceId?: string;
+  context?: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface FollowUpJobRecord {
+  id: string;
+  organizationId: string;
+  workspaceId: string;
+  userId: string;
+  externalUserId: string;
+  prompt: string;
+  scheduleAt: string;
+  status: "pending" | "sent" | "failed" | "cancelled";
+  sourceConversationSourceId?: string;
+  context?: Record<string, unknown>;
+  messageChannelId?: string;
+  messageTs?: string;
+  responseText?: string;
+  errorText?: string;
+  createdAt: string;
+  updatedAt: string;
+  sentAt?: string;
+  lastAttemptAt?: string;
+}
+
 export interface UserWithOpenTasksRow {
   organizationId: string;
   workspaceId: string;
@@ -579,6 +613,113 @@ export class D1TaskRepository implements TaskRepository {
 
     const row = await this.db.prepare(sql).bind(...bindings).first<Record<string, unknown>>();
     return row ? toTaskRecord(row) : null;
+  }
+
+  async listTaskTimelineWithAcl(input: {
+    organizationId: string;
+    taskId: string;
+    readableConversationSourceIds: string[];
+    limit?: number;
+  }): Promise<
+    Array<{
+      id: string;
+      taskId: string;
+      actionType: string;
+      actorPlatform?: string;
+      actorId?: string;
+      actorName?: string;
+      sourceConversationSourceId?: string;
+      resultedStatus?: string;
+      payload?: Record<string, unknown>;
+      createdAt: string;
+    }>
+  > {
+    const visibleTask = await this.getTaskByIdWithAcl({
+      organizationId: input.organizationId,
+      taskId: input.taskId,
+      readableConversationSourceIds: input.readableConversationSourceIds,
+      allowUnscoped: true
+    });
+    if (!visibleTask) {
+      return [];
+    }
+
+    const readableIds = Array.from(new Set(input.readableConversationSourceIds));
+    const hasReadableScopes = readableIds.length > 0;
+    const placeholders = readableIds.map(() => "?").join(", ");
+    const visibilityWhere = hasReadableScopes
+      ? `(ta.source_conversation_source_id IS NULL OR ta.source_conversation_source_id IN (${placeholders}))`
+      : "ta.source_conversation_source_id IS NULL";
+
+    const limit = Math.min(Math.max(input.limit ?? 50, 1), 200);
+    const bindings: Array<string | number> = [input.organizationId, input.taskId];
+    if (hasReadableScopes) {
+      bindings.push(...readableIds);
+    }
+    bindings.push(limit);
+
+    const result = await this.db
+      .prepare(
+        `SELECT *
+         FROM task_actions ta
+         WHERE ta.organization_id = ?
+           AND ta.task_id = ?
+           AND ${visibilityWhere}
+         ORDER BY ta.created_at DESC
+         LIMIT ?`
+      )
+      .bind(...bindings)
+      .all<Record<string, unknown>>();
+
+    return (result.results ?? []).map((row) => ({
+      id: String(row.id),
+      taskId: String(row.task_id),
+      actionType: String(row.action_type),
+      ...(row.actor_platform ? { actorPlatform: String(row.actor_platform) } : {}),
+      ...(row.actor_id ? { actorId: String(row.actor_id) } : {}),
+      ...(row.actor_name ? { actorName: String(row.actor_name) } : {}),
+      ...(row.source_conversation_source_id ? { sourceConversationSourceId: String(row.source_conversation_source_id) } : {}),
+      ...(row.resulted_status ? { resultedStatus: String(row.resulted_status) } : {}),
+      ...(row.payload_json ? { payload: JSON.parse(String(row.payload_json)) as Record<string, unknown> } : {}),
+      createdAt: String(row.created_at)
+    }));
+  }
+
+  async listWorkspaceUsers(input: {
+    organizationId: string;
+    workspaceId: string;
+    query?: string;
+    limit?: number;
+  }): Promise<Array<{ userId: string; externalUserId: string; displayName?: string; email?: string }>> {
+    const limit = Math.min(Math.max(input.limit ?? 50, 1), 200);
+    const where: string[] = ["organization_id = ?", "workspace_id = ?"];
+    const bindings: Array<string | number> = [input.organizationId, input.workspaceId];
+
+    const query = input.query?.trim().toLowerCase();
+    if (query) {
+      where.push("(LOWER(COALESCE(display_name, '')) LIKE ? OR LOWER(COALESCE(email, '')) LIKE ? OR LOWER(external_user_id) LIKE ?)");
+      const like = `%${query}%`;
+      bindings.push(like, like, like);
+    }
+
+    bindings.push(limit);
+    const result = await this.db
+      .prepare(
+        `SELECT id, external_user_id, display_name, email
+         FROM users
+         WHERE ${where.join(" AND ")}
+         ORDER BY updated_at DESC
+         LIMIT ?`
+      )
+      .bind(...bindings)
+      .all<Record<string, unknown>>();
+
+    return (result.results ?? []).map((row) => ({
+      userId: String(row.id),
+      externalUserId: String(row.external_user_id),
+      ...(row.display_name ? { displayName: String(row.display_name) } : {}),
+      ...(row.email ? { email: String(row.email) } : {})
+    }));
   }
 
   async resolveOrCreatePersonForIdentity(input: ResolvePersonForIdentityInput): Promise<PersonRecord> {
@@ -1062,6 +1203,110 @@ export class D1TaskRepository implements TaskRepository {
       .run();
   }
 
+  async enqueueFollowUpJob(input: FollowUpJobInput): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO follow_up_jobs (
+           id, organization_id, workspace_id, user_id, external_user_id, source_conversation_source_id,
+           schedule_at, status, prompt, context_json, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`
+      )
+      .bind(
+        input.id,
+        input.organizationId,
+        input.workspaceId,
+        input.userId,
+        input.externalUserId,
+        input.sourceConversationSourceId ?? null,
+        input.scheduleAt,
+        input.prompt,
+        JSON.stringify(input.context ?? {}),
+        input.createdAt,
+        input.createdAt
+      )
+      .run();
+  }
+
+  async listDueFollowUpJobs(nowIso: string, limit = 50): Promise<FollowUpJobRecord[]> {
+    const safeLimit = Math.min(Math.max(limit, 1), 200);
+    const result = await this.db
+      .prepare(
+        `SELECT *
+         FROM follow_up_jobs
+         WHERE status = 'pending'
+           AND schedule_at <= ?
+         ORDER BY schedule_at ASC
+         LIMIT ?`
+      )
+      .bind(nowIso, safeLimit)
+      .all<Record<string, unknown>>();
+
+    return (result.results ?? []).map((row) => toFollowUpJobRecord(row));
+  }
+
+  async markFollowUpJobSent(input: {
+    id: string;
+    responseText?: string;
+    messageChannelId?: string;
+    messageTs?: string;
+    sentAt: string;
+  }): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE follow_up_jobs
+         SET status = 'sent',
+             response_text = COALESCE(?, response_text),
+             message_channel_id = COALESCE(?, message_channel_id),
+             message_ts = COALESCE(?, message_ts),
+             sent_at = ?,
+             last_attempt_at = ?,
+             updated_at = ?
+         WHERE id = ?`
+      )
+      .bind(
+        input.responseText ?? null,
+        input.messageChannelId ?? null,
+        input.messageTs ?? null,
+        input.sentAt,
+        input.sentAt,
+        input.sentAt,
+        input.id
+      )
+      .run();
+  }
+
+  async markFollowUpJobFailed(input: {
+    id: string;
+    errorText: string;
+    attemptedAt: string;
+  }): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE follow_up_jobs
+         SET status = 'failed',
+             error_text = ?,
+             last_attempt_at = ?,
+             updated_at = ?
+         WHERE id = ?`
+      )
+      .bind(input.errorText, input.attemptedAt, input.attemptedAt, input.id)
+      .run();
+  }
+
+  async listRecentFollowUpJobs(limit = 50): Promise<FollowUpJobRecord[]> {
+    const safeLimit = Math.min(Math.max(limit, 1), 200);
+    const result = await this.db
+      .prepare(
+        `SELECT *
+         FROM follow_up_jobs
+         ORDER BY created_at DESC
+         LIMIT ?`
+      )
+      .bind(safeLimit)
+      .all<Record<string, unknown>>();
+    return (result.results ?? []).map((row) => toFollowUpJobRecord(row));
+  }
+
   private async recordTaskAction(input: TaskActionInput & { resultedStatus: TaskStatus }): Promise<void> {
     await this.db
       .prepare(
@@ -1397,4 +1642,46 @@ function toDigestDeliveryRecord(row: Record<string, unknown>): DigestDeliveryRec
     delivery.metadata = JSON.parse(String(row.metadata_json)) as Record<string, unknown>;
   }
   return delivery;
+}
+
+function toFollowUpJobRecord(row: Record<string, unknown>): FollowUpJobRecord {
+  const job: FollowUpJobRecord = {
+    id: String(row.id),
+    organizationId: String(row.organization_id),
+    workspaceId: String(row.workspace_id),
+    userId: String(row.user_id),
+    externalUserId: String(row.external_user_id),
+    prompt: String(row.prompt),
+    scheduleAt: String(row.schedule_at),
+    status: String(row.status) as FollowUpJobRecord["status"],
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+
+  if (row.source_conversation_source_id) {
+    job.sourceConversationSourceId = String(row.source_conversation_source_id);
+  }
+  if (row.context_json) {
+    job.context = JSON.parse(String(row.context_json)) as Record<string, unknown>;
+  }
+  if (row.message_channel_id) {
+    job.messageChannelId = String(row.message_channel_id);
+  }
+  if (row.message_ts) {
+    job.messageTs = String(row.message_ts);
+  }
+  if (row.response_text) {
+    job.responseText = String(row.response_text);
+  }
+  if (row.error_text) {
+    job.errorText = String(row.error_text);
+  }
+  if (row.sent_at) {
+    job.sentAt = String(row.sent_at);
+  }
+  if (row.last_attempt_at) {
+    job.lastAttemptAt = String(row.last_attempt_at);
+  }
+
+  return job;
 }

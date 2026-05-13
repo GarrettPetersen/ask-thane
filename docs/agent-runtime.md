@@ -13,7 +13,7 @@ This runtime turns Slack message handling from single-shot parsing into a multi-
 2. Send context and system instructions to OpenAI with function tools.
 3. Execute returned tool calls in-process.
 4. Feed tool results back to model.
-5. Repeat for up to 8 turns.
+5. Repeat for configurable turns (`AGENT_MAX_TOOL_TURNS`, default 8) with retry/timeout controls.
 
 ## Tool capabilities
 Current tool set:
@@ -21,11 +21,15 @@ Current tool set:
 - `get_notes`
 - `write_note`
 - `get_conversation_context`
+- `search_readable_conversations`
+- `get_task_timeline`
+- `search_workspace_people`
 - `create_task`
 - `update_task`
 - `request_permission_waiver`
 - `get_notification_cadence`
 - `set_notification_cadence`
+- `schedule_follow_up`
 
 ## Permission model
 All tool reads/writes are constrained by actor scope:
@@ -77,3 +81,8 @@ Polling path also links identities for authors, mentions, and reactors.
 - In Slack `dm` conversations, runtime switches to conversational reply mode.
 - The model can answer task questions, update tasks through tools, and change reminder cadence through cadence tools.
 - Bot replies are posted back into the DM thread.
+
+## Proactive follow-up mode
+- Scheduled jobs can trigger proactive DM follow-ups.
+- Follow-up runs use the same tool-loop runtime in read-only mode for background context gathering.
+- Jobs and outcomes are persisted in `follow_up_jobs`.

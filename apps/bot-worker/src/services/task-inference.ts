@@ -19,6 +19,10 @@ export interface BotEnv {
   DEFAULT_ORGANIZATION_ID?: string;
   THANE_BASE_URL?: string;
   ADMIN_TRIGGER_TOKEN?: string;
+  AGENT_MAX_TOOL_TURNS?: string;
+  AGENT_COMPLETION_RETRIES?: string;
+  AGENT_TOOL_READ_LIMIT?: string;
+  AGENT_COMPLETION_TIMEOUT_MS?: string;
 }
 
 export async function inferAndPersistTasks(event: MessageEvent, env: BotEnv) {
