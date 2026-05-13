@@ -11,7 +11,7 @@ import type {
 import type { MessageEvent } from "@ask-thane/domain";
 import { ConversationAccessResolver } from "./conversation-access";
 import { computeNextDigestAt, defaultCadenceSpec, normalizeCadenceSpec, normalizeTimezone } from "./notification-cadence";
-import { fetchSlackConversationHistory } from "./slack-api";
+import { fetchSlackConversationHistory, type SlackHistoryMessage } from "./slack-api";
 import { SlackInstallStore } from "./slack-install-store";
 import type { BotEnv } from "./task-inference";
 
@@ -75,6 +75,7 @@ interface ToolContext {
   botToken: string;
   createdTaskIds: string[];
   taskActionTypes: Set<TaskActionType>;
+  recentMessages: SlackHistoryMessage[];
   event: MessageEvent;
   interactionMode: "passive_ingest" | "dm_reply" | "proactive_followup";
   readOnlyTools: boolean;
@@ -451,6 +452,7 @@ function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"
     "Examples: 'I am done the dishes, but I still need to water the gnomes' => mark_done(dishes) + create_task(water gnomes) if missing.",
     "Examples: 'I'm done watering the gnomes, but I still need to elevate the cake and bloviate the sneed' => mark_done(water gnomes) + create_task(elevate cake) + create_task(bloviate sneed).",
     "Examples: 'I froze the beef last night' should update existing freeze-beef task to done when a matching open task exists.",
+    "For second-person asks in shared channels (for example, 'can you please change the sheets?'), infer assignee from mentions/recent speaker context; do not default to the author unless context is genuinely ambiguous.",
     "Ignore non-task chatter such as weather commentary unless it changes a task state.",
     "If task completion/cancellation is asserted in private context and visibility is unclear, create a permission waiver request.",
     "When writing notes, prefer short durable facts (skills, ownership patterns, constraints).",
@@ -484,6 +486,58 @@ function clampEnvNumber(raw: string | undefined, fallback: number, min: number, 
     return fallback;
   }
   return Math.min(Math.max(Math.floor(parsed), min), max);
+}
+
+function extractSlackMentionIds(text: string): string[] {
+  const mentions = new Set<string>();
+  const mentionRegex = /<@([A-Z0-9]+)>/g;
+  let match: RegExpExecArray | null = null;
+  while ((match = mentionRegex.exec(text))) {
+    if (match[1]) {
+      mentions.add(match[1]);
+    }
+  }
+  return Array.from(mentions);
+}
+
+function inferAssigneeFromConversationContext(ctx: ToolContext): string {
+  const explicitMentions = extractSlackMentionIds(ctx.event.text).filter((id) => id !== ctx.actorExternalUserId);
+  if (explicitMentions.length > 0) {
+    return explicitMentions[0] ?? ctx.actorExternalUserId;
+  }
+
+  // In DMs, a missing assignee almost always means "me".
+  if (ctx.event.channelId.startsWith("D")) {
+    return ctx.actorExternalUserId;
+  }
+
+  // In shared channels, prefer recent non-actor human speakers over the actor.
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  for (let i = ctx.recentMessages.length - 1; i >= 0; i -= 1) {
+    const message = ctx.recentMessages[i];
+    if (!message) {
+      continue;
+    }
+    const userId = message.user?.trim();
+    if (!userId || userId === ctx.actorExternalUserId || message.subtype) {
+      continue;
+    }
+    if (message.ts && message.ts === ctx.event.messageId) {
+      continue;
+    }
+    if (seen.has(userId)) {
+      continue;
+    }
+    seen.add(userId);
+    candidates.push(userId);
+  }
+
+  if (candidates.length > 0) {
+    return candidates[0] ?? ctx.actorExternalUserId;
+  }
+
+  return ctx.actorExternalUserId;
 }
 
 function parseIsoTimestamp(value: string): string | null {
@@ -800,7 +854,7 @@ async function executeTool(
       const assigneeExternal =
         typeof args.assignee_user_id === "string" && args.assignee_user_id.trim()
           ? args.assignee_user_id.trim()
-          : ctx.actorExternalUserId;
+          : inferAssigneeFromConversationContext(ctx);
 
       const task: TaskRecord = {
         id: crypto.randomUUID(),
@@ -1332,6 +1386,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     botToken,
     createdTaskIds,
     taskActionTypes,
+    recentMessages,
     event: input.event,
     interactionMode,
     readOnlyTools
