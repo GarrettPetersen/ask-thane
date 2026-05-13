@@ -1,4 +1,16 @@
-import type { TaskRecord } from "@ask-thane/domain";
+import type {
+  AgentNoteRecord,
+  IdentityAccountLink,
+  NoteScopeType,
+  NoteVisibility,
+  PermissionWaiverRecord,
+  PermissionWaiverStatus,
+  PersonRecord,
+  TaskActionType,
+  TaskRecord,
+  TaskStatus,
+  UserRef
+} from "@ask-thane/domain";
 
 export interface TaskRepository {
   save(task: TaskRecord): Promise<void>;
@@ -21,6 +33,82 @@ export interface AclFilteredTaskReadInput {
   assigneeId: string;
   readableConversationSourceIds: string[];
   allowUnscoped?: boolean;
+}
+
+export interface ResolvePersonForIdentityInput {
+  organizationId: string;
+  provider: UserRef["platform"];
+  externalUserId: string;
+  externalWorkspaceId?: string;
+  displayName?: string;
+  email?: string;
+  linkedUserId?: string;
+  confidence?: number;
+  isVerified?: boolean;
+  nowIso?: string;
+}
+
+export interface AgentNoteInput {
+  id: string;
+  organizationId: string;
+  scopeType: NoteScopeType;
+  scopeId: string;
+  visibility: NoteVisibility;
+  content: string;
+  authorType: AgentNoteRecord["authorType"];
+  authorId?: string;
+  sourceConversationSourceId?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface AgentNoteQuery {
+  organizationId: string;
+  scopeType: NoteScopeType;
+  scopeId: string;
+  limit?: number;
+}
+
+export interface TaskActionInput {
+  id: string;
+  organizationId: string;
+  workspaceId: string;
+  actionType: TaskActionType;
+  actorPlatform?: UserRef["platform"];
+  actorId?: string;
+  actorName?: string;
+  sourceConversationSourceId?: string;
+  payload?: Record<string, unknown>;
+  createdAt: string;
+  taskId?: string;
+  targetTaskId?: string;
+  status?: TaskStatus;
+  title?: string;
+  description?: string;
+  dueAt?: string;
+}
+
+export interface PermissionWaiverRequestInput {
+  id: string;
+  organizationId: string;
+  resourceType: string;
+  resourceId: string;
+  requesterUserId: string;
+  requestedScopeType: NoteScopeType;
+  requestedScopeId: string;
+  requestReason?: string;
+  requestedAt: string;
+  expiresAt?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PermissionWaiverDecisionInput {
+  organizationId: string;
+  waiverId: string;
+  status: Extract<PermissionWaiverStatus, "granted" | "denied" | "revoked">;
+  granterUserId: string;
+  decidedAt: string;
+  metadata?: Record<string, unknown>;
 }
 
 export class D1TaskRepository implements TaskRepository {
@@ -167,14 +255,384 @@ export class D1TaskRepository implements TaskRepository {
     const bindings: Array<string> = [input.organizationId, input.assigneeId];
     if (hasReadableScopes) {
       bindings.push(...readableConversationSourceIds);
-    }
-    if (hasReadableScopes) {
       bindings.push(...readableConversationSourceIds);
     }
 
     const result = await query.bind(...bindings).all<Record<string, unknown>>();
     return (result.results ?? []).map((row) => toTaskRecord(row));
   }
+
+  async resolveOrCreatePersonForIdentity(input: ResolvePersonForIdentityInput): Promise<PersonRecord> {
+    const existing = await this.db
+      .prepare(
+        `SELECT p.id, p.organization_id, p.canonical_name, p.created_at, p.updated_at
+         FROM identity_accounts ia
+         JOIN people p ON p.id = ia.person_id
+         WHERE ia.organization_id = ?
+           AND ia.provider = ?
+           AND ia.external_user_id = ?
+           AND (ia.external_workspace_id IS ? OR ia.external_workspace_id = ?)
+         LIMIT 1`
+      )
+      .bind(
+        input.organizationId,
+        input.provider,
+        input.externalUserId,
+        input.externalWorkspaceId ?? null,
+        input.externalWorkspaceId ?? null
+      )
+      .first<Record<string, unknown>>();
+
+    const nowIso = input.nowIso ?? new Date().toISOString();
+    const canonicalName = input.displayName?.trim() || null;
+
+    if (existing?.id) {
+      await this.upsertIdentityAccount({
+        ...input,
+        personId: String(existing.id),
+        nowIso
+      });
+      return toPersonRecord(existing);
+    }
+
+    const personId = crypto.randomUUID();
+    await this.db
+      .prepare(
+        `INSERT INTO people (
+           id, organization_id, canonical_name, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?)`
+      )
+      .bind(personId, input.organizationId, canonicalName, nowIso, nowIso)
+      .run();
+
+    await this.upsertIdentityAccount({
+      ...input,
+      personId,
+      nowIso
+    });
+
+    const created: PersonRecord = {
+      id: personId,
+      organizationId: input.organizationId,
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+    if (canonicalName) {
+      created.canonicalName = canonicalName;
+    }
+
+    return created;
+  }
+
+  async upsertIdentityAccount(input: ResolvePersonForIdentityInput & { personId: string; nowIso: string }): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO identity_accounts (
+           id, organization_id, person_id, provider, external_workspace_id, external_user_id,
+           user_id, email, display_name, confidence, is_verified, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(organization_id, provider, external_user_id, external_workspace_id)
+         DO UPDATE SET
+           person_id = excluded.person_id,
+           user_id = excluded.user_id,
+           email = excluded.email,
+           display_name = excluded.display_name,
+           confidence = excluded.confidence,
+           is_verified = excluded.is_verified,
+           updated_at = excluded.updated_at`
+      )
+      .bind(
+        crypto.randomUUID(),
+        input.organizationId,
+        input.personId,
+        input.provider,
+        input.externalWorkspaceId ?? null,
+        input.externalUserId,
+        input.linkedUserId ?? null,
+        input.email ?? null,
+        input.displayName ?? null,
+        clampConfidence(input.confidence),
+        input.isVerified ? 1 : 0,
+        input.nowIso,
+        input.nowIso
+      )
+      .run();
+  }
+
+  async listIdentityAccountsForPerson(organizationId: string, personId: string): Promise<IdentityAccountLink[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT *
+         FROM identity_accounts
+         WHERE organization_id = ? AND person_id = ?
+         ORDER BY updated_at DESC`
+      )
+      .bind(organizationId, personId)
+      .all<Record<string, unknown>>();
+
+    return (result.results ?? []).map((row) => toIdentityAccountLink(row));
+  }
+
+  async addAgentNote(input: AgentNoteInput): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO agent_notes (
+           id, organization_id, scope_type, scope_id, visibility, content,
+           author_type, author_id, source_conversation_source_id, metadata_json,
+           created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        input.id,
+        input.organizationId,
+        input.scopeType,
+        input.scopeId,
+        input.visibility,
+        input.content,
+        input.authorType,
+        input.authorId ?? null,
+        input.sourceConversationSourceId ?? null,
+        JSON.stringify(input.metadata ?? {}),
+        input.createdAt,
+        input.createdAt
+      )
+      .run();
+  }
+
+  async listAgentNotes(input: AgentNoteQuery): Promise<AgentNoteRecord[]> {
+    const limit = Math.min(Math.max(input.limit ?? 25, 1), 200);
+    const result = await this.db
+      .prepare(
+        `SELECT *
+         FROM agent_notes
+         WHERE organization_id = ?
+           AND scope_type = ?
+           AND scope_id = ?
+         ORDER BY created_at DESC
+         LIMIT ?`
+      )
+      .bind(input.organizationId, input.scopeType, input.scopeId, limit)
+      .all<Record<string, unknown>>();
+
+    return (result.results ?? []).map((row) => toAgentNoteRecord(row));
+  }
+
+  async performTaskAction(input: TaskActionInput): Promise<void> {
+    const nowIso = input.createdAt;
+
+    if (input.actionType === "create") {
+      if (!input.taskId) {
+        throw new Error("task_id_required_for_create_action");
+      }
+      await this.recordTaskAction({
+        ...input,
+        resultedStatus: "incomplete"
+      });
+      return;
+    }
+
+    if (!input.taskId) {
+      throw new Error("task_id_required");
+    }
+
+    const task = await this.db
+      .prepare(
+        `SELECT id, status
+         FROM tasks
+         WHERE id = ? AND organization_id = ? AND workspace_id = ?
+         LIMIT 1`
+      )
+      .bind(input.taskId, input.organizationId, input.workspaceId)
+      .first<Record<string, unknown>>();
+
+    if (!task?.id) {
+      throw new Error("task_not_found");
+    }
+
+    if (input.actionType === "merge_into") {
+      if (!input.targetTaskId) {
+        throw new Error("target_task_id_required");
+      }
+
+      await this.db
+        .prepare(
+          `UPDATE tasks
+           SET status = 'cancelled',
+               archived_at = ?,
+               metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.merged_into_task_id', ?)
+           WHERE id = ? AND organization_id = ?`
+        )
+        .bind(nowIso, input.targetTaskId, input.taskId, input.organizationId)
+        .run();
+
+      await this.recordTaskAction({
+        ...input,
+        payload: {
+          ...(input.payload ?? {}),
+          target_task_id: input.targetTaskId
+        },
+        resultedStatus: "cancelled"
+      });
+
+      return;
+    }
+
+    if (input.actionType === "edit") {
+      await this.db
+        .prepare(
+          `UPDATE tasks
+           SET title = COALESCE(?, title),
+               description = COALESCE(?, description),
+               due_at = COALESCE(?, due_at)
+           WHERE id = ? AND organization_id = ?`
+        )
+        .bind(input.title ?? null, input.description ?? null, input.dueAt ?? null, input.taskId, input.organizationId)
+        .run();
+
+      await this.recordTaskAction({
+        ...input,
+        resultedStatus: String(task.status) as TaskStatus
+      });
+
+      return;
+    }
+
+    const nextStatus = resolveStatusTransition(input.actionType, input.status);
+    await this.db
+      .prepare(
+        `UPDATE tasks
+         SET status = ?,
+             completed_at = CASE WHEN ? = 'done' THEN ? ELSE completed_at END,
+             archived_at = CASE WHEN ? IN ('cancelled') THEN ? ELSE archived_at END
+         WHERE id = ? AND organization_id = ?`
+      )
+      .bind(nextStatus, nextStatus, nowIso, nextStatus, nowIso, input.taskId, input.organizationId)
+      .run();
+
+    await this.recordTaskAction({
+      ...input,
+      resultedStatus: nextStatus
+    });
+  }
+
+  async requestPermissionWaiver(input: PermissionWaiverRequestInput): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO permission_waivers (
+           id, organization_id, resource_type, resource_id, requester_user_id,
+           granter_user_id, requested_scope_type, requested_scope_id, request_reason,
+           status, requested_at, decided_at, expires_at, metadata_json
+         ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, 'pending', ?, NULL, ?, ?)`
+      )
+      .bind(
+        input.id,
+        input.organizationId,
+        input.resourceType,
+        input.resourceId,
+        input.requesterUserId,
+        input.requestedScopeType,
+        input.requestedScopeId,
+        input.requestReason ?? null,
+        input.requestedAt,
+        input.expiresAt ?? null,
+        JSON.stringify(input.metadata ?? {})
+      )
+      .run();
+  }
+
+  async decidePermissionWaiver(input: PermissionWaiverDecisionInput): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE permission_waivers
+         SET status = ?,
+             granter_user_id = ?,
+             decided_at = ?,
+             metadata_json = ?
+         WHERE id = ? AND organization_id = ?`
+      )
+      .bind(
+        input.status,
+        input.granterUserId,
+        input.decidedAt,
+        JSON.stringify(input.metadata ?? {}),
+        input.waiverId,
+        input.organizationId
+      )
+      .run();
+  }
+
+  async listPendingPermissionWaivers(organizationId: string): Promise<PermissionWaiverRecord[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT *
+         FROM permission_waivers
+         WHERE organization_id = ?
+           AND status = 'pending'
+         ORDER BY requested_at DESC`
+      )
+      .bind(organizationId)
+      .all<Record<string, unknown>>();
+
+    return (result.results ?? []).map((row) => toPermissionWaiverRecord(row));
+  }
+
+  private async recordTaskAction(input: TaskActionInput & { resultedStatus: TaskStatus }): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO task_actions (
+           id, organization_id, task_id, workspace_id, action_type,
+           actor_platform, actor_id, actor_name, source_conversation_source_id,
+           payload_json, resulted_status, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        input.id,
+        input.organizationId,
+        input.taskId,
+        input.workspaceId,
+        input.actionType,
+        input.actorPlatform ?? null,
+        input.actorId ?? null,
+        input.actorName ?? null,
+        input.sourceConversationSourceId ?? null,
+        JSON.stringify(input.payload ?? {}),
+        input.resultedStatus,
+        input.createdAt
+      )
+      .run();
+  }
+}
+
+function resolveStatusTransition(actionType: TaskActionType, explicitStatus?: TaskStatus): TaskStatus {
+  if (explicitStatus) {
+    return explicitStatus;
+  }
+
+  switch (actionType) {
+    case "mark_done":
+      return "done";
+    case "mark_cancelled":
+      return "cancelled";
+    case "mark_blocked":
+      return "blocked";
+    case "reopen":
+      return "incomplete";
+    case "create":
+      return "incomplete";
+    case "merge_into":
+      return "cancelled";
+    case "edit":
+      return "incomplete";
+    default:
+      return "incomplete";
+  }
+}
+
+function clampConfidence(value?: number): number {
+  if (!Number.isFinite(value)) {
+    return 0.5;
+  }
+  return Math.max(0, Math.min(1, Number(value)));
 }
 
 function toTaskRecord(row: Record<string, unknown>): TaskRecord {
@@ -224,4 +682,104 @@ function toTaskRecord(row: Record<string, unknown>): TaskRecord {
   }
 
   return task;
+}
+
+function toPersonRecord(row: Record<string, unknown>): PersonRecord {
+  const person: PersonRecord = {
+    id: String(row.id),
+    organizationId: String(row.organization_id),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+  if (row.canonical_name) {
+    person.canonicalName = String(row.canonical_name);
+  }
+  return person;
+}
+
+function toIdentityAccountLink(row: Record<string, unknown>): IdentityAccountLink {
+  const link: IdentityAccountLink = {
+    id: String(row.id),
+    organizationId: String(row.organization_id),
+    personId: String(row.person_id),
+    provider: String(row.provider) as IdentityAccountLink["provider"],
+    externalUserId: String(row.external_user_id),
+    confidence: Number(row.confidence),
+    isVerified: Number(row.is_verified) === 1,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+
+  if (row.external_workspace_id) {
+    link.externalWorkspaceId = String(row.external_workspace_id);
+  }
+  if (row.user_id) {
+    link.userId = String(row.user_id);
+  }
+  if (row.email) {
+    link.email = String(row.email);
+  }
+  if (row.display_name) {
+    link.displayName = String(row.display_name);
+  }
+
+  return link;
+}
+
+function toAgentNoteRecord(row: Record<string, unknown>): AgentNoteRecord {
+  const note: AgentNoteRecord = {
+    id: String(row.id),
+    organizationId: String(row.organization_id),
+    scopeType: String(row.scope_type) as AgentNoteRecord["scopeType"],
+    scopeId: String(row.scope_id),
+    visibility: String(row.visibility) as AgentNoteRecord["visibility"],
+    content: String(row.content),
+    authorType: String(row.author_type) as AgentNoteRecord["authorType"],
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+
+  if (row.author_id) {
+    note.authorId = String(row.author_id);
+  }
+  if (row.source_conversation_source_id) {
+    note.sourceConversationSourceId = String(row.source_conversation_source_id);
+  }
+  if (row.metadata_json) {
+    note.metadata = JSON.parse(String(row.metadata_json)) as Record<string, unknown>;
+  }
+
+  return note;
+}
+
+function toPermissionWaiverRecord(row: Record<string, unknown>): PermissionWaiverRecord {
+  const waiver: PermissionWaiverRecord = {
+    id: String(row.id),
+    organizationId: String(row.organization_id),
+    resourceType: String(row.resource_type),
+    resourceId: String(row.resource_id),
+    requesterUserId: String(row.requester_user_id),
+    requestedScopeType: String(row.requested_scope_type) as PermissionWaiverRecord["requestedScopeType"],
+    requestedScopeId: String(row.requested_scope_id),
+    status: String(row.status) as PermissionWaiverRecord["status"],
+    requestedAt: String(row.requested_at)
+  };
+
+  if (row.granter_user_id) {
+    waiver.granterUserId = String(row.granter_user_id);
+  }
+  if (row.request_reason) {
+    waiver.requestReason = String(row.request_reason);
+  }
+  if (row.decided_at) {
+    waiver.decidedAt = String(row.decided_at);
+  }
+  if (row.expires_at) {
+    waiver.expiresAt = String(row.expires_at);
+  }
+  if (row.metadata_json) {
+    waiver.metadata = JSON.parse(String(row.metadata_json)) as Record<string, unknown>;
+  }
+
+  return waiver;
 }

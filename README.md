@@ -129,3 +129,5 @@ npm run landing:deploy
 ## Operator checklist
 - Setup runbook for env keys + Cloudflare Workers + Slack/Stripe provisioning:
   [docs/integration-env-cloudflare-checklist.md](/Users/garrettpetersen/ask-thane/docs/integration-env-cloudflare-checklist.md)
+- Core data model for cross-platform identity, agent memory, task actions, and permission waivers:
+  [docs/identity-memory-actions-permissions.md](/Users/garrettpetersen/ask-thane/docs/identity-memory-actions-permissions.md)
