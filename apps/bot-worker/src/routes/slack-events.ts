@@ -6,7 +6,7 @@ import {
   type SlackEnvelope
 } from "@ask-thane/integrations";
 import { runConversationalAgentForSlackMessage } from "../services/agent-runtime";
-import { inferAndPersistTasks, type BotEnv } from "../services/task-inference";
+import type { BotEnv } from "../services/task-inference";
 import { ConversationAccessResolver } from "../services/conversation-access";
 import { OrgRegistry } from "../services/org-registry";
 import { SlackInstallStore } from "../services/slack-install-store";
@@ -176,7 +176,6 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
     nowIso: event.occurredAt
   });
 
-  let tasksCreatedByFallback = 0;
   let agentUsed = false;
   let tasksCreatedByAgent = 0;
   let agentSummary: string | undefined;
@@ -202,20 +201,16 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
       workspaceId: workspaceRef.workspaceId,
       reason: error instanceof Error ? error.message : String(error)
     });
-  }
-
-  if (!agentUsed) {
-    const tasks = await inferAndPersistTasks(
+    return Response.json(
       {
-        ...event,
-        workspaceId: workspaceRef.workspaceId
+        ok: false,
+        error: "agent_runtime_failed"
       },
-      env
+      { status: 500 }
     );
-    tasksCreatedByFallback = tasks.length;
   }
 
-  if (tasksCreatedByAgent > 0 || tasksCreatedByFallback > 0) {
+  if (tasksCreatedByAgent > 0) {
     // Non-blocking acknowledgement in Slack when a message produced at least one task.
     try {
       await addSlackTaskCapturedReaction({
@@ -239,7 +234,7 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
   return Response.json(
     {
       ok: true,
-      taskCount: tasksCreatedByAgent + tasksCreatedByFallback,
+      taskCount: tasksCreatedByAgent,
       agentUsed,
       agentSummary: agentSummary ?? null
     },

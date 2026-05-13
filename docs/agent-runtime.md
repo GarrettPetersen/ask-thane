@@ -6,8 +6,7 @@ This runtime turns Slack message handling from single-shot parsing into a multi-
 - Slack webhook route calls:
   - `runConversationalAgentForSlackMessage(...)`
   - File: `apps/bot-worker/src/services/agent-runtime.ts`
-- Route fallback behavior:
-  - If agent is unavailable (for example no OpenAI key), fallback to legacy extraction path.
+- No legacy extractor fallback on webhook path. If agent runtime fails, webhook returns error.
 
 ## Runtime loop
 1. Build initial context from DB + Slack.
