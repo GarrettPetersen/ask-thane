@@ -18,6 +18,7 @@ export interface BotEnv {
   SLACK_BOT_SCOPES?: string;
   DEFAULT_ORGANIZATION_ID?: string;
   THANE_BASE_URL?: string;
+  ADMIN_TRIGGER_TOKEN?: string;
 }
 
 export async function inferAndPersistTasks(event: MessageEvent, env: BotEnv) {

@@ -42,6 +42,7 @@ Fill these values:
 - [ ] `DEFAULT_LLM_PROVIDER` (default `openai`)
 - [ ] `DEFAULT_LLM_MODEL` (default `gpt-4.1-mini`)
 - [ ] `DEFAULT_ORGANIZATION_ID` (default `org_0`)
+- [ ] `ADMIN_TRIGGER_TOKEN` (for protected manual poll/status endpoints)
 
 Notes:
 - `.env` is for local workflows and your own reference.
@@ -91,6 +92,7 @@ npx wrangler secret put SLACK_OAUTH_STATE_SECRET
 npx wrangler secret put SLACK_BOT_TOKEN
 npx wrangler secret put OPENAI_API_KEY
 npx wrangler secret put ANTHROPIC_API_KEY
+npx wrangler secret put ADMIN_TRIGGER_TOKEN
 ```
 
 Set non-secret vars in `apps/bot-worker/wrangler.toml`:
@@ -101,6 +103,8 @@ Set non-secret vars in `apps/bot-worker/wrangler.toml`:
 Verify endpoint:
 - [ ] `GET /health` returns 200 on bot Worker URL
 - [ ] `POST /webhooks/slack/events` is reachable
+- [ ] `POST /admin/poll/run` works with `Authorization: Bearer <ADMIN_TRIGGER_TOKEN>`
+- [ ] `GET /admin/poll/status` works with `Authorization: Bearer <ADMIN_TRIGGER_TOKEN>`
 
 ## 5) Configure API Worker (`ask-thane-api`)
 

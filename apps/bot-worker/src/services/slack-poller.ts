@@ -12,6 +12,30 @@ interface WorkspacePollTarget {
   botToken: string;
 }
 
+interface WorkspacePollStats {
+  channelsScanned: number;
+  messagesSeen: number;
+  messagesIngested: number;
+  tasksCreated: number;
+  identitiesLinked: number;
+}
+
+export interface PollRunSummary {
+  startedAt: string;
+  finishedAt: string;
+  workspacesAttempted: number;
+  workspacesSucceeded: number;
+  workspacesFailed: number;
+  totals: WorkspacePollStats;
+  workspaceResults: Array<{
+    organizationId: string;
+    workspaceId: string;
+    ok: boolean;
+    stats?: WorkspacePollStats;
+    error?: string;
+  }>;
+}
+
 interface SlackConversation {
   id?: string;
   is_member?: boolean;
@@ -334,10 +358,17 @@ async function hasTaskForSourceMessage(input: {
   return Boolean(row?.id);
 }
 
-async function processWorkspaceMessages(target: WorkspacePollTarget, env: BotEnv): Promise<void> {
+async function processWorkspaceMessages(target: WorkspacePollTarget, env: BotEnv): Promise<WorkspacePollStats> {
   const repo = new D1TaskRepository(env.DB);
   const resolver = new ConversationAccessResolver(env.DB);
   const channels = await listJoinedChannels(target.botToken);
+  const stats: WorkspacePollStats = {
+    channelsScanned: channels.length,
+    messagesSeen: 0,
+    messagesIngested: 0,
+    tasksCreated: 0,
+    identitiesLinked: 0
+  };
 
   for (const channel of channels) {
     const nowIso = new Date().toISOString();
@@ -381,6 +412,7 @@ async function processWorkspaceMessages(target: WorkspacePollTarget, env: BotEnv
       if (message.subtype) {
         continue;
       }
+      stats.messagesSeen += 1;
 
       newestSeenTs = message.ts;
 
@@ -398,6 +430,7 @@ async function processWorkspaceMessages(target: WorkspacePollTarget, env: BotEnv
       if (!ingestCreated) {
         continue;
       }
+      stats.messagesIngested += 1;
 
       const mentions = extractMentions(message.text);
       const participants = new Set<string>([message.user, ...mentions]);
@@ -417,6 +450,7 @@ async function processWorkspaceMessages(target: WorkspacePollTarget, env: BotEnv
           platformUserId: participant,
           nowIso
         });
+        stats.identitiesLinked += 1;
       }
 
       const alreadyTasked = await hasTaskForSourceMessage({
@@ -452,6 +486,7 @@ async function processWorkspaceMessages(target: WorkspacePollTarget, env: BotEnv
             },
             createdAt: nowIso
           });
+          stats.tasksCreated += 1;
         }
       }
 
@@ -470,9 +505,12 @@ async function processWorkspaceMessages(target: WorkspacePollTarget, env: BotEnv
       });
     }
   }
+
+  return stats;
 }
 
-export async function pollSlackWorkspacesForTasks(env: BotEnv): Promise<void> {
+export async function pollSlackWorkspacesForTasks(env: BotEnv): Promise<PollRunSummary> {
+  const startedAt = new Date().toISOString();
   const installs = new SlackInstallStore(env.DB);
   const resolver = new ConversationAccessResolver(env.DB);
   const targetsByWorkspace = new Map<string, WorkspacePollTarget>();
@@ -503,15 +541,53 @@ export async function pollSlackWorkspacesForTasks(env: BotEnv): Promise<void> {
     }
   }
 
+  const workspaceResults: PollRunSummary["workspaceResults"] = [];
+  const totals: WorkspacePollStats = {
+    channelsScanned: 0,
+    messagesSeen: 0,
+    messagesIngested: 0,
+    tasksCreated: 0,
+    identitiesLinked: 0
+  };
+
   for (const target of targetsByWorkspace.values()) {
     try {
-      await processWorkspaceMessages(target, env);
+      const stats = await processWorkspaceMessages(target, env);
+      workspaceResults.push({
+        organizationId: target.organizationId,
+        workspaceId: target.workspaceId,
+        ok: true,
+        stats
+      });
+      totals.channelsScanned += stats.channelsScanned;
+      totals.messagesSeen += stats.messagesSeen;
+      totals.messagesIngested += stats.messagesIngested;
+      totals.tasksCreated += stats.tasksCreated;
+      totals.identitiesLinked += stats.identitiesLinked;
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
       console.error("slack_poll_workspace_failed", {
         organizationId: target.organizationId,
         workspaceId: target.workspaceId,
-        reason: error instanceof Error ? error.message : String(error)
+        reason
+      });
+      workspaceResults.push({
+        organizationId: target.organizationId,
+        workspaceId: target.workspaceId,
+        ok: false,
+        error: reason
       });
     }
   }
+
+  const workspacesSucceeded = workspaceResults.filter((result) => result.ok).length;
+  return {
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    workspacesAttempted: workspaceResults.length,
+    workspacesSucceeded,
+    workspacesFailed: workspaceResults.length - workspacesSucceeded,
+    totals,
+    workspaceResults
+  };
 }

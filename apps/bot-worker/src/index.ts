@@ -46,6 +46,62 @@ async function reconcileSlackMemberships(env: BotEnv): Promise<void> {
   }
 }
 
+function isAdminAuthorized(request: Request, env: BotEnv): boolean {
+  const requiredToken = env.ADMIN_TRIGGER_TOKEN?.trim();
+  if (!requiredToken) {
+    return false;
+  }
+
+  const authHeader = request.headers.get("authorization") ?? "";
+  if (authHeader.startsWith("Bearer ")) {
+    const bearer = authHeader.slice("Bearer ".length).trim();
+    if (bearer && bearer === requiredToken) {
+      return true;
+    }
+  }
+
+  const headerToken = request.headers.get("x-admin-token")?.trim();
+  return Boolean(headerToken && headerToken === requiredToken);
+}
+
+async function getPollStatus(env: BotEnv): Promise<Record<string, unknown>> {
+  const recentIngest = await env.DB
+    .prepare(
+      `SELECT organization_id, provider_event_id, provider_message_id, conversation_source_id, received_at, processed_at
+       FROM ingest_events
+       WHERE provider = 'slack_poll'
+       ORDER BY received_at DESC
+       LIMIT 25`
+    )
+    .all<Record<string, unknown>>();
+
+  const recentCursors = await env.DB
+    .prepare(
+      `SELECT organization_id, workspace_id, cursor_key, last_cursor, updated_at
+       FROM workspace_poll_cursors
+       ORDER BY updated_at DESC
+       LIMIT 50`
+    )
+    .all<Record<string, unknown>>();
+
+  const recentTasks = await env.DB
+    .prepare(
+      `SELECT organization_id, workspace_id, id, title, assignee_id, created_at
+       FROM tasks
+       WHERE metadata_json LIKE '%slack_poll_heuristic_v1%'
+       ORDER BY created_at DESC
+       LIMIT 25`
+    )
+    .all<Record<string, unknown>>();
+
+  return {
+    ok: true,
+    recentIngestEvents: recentIngest.results ?? [],
+    recentPollCursors: recentCursors.results ?? [],
+    recentHeuristicTasks: recentTasks.results ?? []
+  };
+}
+
 export default {
   async fetch(request: Request, env: BotEnv): Promise<Response> {
     const { pathname } = new URL(request.url);
@@ -64,6 +120,22 @@ export default {
 
     if (pathname === "/slack/oauth/callback" && request.method === "GET") {
       return handleSlackOAuthCallback(request, env);
+    }
+
+    if (pathname === "/admin/poll/run" && request.method === "POST") {
+      if (!isAdminAuthorized(request, env)) {
+        return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+      }
+      const summary = await pollSlackWorkspacesForTasks(env);
+      return Response.json({ ok: true, summary }, { status: 200 });
+    }
+
+    if (pathname === "/admin/poll/status" && request.method === "GET") {
+      if (!isAdminAuthorized(request, env)) {
+        return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+      }
+      const status = await getPollStatus(env);
+      return Response.json(status, { status: 200 });
     }
 
     return new Response("Not Found", { status: 404 });
