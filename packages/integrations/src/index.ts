@@ -35,13 +35,16 @@ export function slackUser(userId: string): UserRef {
 }
 
 export function normalizeSlackEvent(input: SlackEnvelope): MessageEvent | null {
+  const eventType = input.event?.type;
+  const isSupportedMessageType = eventType === "message" || eventType === "app_mention";
+
   if (
     !input.team_id ||
     !input.event?.channel ||
     !input.event.ts ||
     !input.event.user ||
     !input.event.text ||
-    input.event.type !== "message" ||
+    !isSupportedMessageType ||
     input.event.subtype === "bot_message" ||
     Boolean(input.event.bot_id)
   ) {

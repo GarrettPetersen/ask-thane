@@ -7,6 +7,7 @@ import { aggregateDailyUsage, getUsageStatus, syncUsageToStripe } from "./servic
 import { ConversationAccessResolver } from "./services/conversation-access";
 import { runEvalReplay } from "./services/eval-harness";
 import { runScheduledFollowUpJobs } from "./services/follow-up-jobs";
+import { replayUnprocessedSlackIngestEvents } from "./services/ingest-replay";
 import { getSlackInstallDiagnostics } from "./services/onboarding-diagnostics";
 import { getOpsSummary, getWorkspaceOpsSummary } from "./services/ops-dashboard";
 import { runScheduledReminderDigests, runWorkspaceReminderDigestsNow } from "./services/reminder-digests";
@@ -147,6 +148,24 @@ async function getPollStatus(env: BotEnv): Promise<Record<string, unknown>> {
 
   return {
     ok: true,
+    backlog: {
+      unprocessedSlackEvents:
+        Number(
+          (
+            await env.DB
+              .prepare(`SELECT COUNT(*) AS count FROM ingest_events WHERE provider = 'slack' AND processed_at IS NULL`)
+              .first<Record<string, unknown>>()
+          )?.count ?? 0
+        ),
+      unprocessedSlackPollEvents:
+        Number(
+          (
+            await env.DB
+              .prepare(`SELECT COUNT(*) AS count FROM ingest_events WHERE provider = 'slack_poll' AND processed_at IS NULL`)
+              .first<Record<string, unknown>>()
+          )?.count ?? 0
+        )
+    },
     recentIngestEvents: recentIngest.results ?? [],
     recentPollCursors: recentCursors.results ?? [],
     recentHeuristicTasks: recentTasks.results ?? []
@@ -189,7 +208,7 @@ async function getFollowUpStatus(env: BotEnv): Promise<Record<string, unknown>> 
 }
 
 export default {
-  async fetch(request: Request, env: BotEnv): Promise<Response> {
+  async fetch(request: Request, env: BotEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const { pathname } = url;
 
@@ -198,7 +217,7 @@ export default {
     }
 
     if (pathname === "/webhooks/slack/events" && request.method === "POST") {
-      return handleSlackEvents(request, env);
+      return handleSlackEvents(request, env, ctx);
     }
 
     if (pathname === "/slack/install" && request.method === "GET") {
@@ -215,6 +234,21 @@ export default {
         return unauthorized;
       }
       const summary = await runSlackPollWithMembershipRefresh(env);
+      return Response.json({ ok: true, summary }, { status: 200 });
+    }
+
+    if (pathname === "/admin/ingest/replay" && request.method === "POST") {
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
+      }
+      let payload: { limit?: number } = {};
+      try {
+        payload = (await request.json()) as { limit?: number };
+      } catch {
+        payload = {};
+      }
+      const summary = await replayUnprocessedSlackIngestEvents(env, payload.limit);
       return Response.json({ ok: true, summary }, { status: 200 });
     }
 
@@ -402,6 +436,7 @@ export default {
   },
 
   async scheduled(_controller: ScheduledController, env: BotEnv, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(replayUnprocessedSlackIngestEvents(env, 150));
     ctx.waitUntil(sendReminders(env));
     ctx.waitUntil(runScheduledFollowUpJobs(env));
     ctx.waitUntil(runSlackPollWithMembershipRefresh(env));

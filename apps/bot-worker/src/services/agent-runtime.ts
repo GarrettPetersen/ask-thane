@@ -513,7 +513,8 @@ function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"
     "Examples: 'I'm done watering the gnomes, but I still need to elevate the cake and bloviate the sneed' => mark_done(water gnomes) + create_task(elevate cake) + create_task(bloviate sneed).",
     "Examples: 'I froze the beef last night' should update existing freeze-beef task to done when a matching open task exists.",
     "Examples: if someone says they finished work and no task exists, create_task(that work) + update_task(mark_done) in the same run.",
-    "When assignee is not explicit in shared channels, infer from candidate people in context: prioritize recent speakers, then other active channel members; only default to author if still ambiguous.",
+    "When assignee is not explicit, treat first-person commitments as self-assigned by default.",
+    "When the task is a delegation to someone else, set assignee_user_id explicitly after using workspace people/context tools.",
     "Interpret deictic second-person address using conversation context: when the speaker addresses another participant (for example 'you' in a shared channel), do not assign to the speaker unless context explicitly indicates self-assignment.",
     "Use person-level notes and ownership patterns for disambiguation when deciding assignees in ambiguous requests.",
     "You may write person notes for other workspace participants when the message contains durable facts about them.",
@@ -671,56 +672,8 @@ async function inferAssigneeFromConversationContext(ctx: ToolContext): Promise<s
     return explicitMentions[0] ?? ctx.actorExternalUserId;
   }
 
-  // In DMs, a missing assignee almost always means "me".
-  if (ctx.event.channelId.startsWith("D")) {
-    return ctx.actorExternalUserId;
-  }
-
-  // In shared channels, rank candidates as:
-  // 1) recent non-actor speakers, 2) other active channel members.
-  const candidates: string[] = [];
-  const seen = new Set<string>();
-  for (let i = ctx.recentMessages.length - 1; i >= 0; i -= 1) {
-    const message = ctx.recentMessages[i];
-    if (!message) {
-      continue;
-    }
-    const userId = message.user?.trim();
-    if (!userId || userId === ctx.actorExternalUserId || userId === ctx.botExternalUserId || message.subtype) {
-      continue;
-    }
-    if (message.ts && message.ts === ctx.event.messageId) {
-      continue;
-    }
-    if (seen.has(userId)) {
-      continue;
-    }
-    seen.add(userId);
-    candidates.push(userId);
-  }
-
-  const activeMembers = await ctx.resolver.listActiveSlackConversationExternalUsers({
-    organizationId: ctx.organizationId,
-    conversationSourceId: ctx.currentConversationSourceId
-  });
-  for (const memberId of activeMembers) {
-    const normalized = memberId.trim();
-    if (
-      !normalized ||
-      normalized === ctx.actorExternalUserId ||
-      normalized === ctx.botExternalUserId ||
-      seen.has(normalized)
-    ) {
-      continue;
-    }
-    seen.add(normalized);
-    candidates.push(normalized);
-  }
-
-  if (candidates.length > 0) {
-    return candidates[0] ?? ctx.actorExternalUserId;
-  }
-
+  // Conservative fallback: if assignee wasn't explicit, default to actor.
+  // Delegations should be set explicitly by the model via assignee_user_id.
   return ctx.actorExternalUserId;
 }
 
@@ -1973,6 +1926,9 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     result.replyText = finalReplyRef.text;
   } else if (replyText && (interactionMode === "dm_reply" || interactionMode === "proactive_followup")) {
     result.replyText = replyText;
+  } else if (interactionMode === "dm_reply" || interactionMode === "proactive_followup") {
+    result.replyText =
+      "I’m here and listening. I couldn’t complete that response just now, but if you rephrase or try again I’ll handle it.";
   }
 
   return result;

@@ -54,6 +54,8 @@ interface SlackConversation {
   is_member?: boolean;
   is_archived?: boolean;
   is_private?: boolean;
+  is_im?: boolean;
+  is_mpim?: boolean;
 }
 
 interface SlackConversationListResponse {
@@ -85,15 +87,27 @@ function extractMentions(text: string): string[] {
   return Array.from(ids);
 }
 
-async function listJoinedChannels(botToken: string): Promise<Array<{ id: string; isPrivate: boolean }>> {
-  const channels: Array<{ id: string; isPrivate: boolean }> = [];
+async function listJoinedConversations(botToken: string): Promise<
+  Array<{
+    id: string;
+    isPrivate: boolean;
+    conversationKind: "public_channel" | "private_channel" | "group_dm" | "dm";
+    isPublic: boolean;
+  }>
+> {
+  const channels: Array<{
+    id: string;
+    isPrivate: boolean;
+    conversationKind: "public_channel" | "private_channel" | "group_dm" | "dm";
+    isPublic: boolean;
+  }> = [];
   let cursor: string | null = null;
 
   do {
     const params = new URLSearchParams({
       exclude_archived: "true",
       limit: "500",
-      types: "public_channel,private_channel"
+      types: "public_channel,private_channel,mpim,im"
     });
     if (cursor) {
       params.set("cursor", cursor);
@@ -121,9 +135,24 @@ async function listJoinedChannels(botToken: string): Promise<Array<{ id: string;
         continue;
       }
 
+      let conversationKind: "public_channel" | "private_channel" | "group_dm" | "dm" = "private_channel";
+      let isPublic = false;
+      if (channel.is_im || channel.id.startsWith("D")) {
+        conversationKind = "dm";
+      } else if (channel.is_mpim) {
+        conversationKind = "group_dm";
+      } else if (channel.id.startsWith("C")) {
+        conversationKind = channel.is_private ? "private_channel" : "public_channel";
+        isPublic = !channel.is_private;
+      } else if (channel.id.startsWith("G")) {
+        conversationKind = "private_channel";
+      }
+
       channels.push({
         id: channel.id,
-        isPrivate: Boolean(channel.is_private)
+        isPrivate: Boolean(channel.is_private),
+        conversationKind,
+        isPublic
       });
     }
 
@@ -283,7 +312,7 @@ async function processWorkspaceMessages(target: WorkspacePollTarget, env: BotEnv
       reason: error instanceof Error ? error.message : String(error)
     });
   }
-  const channels = await listJoinedChannels(target.botToken);
+  const channels = await listJoinedConversations(target.botToken);
   const stats: WorkspacePollStats = {
     channelsScanned: channels.length,
     messagesSeen: 0,
@@ -298,8 +327,8 @@ async function processWorkspaceMessages(target: WorkspacePollTarget, env: BotEnv
       organizationId: target.organizationId,
       workspaceId: target.workspaceId,
       channelId: channel.id,
-      conversationKind: channel.isPrivate ? "private_channel" : "public_channel",
-      isPublic: !channel.isPrivate,
+      conversationKind: channel.conversationKind,
+      isPublic: channel.isPublic,
       nowIso
     });
 

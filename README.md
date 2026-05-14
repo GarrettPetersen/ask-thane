@@ -1,24 +1,74 @@
 # Ask Thane Monorepo
 
-Ask Thane is a conversational task-tracking system that listens to team communication (starting with Slack), infers work items, tracks execution status, and proactively follows up. The goal is to replace manual ticketing workflows with passive, AI-backed task capture and accountability.
+Ask Thane is an AI-native conversational task tracker for teams.  
+Instead of asking people to maintain Jira/Linear-style tickets manually, Thane listens to normal Slack conversation, infers task state, tracks progress in its own backend, and proactively follows up with people.
 
-## What this repo includes right now
-- Cloudflare-first monorepo skeleton for product surfaces (landing, bot, API, billing).
-- Shared TypeScript packages for domain types, integrations, AI adapters, data repositories, and workflows.
-- Initial D1 SQL schema for workspaces, users, tasks, task events, and reminders.
-- Starter Slack webhook route plus scheduled polling/reminder hooks in the bot Worker.
-- Foundational docs for architecture and roadmap.
+## What The Bot Does
+- Listens to Slack messages (channels + DMs, based on scopes and app membership).
+- Infers task events from natural language:
+  - create task
+  - mark done / cancel / block / reopen
+  - edit / merge
+- Maintains auditable task history (`task_actions`) and visibility controls (ACL + waiver requests).
+- Maintains cross-message context with agent notes (org/workspace/channel/person/user/task scopes).
+- Sends proactive reminders and follow-ups on user cadence.
+- Supports direct conversational replies in DMs and channel mentions.
+- Supports multi-workspace OAuth install and per-workspace bot tokens.
 
-## High-level architecture
-1. Users talk naturally in Slack channels or DMs.
-2. `bot-worker` receives platform events and normalizes them into a shared message event shape.
-3. `workflows` calls AI adapters to infer task create/update intents.
-4. `data` persists task state and immutable task events in D1.
-5. `bot-worker` scheduled jobs poll Slack channels, send follow-up reminders, and ingest responses.
-6. `api-worker` serves rollups for leadership/status views.
-7. `payments-worker` tracks subscription state via Stripe webhooks.
+## Architecture
+### Runtime surfaces
+- `apps/bot-worker`: Core product runtime.
+  - Slack Events API webhook ingress
+  - scheduled Slack polling
+  - LLM tool-calling agent runtime
+  - reminders/follow-ups
+  - admin/ops/eval endpoints
+- `apps/api-worker`: API surface for task/analytics read endpoints (early-stage).
+- `apps/payments-worker`: Stripe webhook and billing hooks (early-stage).
+- `apps/landing`: marketing site worker for `askthane.com`.
 
-## Repo layout
+### Shared packages
+- `@ask-thane/domain`: entity and enum types.
+- `@ask-thane/integrations`: Slack payload normalization.
+- `@ask-thane/ai`: LLM provider abstraction.
+- `@ask-thane/data`: D1 repository implementation.
+- `@ask-thane/workflows`: message-to-task workflow composition.
+
+### Data layer
+- Cloudflare D1 (SQLite) for:
+  - organizations/workspaces/users
+  - identities + people linking
+  - tasks + task actions
+  - conversation sources + memberships
+  - note memory
+  - notification cadences + digest deliveries
+  - follow-up jobs
+  - feedback and LLM/usage telemetry
+
+## Current Development Status (May 2026)
+### Working now
+- Slack app OAuth install flow (`/slack/install`, `/slack/oauth/callback`).
+- Event ingestion + dedupe for Slack webhook traffic.
+- Task inference agent with read/write tools over internal DB.
+- Reactions for task events.
+- Reminder digests and follow-up jobs.
+- Multi-workspace token storage (`slack_workspace_installs`).
+- Admin endpoints for poll/reminders/followups/ops/evals/usage.
+
+### Prototype-grade / still evolving
+- Mention-reply reliability and Slack event operational hardening.
+- Evaluation coverage and regression suites.
+- Billing metering productionization.
+- API-worker and payments-worker feature depth.
+- Staging/production promotion workflow and strict release gating.
+
+### Not production-ready for external customers yet
+- Full staging environment parity and release promotion controls.
+- Broader test coverage and automated smoke tests post-deploy.
+- Mature observability dashboards/alerts.
+- Security review, tenant hardening, and incident runbooks.
+
+## Repo Layout
 ```text
 .
 ├── apps
@@ -27,11 +77,8 @@ Ask Thane is a conversational task-tracking system that listens to team communic
 │   ├── landing
 │   └── payments-worker
 ├── docs
-│   ├── architecture.md
-│   └── roadmap.md
 ├── infra
 │   └── d1
-│       └── schema.sql
 └── packages
     ├── ai
     ├── data
@@ -40,37 +87,23 @@ Ask Thane is a conversational task-tracking system that listens to team communic
     └── workflows
 ```
 
-## Application surfaces
-- `apps/bot-worker`: Slack ingress, task inference orchestration, scheduled polling/reminder loop.
-- `apps/api-worker`: Internal REST endpoints for task status queries and future analytics.
-- `apps/payments-worker`: Stripe webhook ingestion and entitlement state hooks.
-- `apps/landing`: Cloudflare Worker serving static marketing assets from `public/`.
-
-## Shared packages
-- `@ask-thane/domain`: Core entities and enums.
-- `@ask-thane/integrations`: Platform-specific payload normalization.
-- `@ask-thane/ai`: LLM provider abstraction boundary.
-- `@ask-thane/data`: Repository interfaces + D1 implementation.
-- `@ask-thane/workflows`: Task ingestion flows composing AI + data.
-
-## Local setup
+## Local Setup
 1. Install dependencies:
 ```bash
 pnpm install
 ```
-2. Copy environment variables:
+2. Copy env template:
 ```bash
 cp .env.example .env
 ```
-   - For internal testing, keep `DEFAULT_ORGANIZATION_ID=org_0`. The bot bootstrap flow will auto-create `org_0` with a `free_forever` plan tier and attach newly seen Slack workspaces to it.
-3. Create a D1 database and apply schema (after Cloudflare auth is configured):
+3. Create/apply D1 schema:
 ```bash
 cd apps/bot-worker
 pnpm wrangler d1 create ask-thane
 pnpm wrangler d1 execute ask-thane --file ../../infra/d1/schema.sql
 ```
-4. Replace `database_id` in each Worker `wrangler.toml` file.
-5. Run apps locally as needed:
+4. Update `database_id` in relevant `wrangler.toml` files.
+5. Run workers locally:
 ```bash
 pnpm dev:bot
 pnpm dev:api
@@ -78,58 +111,17 @@ pnpm dev:payments
 pnpm dev:landing
 ```
 
-## Cloudflare Worker setup for `askthane.com`
-1. In Cloudflare, create a **Worker** project connected to this GitHub repo.
-2. Set the project root directory to `apps/landing`.
-3. Build command: leave empty.
-4. Deploy command: `npx wrangler deploy`.
-5. Ensure the Worker uses [apps/landing/wrangler.toml](/Users/garrettpetersen/ask-thane/apps/landing/wrangler.toml), which defines both `main` and `[assets]`.
-6. Add custom domain `askthane.com` to the Worker route/custom-domain settings.
-7. Add `www.askthane.com` and configure redirect behavior as desired.
+## Build Commands
+- `pnpm build`
+- `pnpm build:all`
+- `pnpm typecheck`
+- `pnpm lint`
+- `pnpm test`
 
-### Monorepo Wrangler command fix
-If you run Wrangler from repo root and hit workspace auto-detection errors, use:
-```bash
-npm run landing:dev
-npm run landing:deploy
-```
-
-## Build/test commands
-- `pnpm build`: landing-only build.
-- `pnpm build:all`: runs all package/app build scripts via Turbo.
-- `pnpm typecheck`: TypeScript checks across the monorepo.
-- `pnpm lint`: placeholder lint tasks (to be replaced with ESLint config).
-- `pnpm test`: placeholder test tasks (to be replaced with Vitest/Miniflare tests).
-
-## Immediate next implementation priorities
-1. Add signature verification and replay protection for Slack + Stripe webhooks.
-2. Implement real AI extraction prompts and deterministic JSON output parsing.
-3. Add idempotency keys and message de-duplication for webhook retries.
-4. Implement reminder delivery + response parsing loop (`done`, `blocked`, `not priority`).
-5. Add tenancy isolation and workspace-level configuration.
-6. Add dashboard/auth layer for executive summaries and admin controls.
-
-## Product principles for upcoming implementation
-- Passive by default: users should not be forced into manual task systems.
-- Traceable decisions: every inferred task change should have auditable provenance.
-- Safe automation: use confidence thresholds and human override paths.
-- Multi-tenant isolation: strict workspace data boundaries from day one.
-
-## Notes
-- This is intentionally a skeleton; many routes contain stubs and no external API calls yet.
-- The repo is designed to evolve into production-ready Cloudflare Workers with D1, Queues, and Durable Objects.
-
-## Multi-workspace Slack installs
-- The bot worker now supports OAuth install endpoints:
-  - `GET /slack/install`
-  - `GET /slack/oauth/callback`
-- Per-workspace bot tokens are stored in D1 (`slack_workspace_installs`) and used for scheduled membership reconciliation.
-- The legacy single `SLACK_BOT_TOKEN` env var remains as fallback for workspaces without stored installs.
-
-## Operator checklist
-- Setup runbook for env keys + Cloudflare Workers + Slack/Stripe provisioning:
+## Key Docs
+- Setup/env/Cloudflare checklist:
   [docs/integration-env-cloudflare-checklist.md](/Users/garrettpetersen/ask-thane/docs/integration-env-cloudflare-checklist.md)
-- Core data model for cross-platform identity, agent memory, task actions, and permission waivers:
+- Identity/notes/actions/permissions model:
   [docs/identity-memory-actions-permissions.md](/Users/garrettpetersen/ask-thane/docs/identity-memory-actions-permissions.md)
-- Tool-calling conversational runtime design and permissions model:
+- Agent runtime/tooling model:
   [docs/agent-runtime.md](/Users/garrettpetersen/ask-thane/docs/agent-runtime.md)

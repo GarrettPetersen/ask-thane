@@ -190,48 +190,7 @@ async function shouldRespondToMessage(input: {
   return false;
 }
 
-export async function handleSlackEvents(request: Request, env: BotEnv): Promise<Response> {
-  const rawBody = await request.text();
-  const verificationInput: {
-    signingSecret?: string;
-    timestampHeader: string | null;
-    signatureHeader: string | null;
-    rawBody: string;
-  } = {
-    timestampHeader: request.headers.get("x-slack-request-timestamp"),
-    signatureHeader: request.headers.get("x-slack-signature"),
-    rawBody
-  };
-  if (env.SLACK_SIGNING_SECRET) {
-    verificationInput.signingSecret = env.SLACK_SIGNING_SECRET;
-  }
-  const signatureVerification = await verifySlackRequestSignature({
-    ...verificationInput
-  });
-  if (!signatureVerification.ok) {
-    return Response.json(
-      { ok: false, error: "invalid_slack_signature", reason: signatureVerification.reason },
-      { status: 401 }
-    );
-  }
-
-  let payload: (SlackEnvelope & {
-    type?: string;
-    challenge?: string;
-  }) | null = null;
-  try {
-    payload = JSON.parse(rawBody) as SlackEnvelope & {
-      type?: string;
-      challenge?: string;
-    };
-  } catch {
-    return Response.json({ ok: false, error: "invalid_json_body" }, { status: 400 });
-  }
-
-  if (payload.type === "url_verification" && payload.challenge) {
-    return new Response(payload.challenge, { status: 200 });
-  }
-
+async function processSlackEventsPayload(payload: SlackEnvelope & { type?: string; challenge?: string }, env: BotEnv): Promise<Response> {
   const externalWorkspaceId = payload.team_id;
   if (!externalWorkspaceId) {
     return Response.json({ ok: true, ignored: true, reason: "missing_team_id" }, { status: 202 });
@@ -369,6 +328,13 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
       text: event.text,
       conversationKind: conversationMeta.conversationKind
     });
+    console.log("thane_reply_decision", {
+      externalWorkspaceId,
+      channelId: event.channelId,
+      messageTs: event.messageId,
+      shouldRespond,
+      conversationKind: conversationMeta.conversationKind
+    });
 
     const agentRun = await runConversationalAgentForSlackMessage({
       env,
@@ -386,6 +352,15 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
     tasksCreatedByAgent = agentRun.createdTaskIds.length;
     taskActionTypes = mapTaskActionTypesToSlackReactions(agentRun.taskActionTypes);
     agentSummary = agentRun.finalSummary;
+    console.log("thane_agent_run_result", {
+      externalWorkspaceId,
+      channelId: event.channelId,
+      messageTs: event.messageId,
+      usedTools: agentRun.usedTools,
+      hasReplyText: Boolean(agentRun.replyText?.trim()),
+      createdTasks: agentRun.createdTaskIds.length,
+      actionTypes: agentRun.taskActionTypes
+    });
 
     if (shouldRespond && agentRun.replyText) {
       const install = await resolveSlackInstall({ env, externalWorkspaceId });
@@ -400,6 +375,11 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
               channelId: event.channelId,
               text: agentRun.replyText,
               ...(threadTs && threadTs !== event.messageId ? { threadTs } : {})
+            });
+            console.log("thane_reply_posted", {
+              externalWorkspaceId,
+              channelId: event.channelId,
+              messageTs: event.messageId
             });
             sent = true;
             break;
@@ -425,6 +405,12 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
           });
         }
       }
+    } else if (shouldRespond && !agentRun.replyText) {
+      console.warn("agent_reply_missing", {
+        externalWorkspaceId,
+        channelId: event.channelId,
+        messageTs: event.messageId
+      });
     }
   } catch (error) {
     console.error("agent_runtime_failed", {
@@ -494,4 +480,60 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
     },
     { status: 200 }
   );
+}
+
+export async function handleSlackEvents(request: Request, env: BotEnv, ctx?: ExecutionContext): Promise<Response> {
+  const rawBody = await request.text();
+  const verificationInput: {
+    signingSecret?: string;
+    timestampHeader: string | null;
+    signatureHeader: string | null;
+    rawBody: string;
+  } = {
+    timestampHeader: request.headers.get("x-slack-request-timestamp"),
+    signatureHeader: request.headers.get("x-slack-signature"),
+    rawBody
+  };
+  if (env.SLACK_SIGNING_SECRET) {
+    verificationInput.signingSecret = env.SLACK_SIGNING_SECRET;
+  }
+  const signatureVerification = await verifySlackRequestSignature({
+    ...verificationInput
+  });
+  if (!signatureVerification.ok) {
+    return Response.json(
+      { ok: false, error: "invalid_slack_signature", reason: signatureVerification.reason },
+      { status: 401 }
+    );
+  }
+
+  let payload: (SlackEnvelope & {
+    type?: string;
+    challenge?: string;
+  }) | null = null;
+  try {
+    payload = JSON.parse(rawBody) as SlackEnvelope & {
+      type?: string;
+      challenge?: string;
+    };
+  } catch {
+    return Response.json({ ok: false, error: "invalid_json_body" }, { status: 400 });
+  }
+
+  if (payload.type === "url_verification" && payload.challenge) {
+    return new Response(payload.challenge, { status: 200 });
+  }
+
+  if (ctx) {
+    ctx.waitUntil(
+      processSlackEventsPayload(payload, env).catch((error) => {
+        console.error("slack_event_background_processing_failed", {
+          reason: error instanceof Error ? error.message : String(error)
+        });
+      })
+    );
+    return Response.json({ ok: true, accepted: true }, { status: 200 });
+  }
+
+  return processSlackEventsPayload(payload, env);
 }
