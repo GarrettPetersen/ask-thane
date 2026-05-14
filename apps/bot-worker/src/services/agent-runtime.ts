@@ -559,6 +559,53 @@ function resolveExternalUserIdFromWorkspaceDirectory(
   return null;
 }
 
+async function resolveAssigneeExternalUserId(input: {
+  requested: string;
+  ctx: ToolContext;
+  allowWorkspaceLookupFallback: boolean;
+}): Promise<{
+  resolvedExternalUserId: string;
+  source: "directory" | "workspace_lookup" | "raw_unresolved";
+}> {
+  const trimmed = input.requested.trim();
+  const fromDirectory = resolveExternalUserIdFromWorkspaceDirectory(trimmed, input.ctx.workspaceUsers);
+  if (fromDirectory) {
+    return { resolvedExternalUserId: fromDirectory, source: "directory" };
+  }
+
+  if (input.allowWorkspaceLookupFallback) {
+    const people = await input.ctx.repo.listWorkspaceUsers({
+      organizationId: input.ctx.organizationId,
+      workspaceId: input.ctx.workspaceId,
+      query: trimmed,
+      limit: 15
+    });
+    if (people.length === 1) {
+      const only = people[0];
+      if (only) {
+        return { resolvedExternalUserId: only.externalUserId, source: "workspace_lookup" };
+      }
+    }
+
+    const normalized = trimmed.toLowerCase();
+    const exact = people.find((person) => {
+      const displayName = person.displayName?.trim().toLowerCase();
+      const email = person.email?.trim().toLowerCase();
+      return (
+        person.externalUserId.toLowerCase() === normalized ||
+        person.userId.toLowerCase() === normalized ||
+        displayName === normalized ||
+        email === normalized
+      );
+    });
+    if (exact) {
+      return { resolvedExternalUserId: exact.externalUserId, source: "workspace_lookup" };
+    }
+  }
+
+  return { resolvedExternalUserId: trimmed, source: "raw_unresolved" };
+}
+
 async function inferAssigneeFromConversationContext(ctx: ToolContext): Promise<string> {
   const explicitMentions = extractSlackMentionIds(ctx.event.text).filter(
     (id) => id !== ctx.actorExternalUserId && (!ctx.botExternalUserId || id !== ctx.botExternalUserId)
@@ -714,18 +761,64 @@ async function executeTool(
       if (typeof args.query === "string" && args.query.trim()) {
         searchInput.query = args.query.trim();
       }
+      let assigneeResolutionSource: "directory" | "workspace_lookup" | "raw_unresolved" | null = null;
+      let requestedAssignee = "";
+      let resolvedAssignee: string | null = null;
       if (typeof args.assignee_user_id === "string" && args.assignee_user_id.trim()) {
-        searchInput.assigneeId =
-          resolveExternalUserIdFromWorkspaceDirectory(args.assignee_user_id, ctx.workspaceUsers) ??
-          args.assignee_user_id.trim();
+        requestedAssignee = args.assignee_user_id.trim();
+        const resolved = await resolveAssigneeExternalUserId({
+          requested: requestedAssignee,
+          ctx,
+          allowWorkspaceLookupFallback: false
+        });
+        searchInput.assigneeId = resolved.resolvedExternalUserId;
+        resolvedAssignee = resolved.resolvedExternalUserId;
+        assigneeResolutionSource = resolved.source;
       }
       const statuses = asTaskStatusList(args.statuses);
       if (statuses) {
         searchInput.statuses = statuses;
       }
 
-      const tasks = await ctx.repo.searchTasksWithAcl(searchInput);
-      return { ok: true, tasks: tasks.map((task) => summarizeTask(task)) };
+      let tasks = await ctx.repo.searchTasksWithAcl(searchInput);
+
+      if (
+        tasks.length === 0 &&
+        requestedAssignee &&
+        assigneeResolutionSource === "raw_unresolved"
+      ) {
+        const fallback = await resolveAssigneeExternalUserId({
+          requested: requestedAssignee,
+          ctx,
+          allowWorkspaceLookupFallback: true
+        });
+        if (
+          fallback.source === "workspace_lookup" &&
+          fallback.resolvedExternalUserId !== searchInput.assigneeId
+        ) {
+          const retryInput: AclTaskSearchInput = {
+            ...searchInput,
+            assigneeId: fallback.resolvedExternalUserId
+          };
+          tasks = await ctx.repo.searchTasksWithAcl(retryInput);
+          resolvedAssignee = fallback.resolvedExternalUserId;
+          assigneeResolutionSource = fallback.source;
+        }
+      }
+
+      return {
+        ok: true,
+        tasks: tasks.map((task) => summarizeTask(task)),
+        ...(requestedAssignee
+          ? {
+              assignee_resolution: {
+                requested: requestedAssignee,
+                resolved: resolvedAssignee,
+                source: assigneeResolutionSource
+              }
+            }
+          : {})
+      };
     }
 
     case "get_notes": {
@@ -949,8 +1042,13 @@ async function executeTool(
 
       const assigneeExternal =
         typeof args.assignee_user_id === "string" && args.assignee_user_id.trim()
-          ? (resolveExternalUserIdFromWorkspaceDirectory(args.assignee_user_id, ctx.workspaceUsers) ??
-            args.assignee_user_id.trim())
+          ? (
+              await resolveAssigneeExternalUserId({
+                requested: args.assignee_user_id,
+                ctx,
+                allowWorkspaceLookupFallback: true
+              })
+            ).resolvedExternalUserId
           : await inferAssigneeFromConversationContext(ctx);
 
       const task: TaskRecord = {
