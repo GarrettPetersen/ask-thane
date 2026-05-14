@@ -12,6 +12,9 @@ database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"
 migrations_dir = "../../infra/d1/migrations"
 
 [vars]
+BUILD_ENV = "local"
+BUILD_GIT_SHA = "dev"
+BUILD_DEPLOYED_AT = "local"
 DEFAULT_LLM_PROVIDER = "openai"
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
 DEFAULT_ORGANIZATION_ID = "org_0"
@@ -23,6 +26,54 @@ AGENT_COMPLETION_RETRIES = "2"
 AGENT_TOOL_READ_LIMIT = "100"
 AGENT_COMPLETION_TIMEOUT_MS = "45000"
 
-[[routes]]
+[env.staging]
+name = "ask-thane-bot-staging"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "ask-thane"
+database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"
+migrations_dir = "../../infra/d1/migrations"
+
+[env.staging.vars]
+BUILD_ENV = "staging"
+BUILD_GIT_SHA = "unknown"
+BUILD_DEPLOYED_AT = "unknown"
+DEFAULT_LLM_PROVIDER = "openai"
+DEFAULT_LLM_MODEL = "gpt-4.1-mini"
+DEFAULT_ORGANIZATION_ID = "org_0"
+THANE_BASE_URL = "https://askthane.com"
+SLACK_BOT_SCOPES = "channels:history,groups:history,im:history,mpim:history,channels:read,groups:read,im:read,mpim:read,chat:write,chat:write.public,im:write,reactions:write"
+SLACK_REDIRECT_URI = "https://bot-staging.askthane.com/slack/oauth/callback"
+AGENT_MAX_TOOL_TURNS = "8"
+AGENT_COMPLETION_RETRIES = "2"
+AGENT_TOOL_READ_LIMIT = "100"
+AGENT_COMPLETION_TIMEOUT_MS = "45000"
+
+[env.production]
+name = "ask-thane-bot"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "ask-thane"
+database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"
+migrations_dir = "../../infra/d1/migrations"
+
+[env.production.vars]
+BUILD_ENV = "production"
+BUILD_GIT_SHA = "unknown"
+BUILD_DEPLOYED_AT = "unknown"
+DEFAULT_LLM_PROVIDER = "openai"
+DEFAULT_LLM_MODEL = "gpt-4.1-mini"
+DEFAULT_ORGANIZATION_ID = "org_0"
+THANE_BASE_URL = "https://askthane.com"
+SLACK_BOT_SCOPES = "channels:history,groups:history,im:history,mpim:history,channels:read,groups:read,im:read,mpim:read,chat:write,chat:write.public,im:write,reactions:write"
+SLACK_REDIRECT_URI = "https://bot.askthane.com/slack/oauth/callback"
+AGENT_MAX_TOOL_TURNS = "8"
+AGENT_COMPLETION_RETRIES = "2"
+AGENT_TOOL_READ_LIMIT = "100"
+AGENT_COMPLETION_TIMEOUT_MS = "45000"
+
+[[env.production.routes]]
 pattern = "bot.askthane.com"
 custom_domain = true

@@ -54,6 +54,7 @@ Instead of asking people to maintain Jira/Linear-style tickets manually, Thane l
 - Reminder digests and follow-up jobs.
 - Multi-workspace token storage (`slack_workspace_installs`).
 - Admin endpoints for poll/reminders/followups/ops/evals/usage.
+- Build metadata endpoint (`/build-info`) on bot/api/payments workers.
 
 ### Prototype-grade / still evolving
 - Mention-reply reliability and Slack event operational hardening.
@@ -117,6 +118,16 @@ pnpm dev:landing
 - `pnpm typecheck`
 - `pnpm lint`
 - `pnpm test`
+
+## Deploy Flow
+- `master` pushes auto-deploy changed worker apps to staging via:
+  - `.github/workflows/deploy-workers-staging.yml`
+- Production deploys are manual via:
+  - `.github/workflows/deploy-workers-production.yml`
+- Configure GitHub Environments:
+  - `staging` with `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
+  - `production` with `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
+- Add required reviewers on the `production` environment for approval gating.
 
 ## Key Docs
 - Setup/env/Cloudflare checklist:

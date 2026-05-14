@@ -5,6 +5,9 @@ import { ingestMessageForTasks } from "@ask-thane/workflows";
 
 export interface BotEnv {
   DB: D1Database;
+  BUILD_ENV?: string;
+  BUILD_GIT_SHA?: string;
+  BUILD_DEPLOYED_AT?: string;
   DEFAULT_LLM_PROVIDER?: "openai" | "anthropic";
   DEFAULT_LLM_MODEL?: string;
   OPENAI_API_KEY?: string;

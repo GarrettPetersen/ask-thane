@@ -15,6 +15,16 @@ import { pollSlackWorkspacesForTasks } from "./services/slack-poller";
 import { SlackInstallStore } from "./services/slack-install-store";
 import type { BotEnv } from "./services/task-inference";
 
+function getBuildInfo(env: BotEnv) {
+  return {
+    ok: true,
+    service: "ask-thane-bot",
+    environment: env.BUILD_ENV ?? "unknown",
+    gitSha: env.BUILD_GIT_SHA ?? "unknown",
+    deployedAt: env.BUILD_DEPLOYED_AT ?? "unknown"
+  };
+}
+
 async function sendReminders(env: BotEnv): Promise<void> {
   await runScheduledReminderDigests(env);
 }
@@ -214,6 +224,10 @@ export default {
 
     if (pathname === "/health") {
       return healthcheck();
+    }
+
+    if (pathname === "/build-info") {
+      return Response.json(getBuildInfo(env), { status: 200 });
     }
 
     if (pathname === "/webhooks/slack/events" && request.method === "POST") {
@@ -430,6 +444,14 @@ export default {
       }
       const diagnostics = await getSlackInstallDiagnostics(env);
       return Response.json(diagnostics, { status: 200 });
+    }
+
+    if (pathname === "/admin/build-info" && request.method === "GET") {
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
+      }
+      return Response.json(getBuildInfo(env), { status: 200 });
     }
 
     return new Response("Not Found", { status: 404 });

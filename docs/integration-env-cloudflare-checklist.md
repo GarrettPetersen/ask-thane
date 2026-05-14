@@ -17,9 +17,9 @@ This checklist is for standing up a working dev/test backend for the current cod
 - [ ] OpenAI API account (recommended first)
 - [ ] Anthropic API account (optional for now)
 - [ ] Stripe account (optional until billing work starts)
-- [ ] GitHub repo secrets for deploy automation:
-  - `CLOUDFLARE_API_TOKEN`
-  - `CLOUDFLARE_ACCOUNT_ID`
+- [ ] GitHub Environment secrets for deploy automation:
+  - Environment `staging`: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
+  - Environment `production`: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
 
 ## 2) Local env file (`.env`)
 Use `.env.example` as the template:
@@ -120,6 +120,7 @@ Verify endpoint:
 - [ ] `GET /admin/ops/summary` returns org/workspace/task/LLM/feedback metrics
 - [ ] `POST /admin/usage/aggregate` writes daily usage rows
 - [ ] `POST /admin/usage/sync-stripe` succeeds once Stripe meter names are configured
+- [ ] `GET /build-info` returns service + env + git SHA + deployed timestamp
 
 ## 5) Configure API Worker (`ask-thane-api`)
 
@@ -229,11 +230,13 @@ Reality check:
 6. [ ] Add bot to test Slack org after the above is stable.
 
 ## 12) GitHub Actions deploy workflow
-- Workflow file: `.github/workflows/deploy-workers.yml`
-- Behavior:
-  - Pushes to `master` deploy changed worker apps (`bot`, `api`, `payments`) based on path filters.
+- Staging workflow: `.github/workflows/deploy-workers-staging.yml`
+  - Pushes to `master` deploy changed worker apps (`bot`, `api`, `payments`) to Wrangler `--env staging`.
   - `landing` is intentionally excluded (Cloudflare Pages/Worker integration already handles it).
-  - Manual `workflow_dispatch` lets you force specific worker deploys.
+- Production workflow: `.github/workflows/deploy-workers-production.yml`
+  - Manual `workflow_dispatch` only.
+  - Deploy target env is Wrangler `--env production`.
+  - Attach GitHub Environment approval rules to `production` for release gating.
 
 ## Reference docs
 - Slack `conversations.members` scopes: https://api.slack.com/methods/conversations.members/test

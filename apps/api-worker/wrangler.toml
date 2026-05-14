@@ -6,3 +6,34 @@ compatibility_date = "2026-05-08"
 binding = "DB"
 database_name = "ask-thane"
 database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"
+
+[vars]
+BUILD_ENV = "local"
+BUILD_GIT_SHA = "dev"
+BUILD_DEPLOYED_AT = "local"
+
+[env.staging]
+name = "ask-thane-api-staging"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "ask-thane"
+database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"
+
+[env.staging.vars]
+BUILD_ENV = "staging"
+BUILD_GIT_SHA = "unknown"
+BUILD_DEPLOYED_AT = "unknown"
+
+[env.production]
+name = "ask-thane-api"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "ask-thane"
+database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"
+
+[env.production.vars]
+BUILD_ENV = "production"
+BUILD_GIT_SHA = "unknown"
+BUILD_DEPLOYED_AT = "unknown"

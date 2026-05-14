@@ -2,6 +2,9 @@ import { D1TaskRepository } from "@ask-thane/data";
 
 interface Env {
   DB: D1Database;
+  BUILD_ENV?: string;
+  BUILD_GIT_SHA?: string;
+  BUILD_DEPLOYED_AT?: string;
 }
 
 export default {
@@ -10,6 +13,16 @@ export default {
 
     if (url.pathname === "/health") {
       return Response.json({ ok: true, service: "ask-thane-api" });
+    }
+
+    if (url.pathname === "/build-info") {
+      return Response.json({
+        ok: true,
+        service: "ask-thane-api",
+        environment: env.BUILD_ENV ?? "unknown",
+        gitSha: env.BUILD_GIT_SHA ?? "unknown",
+        deployedAt: env.BUILD_DEPLOYED_AT ?? "unknown"
+      });
     }
 
     if (url.pathname === "/v1/tasks/open") {
