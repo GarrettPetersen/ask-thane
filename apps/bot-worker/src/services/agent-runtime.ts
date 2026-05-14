@@ -444,8 +444,28 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
           }
         }
       }
+    },
+    {
+      type: "function",
+      function: {
+        name: "finalize_user_reply",
+        description:
+          "Finalize the exact user-facing reply text. Use this as the last step after reasoning/tool usage so only this message is sent to the user.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          required: ["reply_text"],
+          properties: {
+            reply_text: { type: "string" }
+          }
+        }
+      }
     }
   ] as const;
+
+  if (mode === "passive_ingest") {
+    return tools.filter((tool) => tool.function.name !== "finalize_user_reply");
+  }
 
   if (mode === "proactive_followup") {
     return tools.filter(
@@ -466,9 +486,9 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
 function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"): string {
   const responseInstruction =
     mode === "dm_reply"
-      ? "Respond conversationally to the user in plain text. Keep it concise, helpful, and action-oriented. Never reveal internal reasoning, analysis, plans, or tool-selection rationale. Output only the final user-facing message text."
+      ? "Respond conversationally to the user in plain text. Keep it concise, helpful, and action-oriented. Reason privately, then always call finalize_user_reply with only the final user-facing message."
       : mode === "proactive_followup"
-        ? "Compose a useful proactive follow-up message in plain text using available task context."
+        ? "Compose a useful proactive follow-up message in plain text using available task context. Reason privately, then always call finalize_user_reply with only the final user-facing message."
       : "Final response must be short JSON with keys: summary, created_task_ids, updated_task_ids, notes_written, waivers_requested.";
 
   return [
@@ -712,34 +732,6 @@ function parseIsoTimestamp(value: string): string | null {
   return date.toISOString();
 }
 
-function sanitizeReplyText(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-
-  const lines = trimmed
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  if (lines.length <= 1) {
-    return lines[0] ?? trimmed;
-  }
-
-  const metaLinePattern =
-    /^(the user\b|this is\b|therefore\b|i can respond\b|i should\b|i will\b|analysis\b|reasoning\b|no task\b)/i;
-  const filtered = lines.filter((line) => !metaLinePattern.test(line));
-  if (filtered.length > 0) {
-    return filtered.join("\n").trim();
-  }
-
-  const blocks = trimmed
-    .split(/\n\s*\n/)
-    .map((block) => block.trim())
-    .filter((block) => block.length > 0);
-  return (blocks[blocks.length - 1] ?? trimmed).trim();
-}
-
 async function sleepMs(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -836,7 +828,8 @@ async function executeTool(
   ctx: ToolContext,
   updatedTaskIds: Set<string>,
   notesWrittenCountRef: { count: number },
-  waiversRequestedCountRef: { count: number }
+  waiversRequestedCountRef: { count: number },
+  finalReplyRef: { text?: string; finalized: boolean }
 ): Promise<Record<string, unknown>> {
   let args: Record<string, unknown> = {};
   try {
@@ -860,6 +853,16 @@ async function executeTool(
   const readLimitMax = clampEnvNumber(ctx.env.AGENT_TOOL_READ_LIMIT, 100, 20, 500);
 
   switch (toolCall.function.name) {
+    case "finalize_user_reply": {
+      const replyText = typeof args.reply_text === "string" ? args.reply_text.trim() : "";
+      if (!replyText) {
+        return { ok: false, error: "reply_text_required" };
+      }
+      finalReplyRef.text = replyText;
+      finalReplyRef.finalized = true;
+      return { ok: true, finalized: true };
+    }
+
     case "record_feedback": {
       const feedbackType =
         args.feedback_type === "not_a_task" ||
@@ -1835,6 +1838,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
   const updatedTaskIds = new Set<string>();
   const notesWrittenCountRef = { count: 0 };
   const waiversRequestedCountRef = { count: 0 };
+  const finalReplyRef: { text?: string; finalized: boolean } = { finalized: false };
   let usedTools = false;
   let finalSummary: string | undefined;
   let replyText: string | undefined;
@@ -1863,7 +1867,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     ...(botUserId ? { botExternalUserId: botUserId } : {})
   };
 
-  for (let turn = 0; turn < maxTurns; turn += 1) {
+  agent_loop: for (let turn = 0; turn < maxTurns; turn += 1) {
     const selectedModel = input.env.DEFAULT_LLM_MODEL ?? "gpt-4.1-mini";
     const payload = await callChatCompletionWithRetry({
       env: input.env,
@@ -1902,7 +1906,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     if (toolCalls.length === 0) {
       if (typeof assistantMessage.content === "string" && assistantMessage.content.trim()) {
         const content = assistantMessage.content.trim();
-        if (interactionMode === "dm_reply") {
+        if (interactionMode === "dm_reply" || interactionMode === "proactive_followup") {
           replyText = content;
         } else {
           finalSummary = content;
@@ -1916,7 +1920,14 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     for (const toolCall of toolCalls) {
       let result: Record<string, unknown>;
       try {
-        result = await executeTool(toolCall, ctx, updatedTaskIds, notesWrittenCountRef, waiversRequestedCountRef);
+        result = await executeTool(
+          toolCall,
+          ctx,
+          updatedTaskIds,
+          notesWrittenCountRef,
+          waiversRequestedCountRef,
+          finalReplyRef
+        );
       } catch (error) {
         result = {
           ok: false,
@@ -1930,6 +1941,10 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
         tool_call_id: toolCall.id,
         content: JSON.stringify(result)
       });
+
+      if (finalReplyRef.finalized && (interactionMode === "dm_reply" || interactionMode === "proactive_followup")) {
+        break agent_loop;
+      }
     }
   }
 
@@ -1954,8 +1969,10 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     result.finalSummary = finalSummary;
   }
 
-  if (replyText) {
-    result.replyText = sanitizeReplyText(replyText);
+  if (finalReplyRef.text && (interactionMode === "dm_reply" || interactionMode === "proactive_followup")) {
+    result.replyText = finalReplyRef.text;
+  } else if (replyText && (interactionMode === "dm_reply" || interactionMode === "proactive_followup")) {
+    result.replyText = replyText;
   }
 
   return result;
