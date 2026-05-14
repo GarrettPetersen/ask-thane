@@ -17,6 +17,9 @@ This checklist is for standing up a working dev/test backend for the current cod
 - [ ] OpenAI API account (recommended first)
 - [ ] Anthropic API account (optional for now)
 - [ ] Stripe account (optional until billing work starts)
+- [ ] GitHub repo secrets for deploy automation:
+  - `CLOUDFLARE_API_TOKEN`
+  - `CLOUDFLARE_ACCOUNT_ID`
 
 ## 2) Local env file (`.env`)
 Use `.env.example` as the template:
@@ -224,6 +227,13 @@ Reality check:
 4. [ ] Add OpenAI key (and Anthropic optionally).
 5. [ ] Deploy payments worker + Stripe webhook only when you start billing flows.
 6. [ ] Add bot to test Slack org after the above is stable.
+
+## 12) GitHub Actions deploy workflow
+- Workflow file: `.github/workflows/deploy-workers.yml`
+- Behavior:
+  - Pushes to `master` deploy changed worker apps (`bot`, `api`, `payments`) based on path filters.
+  - `landing` is intentionally excluded (Cloudflare Pages/Worker integration already handles it).
+  - Manual `workflow_dispatch` lets you force specific worker deploys.
 
 ## Reference docs
 - Slack `conversations.members` scopes: https://api.slack.com/methods/conversations.members/test
