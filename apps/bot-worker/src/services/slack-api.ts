@@ -13,6 +13,10 @@ export interface SlackHistoryMessage {
   reactions?: SlackReaction[];
 }
 
+interface SlackSingleMessageLookupResult {
+  message: SlackHistoryMessage | null;
+}
+
 interface SlackHistoryResponse {
   ok?: boolean;
   error?: string;
@@ -134,6 +138,7 @@ export async function postSlackMessage(input: {
   botToken: string;
   channelId: string;
   text: string;
+  threadTs?: string;
 }): Promise<{ channelId: string; ts: string }> {
   const response = await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
@@ -143,7 +148,8 @@ export async function postSlackMessage(input: {
     },
     body: JSON.stringify({
       channel: input.channelId,
-      text: input.text
+      text: input.text,
+      ...(input.threadTs ? { thread_ts: input.threadTs } : {})
     })
   });
 
@@ -159,6 +165,39 @@ export async function postSlackMessage(input: {
   return {
     channelId: payload.channel,
     ts: payload.ts
+  };
+}
+
+export async function fetchSlackMessageByTs(input: {
+  botToken: string;
+  channelId: string;
+  messageTs: string;
+}): Promise<SlackSingleMessageLookupResult> {
+  const params = new URLSearchParams({
+    channel: input.channelId,
+    oldest: input.messageTs,
+    latest: input.messageTs,
+    inclusive: "true",
+    limit: "1"
+  });
+
+  const response = await fetch(`https://slack.com/api/conversations.history?${params.toString()}`, {
+    headers: {
+      Authorization: `Bearer ${input.botToken}`
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`slack_message_lookup_http_error:${response.status}`);
+  }
+
+  const payload = (await response.json()) as SlackHistoryResponse;
+  if (!payload.ok) {
+    throw new Error(`slack_message_lookup_error:${payload.error ?? "unknown"}`);
+  }
+
+  return {
+    message: (payload.messages ?? [])[0] ?? null
   };
 }
 

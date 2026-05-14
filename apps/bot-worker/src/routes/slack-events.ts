@@ -6,7 +6,7 @@ import {
   type SlackEnvelope
 } from "@ask-thane/integrations";
 import { runConversationalAgentForSlackMessage } from "../services/agent-runtime";
-import { addSlackReaction, postSlackMessage } from "../services/slack-api";
+import { addSlackReaction, fetchSlackMessageByTs, postSlackMessage } from "../services/slack-api";
 import { mapTaskActionTypesToSlackReactions } from "../services/slack-task-reactions";
 import type { BotEnv } from "../services/task-inference";
 import { ConversationAccessResolver } from "../services/conversation-access";
@@ -14,13 +14,118 @@ import { OrgRegistry } from "../services/org-registry";
 import { SlackInstallStore } from "../services/slack-install-store";
 import { verifySlackRequestSignature } from "../services/slack-signature";
 
-async function resolveSlackBotToken(input: {
+async function resolveSlackInstall(input: {
   env: BotEnv;
   externalWorkspaceId: string;
-}): Promise<string | null> {
+}): Promise<{ botToken: string | null; botUserId?: string }> {
   const installStore = new SlackInstallStore(input.env.DB);
-  const installedToken = await installStore.getBotTokenByExternalWorkspaceId(input.externalWorkspaceId);
-  return installedToken ?? input.env.SLACK_BOT_TOKEN ?? null;
+  const install = await installStore.getInstallByExternalWorkspaceId(input.externalWorkspaceId);
+  if (install?.botToken) {
+    return {
+      botToken: install.botToken,
+      ...(install.botUserId ? { botUserId: install.botUserId } : {})
+    };
+  }
+  return { botToken: input.env.SLACK_BOT_TOKEN ?? null };
+}
+
+function normalizeForAddressing(input: string): string[] {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length > 0);
+}
+
+function editDistance(a: string, b: string): number {
+  if (a === b) {
+    return 0;
+  }
+  if (!a.length) {
+    return b.length;
+  }
+  if (!b.length) {
+    return a.length;
+  }
+  const dp: number[][] = Array.from({ length: a.length + 1 }, (_, i) => Array.from({ length: b.length + 1 }, (_, j) => i + j));
+  for (let i = 0; i <= a.length; i += 1) {
+    dp[i]![0] = i;
+  }
+  for (let j = 0; j <= b.length; j += 1) {
+    dp[0]![j] = j;
+  }
+  for (let i = 1; i <= a.length; i += 1) {
+    for (let j = 1; j <= b.length; j += 1) {
+      const substitution = dp[i - 1]![j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1);
+      const deletion = dp[i - 1]![j]! + 1;
+      const insertion = dp[i]![j - 1]! + 1;
+      dp[i]![j] = Math.min(substitution, deletion, insertion);
+    }
+  }
+  return dp[a.length]![b.length]!;
+}
+
+function hasBotNameCue(text: string): boolean {
+  const tokens = normalizeForAddressing(text);
+  if (tokens.length === 0) {
+    return false;
+  }
+  for (const token of tokens.slice(0, 6)) {
+    if (token === "thane") {
+      return true;
+    }
+    if (token.length >= 4 && token.length <= 8 && editDistance(token, "thane") <= 2) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function shouldRespondToMessage(input: {
+  env: BotEnv;
+  payload: SlackEnvelope;
+  externalWorkspaceId: string;
+  channelId: string;
+  messageTs: string;
+  text: string;
+  conversationKind: "public_channel" | "private_channel" | "group_dm" | "dm";
+}): Promise<boolean> {
+  if (input.conversationKind === "dm") {
+    return true;
+  }
+
+  const install = await resolveSlackInstall({
+    env: input.env,
+    externalWorkspaceId: input.externalWorkspaceId
+  });
+  const botUserId = install.botUserId;
+  const botMentioned = Boolean(botUserId && input.text.includes(`<@${botUserId}>`));
+  if (botMentioned || hasBotNameCue(input.text)) {
+    return true;
+  }
+
+  const threadTs = (input.payload.event as { thread_ts?: string } | undefined)?.thread_ts?.trim();
+  if (threadTs && threadTs !== input.messageTs && botUserId && install.botToken) {
+    try {
+      const parent = await fetchSlackMessageByTs({
+        botToken: install.botToken,
+        channelId: input.channelId,
+        messageTs: threadTs
+      });
+      if (parent.message?.user === botUserId) {
+        return true;
+      }
+    } catch (error) {
+      console.warn("slack_parent_message_lookup_failed", {
+        externalWorkspaceId: input.externalWorkspaceId,
+        channelId: input.channelId,
+        threadTs,
+        reason: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  return false;
 }
 
 export async function handleSlackEvents(request: Request, env: BotEnv): Promise<Response> {
@@ -156,8 +261,19 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
   let tasksCreatedByAgent = 0;
   let taskActionTypes: ReturnType<typeof mapTaskActionTypesToSlackReactions> = [];
   let agentSummary: string | undefined;
+  let shouldRespond = false;
 
   try {
+    shouldRespond = await shouldRespondToMessage({
+      env,
+      payload,
+      externalWorkspaceId,
+      channelId: event.channelId,
+      messageTs: event.messageId,
+      text: event.text,
+      conversationKind: conversationMeta.conversationKind
+    });
+
     const agentRun = await runConversationalAgentForSlackMessage({
       env,
       organizationId,
@@ -168,20 +284,23 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
         ...event,
         workspaceId: workspaceRef.workspaceId
       },
-      interactionMode: conversationMeta.conversationKind === "dm" ? "dm_reply" : "passive_ingest"
+      interactionMode: shouldRespond ? "dm_reply" : "passive_ingest"
     });
     agentUsed = agentRun.usedTools;
     tasksCreatedByAgent = agentRun.createdTaskIds.length;
     taskActionTypes = mapTaskActionTypesToSlackReactions(agentRun.taskActionTypes);
     agentSummary = agentRun.finalSummary;
 
-    if (conversationMeta.conversationKind === "dm" && agentRun.replyText) {
-      const token = await resolveSlackBotToken({ env, externalWorkspaceId });
+    if (shouldRespond && agentRun.replyText) {
+      const install = await resolveSlackInstall({ env, externalWorkspaceId });
+      const token = install.botToken;
       if (token) {
+        const threadTs = (payload.event as { thread_ts?: string } | undefined)?.thread_ts?.trim();
         await postSlackMessage({
           botToken: token,
           channelId: event.channelId,
-          text: agentRun.replyText
+          text: agentRun.replyText,
+          ...(threadTs && threadTs !== event.messageId ? { threadTs } : {})
         });
       }
     }
@@ -201,7 +320,8 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
   }
 
   if (taskActionTypes.length > 0) {
-    const token = await resolveSlackBotToken({ env, externalWorkspaceId });
+    const install = await resolveSlackInstall({ env, externalWorkspaceId });
+    const token = install.botToken;
     if (token) {
       for (const reaction of taskActionTypes) {
         try {

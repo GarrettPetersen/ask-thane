@@ -10,6 +10,7 @@ export interface SlackEnvelope {
     bot_id?: string;
     channel?: string;
     ts?: string;
+    thread_ts?: string;
     text?: string;
     user?: string;
     channel_type?: string;
