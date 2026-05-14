@@ -466,7 +466,7 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
 function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"): string {
   const responseInstruction =
     mode === "dm_reply"
-      ? "Respond conversationally to the user in plain text. Keep it concise, helpful, and action-oriented."
+      ? "Respond conversationally to the user in plain text. Keep it concise, helpful, and action-oriented. Never reveal internal reasoning, analysis, plans, or tool-selection rationale. Output only the final user-facing message text."
       : mode === "proactive_followup"
         ? "Compose a useful proactive follow-up message in plain text using available task context."
       : "Final response must be short JSON with keys: summary, created_task_ids, updated_task_ids, notes_written, waivers_requested.";
@@ -710,6 +710,34 @@ function parseIsoTimestamp(value: string): string | null {
     return null;
   }
   return date.toISOString();
+}
+
+function sanitizeReplyText(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length <= 1) {
+    return lines[0] ?? trimmed;
+  }
+
+  const metaLinePattern =
+    /^(the user\b|this is\b|therefore\b|i can respond\b|i should\b|i will\b|analysis\b|reasoning\b|no task\b)/i;
+  const filtered = lines.filter((line) => !metaLinePattern.test(line));
+  if (filtered.length > 0) {
+    return filtered.join("\n").trim();
+  }
+
+  const blocks = trimmed
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0);
+  return (blocks[blocks.length - 1] ?? trimmed).trim();
 }
 
 async function sleepMs(ms: number): Promise<void> {
@@ -1927,7 +1955,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
   }
 
   if (replyText) {
-    result.replyText = replyText;
+    result.replyText = sanitizeReplyText(replyText);
   }
 
   return result;
