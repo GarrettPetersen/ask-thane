@@ -50,6 +50,10 @@ AGENT_COMPLETION_RETRIES = "2"
 AGENT_TOOL_READ_LIMIT = "100"
 AGENT_COMPLETION_TIMEOUT_MS = "45000"
 
+[[env.staging.routes]]
+pattern = "bot-staging.askthane.com"
+custom_domain = true
+
 [env.production]
 name = "ask-thane-bot"
 
