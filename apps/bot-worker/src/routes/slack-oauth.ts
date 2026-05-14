@@ -5,6 +5,22 @@ import type { BotEnv } from "../services/task-inference";
 const DEFAULT_SCOPES =
   "channels:history,groups:history,im:history,mpim:history,channels:read,groups:read,im:read,mpim:read,chat:write,chat:write.public,im:write,reactions:write";
 const STATE_TTL_MS = 10 * 60 * 1000;
+const RECOMMENDED_SCOPES = [
+  "app_mentions:read",
+  "channels:history",
+  "channels:read",
+  "chat:write",
+  "groups:history",
+  "groups:read",
+  "im:history",
+  "im:read",
+  "im:write",
+  "mpim:read",
+  "reactions:read",
+  "reactions:write",
+  "team:read",
+  "users:read"
+];
 
 interface StatePayload {
   ts: number;
@@ -188,6 +204,17 @@ function resolveRedirectUri(request: Request, env: BotEnv): string {
   }
 
   return `${new URL(request.url).origin}/slack/oauth/callback`;
+}
+
+function getMissingRecommendedScopes(scopeCsv: string | undefined): string[] {
+  const configured = new Set<string>();
+  for (const rawScope of (scopeCsv ?? "").split(",")) {
+    const scope = rawScope.trim();
+    if (scope) {
+      configured.add(scope);
+    }
+  }
+  return RECOMMENDED_SCOPES.filter((scope) => !configured.has(scope));
 }
 
 export async function handleSlackInstallStart(request: Request, env: BotEnv): Promise<Response> {
@@ -393,6 +420,7 @@ export async function handleSlackOAuthCallback(request: Request, env: BotEnv): P
     installInput.installedByExternalUserId = payload.authed_user.id;
   }
   await installs.upsertWorkspaceInstall(installInput);
+  const missingScopes = getMissingRecommendedScopes(payload.scope);
 
   if (wantsHtml(request)) {
     return renderInstallPage({
@@ -402,6 +430,7 @@ export async function handleSlackOAuthCallback(request: Request, env: BotEnv): P
       details: [
         `Team: ${payload.team.name ?? payload.team.id}`,
         `External workspace ID: ${payload.team.id}`,
+        ...(missingScopes.length > 0 ? [`Missing recommended scopes: ${missingScopes.join(", ")}`] : []),
         "You can now add Thane to channels and continue backend setup."
       ]
     });
@@ -414,7 +443,8 @@ export async function handleSlackOAuthCallback(request: Request, env: BotEnv): P
       organizationId: workspaceRef.organizationId,
       workspaceId: workspaceRef.workspaceId,
       externalWorkspaceId: payload.team.id,
-      teamName: payload.team.name ?? null
+      teamName: payload.team.name ?? null,
+      missingRecommendedScopes: missingScopes
     },
     { status: 200 }
   );

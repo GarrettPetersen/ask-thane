@@ -39,10 +39,15 @@ Fill these values:
 - [ ] `SLACK_BOT_SCOPES` (optional override; defaults exist in worker config)
 - [ ] `STRIPE_SECRET_KEY` (optional currently)
 - [ ] `STRIPE_WEBHOOK_SECRET` (optional currently)
+- [ ] `STRIPE_METER_NAME_ACTIVE_USERS` (if using Stripe metered billing)
+- [ ] `STRIPE_METER_NAME_ACTIVE_CHANNELS` (if using Stripe metered billing)
+- [ ] `STRIPE_METER_NAME_TASK_EVENTS` (if using Stripe metered billing)
 - [ ] `DEFAULT_LLM_PROVIDER` (default `openai`)
 - [ ] `DEFAULT_LLM_MODEL` (default `gpt-4.1-mini`)
 - [ ] `DEFAULT_ORGANIZATION_ID` (default `org_0`)
 - [ ] `ADMIN_TRIGGER_TOKEN` (for protected manual poll/status endpoints)
+- [ ] `ADMIN_HMAC_KEYS` (optional stronger admin auth: `keyId:secret,keyId2:secret2`)
+- [ ] `ADMIN_HMAC_MAX_SKEW_SECONDS` (optional, default `300`)
 
 Notes:
 - `.env` is for local workflows and your own reference.
@@ -72,6 +77,9 @@ npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0003
 npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0004_waitlist-signups.sql
 npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0005-identity-notes-task-actions-and-waivers.sql
 npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0006-workspace-poll-cursors.sql
+npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0007-user-notification-cadences-and-digest-deliveries.sql
+npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0008-follow-up-jobs.sql
+npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0009-observability-feedback-and-billing.sql
 ```
 
 ## 4) Configure bot Worker (`ask-thane-bot`)
@@ -105,6 +113,10 @@ Verify endpoint:
 - [ ] `POST /webhooks/slack/events` is reachable
 - [ ] `POST /admin/poll/run` works with `Authorization: Bearer <ADMIN_TRIGGER_TOKEN>`
 - [ ] `GET /admin/poll/status` works with `Authorization: Bearer <ADMIN_TRIGGER_TOKEN>`
+- [ ] `GET /admin/slack/installs/diagnostics` works and reports `authTest.ok=true` for your workspace install
+- [ ] `GET /admin/ops/summary` returns org/workspace/task/LLM/feedback metrics
+- [ ] `POST /admin/usage/aggregate` writes daily usage rows
+- [ ] `POST /admin/usage/sync-stripe` succeeds once Stripe meter names are configured
 
 ## 5) Configure API Worker (`ask-thane-api`)
 
@@ -153,6 +165,7 @@ In Slack app settings:
 - [ ] Open install URL and complete install:
   - `https://<your-bot-worker-domain>/slack/install`
 - [ ] Confirm install record exists in D1 table `slack_workspace_installs`.
+- [ ] Confirm callback output has `missingRecommendedScopes: []` (or add missing scopes and reinstall).
 
 ### Bot token scopes (for current code path)
 - [ ] `channels:read`

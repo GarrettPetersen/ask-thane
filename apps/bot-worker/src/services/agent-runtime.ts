@@ -48,6 +48,11 @@ interface ChatCompletionResponse {
     code?: string;
     type?: string;
   };
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
 }
 
 interface AgentRunResult {
@@ -373,6 +378,28 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
     {
       type: "function",
       function: {
+        name: "record_feedback",
+        description:
+          "Record a user correction or quality signal about task tracking (for example not-a-task, wrong-assignee, wrong-status).",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          required: ["feedback_type"],
+          properties: {
+            feedback_type: {
+              type: "string",
+              enum: ["not_a_task", "wrong_assignee", "wrong_status", "wrong_priority", "other"]
+            },
+            task_id: { type: "string" },
+            note: { type: "string" },
+            details: { type: "object" }
+          }
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
         name: "get_notification_cadence",
         description: "Read the actor user's current reminder cadence for task digests.",
         parameters: {
@@ -425,6 +452,7 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
       (tool) =>
         tool.function.name !== "create_task" &&
         tool.function.name !== "update_task" &&
+        tool.function.name !== "record_feedback" &&
         tool.function.name !== "write_note" &&
         tool.function.name !== "request_permission_waiver" &&
         tool.function.name !== "set_notification_cadence" &&
@@ -460,6 +488,7 @@ function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"
     "Counter-example: 'I need to pick up my kids' in a work channel is usually context/explanation, not a trackable org task.",
     "If one clause closes or changes an existing task and another clause introduces remaining or new work, emit both update_task and create_task actions.",
     "If someone reports completed work and no matching task exists, you may create a historical task and immediately mark it done so completion is tracked.",
+    "When users correct Thane (for example not-a-task, wrong assignee, wrong status), record this feedback with record_feedback and then make corrective task updates when possible.",
     "Examples: 'I am done the dishes, but I still need to water the gnomes' => mark_done(dishes) + create_task(water gnomes) if missing.",
     "Examples: 'I'm done watering the gnomes, but I still need to elevate the cake and bloviate the sneed' => mark_done(water gnomes) + create_task(elevate cake) + create_task(bloviate sneed).",
     "Examples: 'I froze the beef last night' should update existing freeze-beef task to done when a matching open task exists.",
@@ -731,6 +760,49 @@ async function callChatCompletionWithRetry(input: {
   throw lastError ?? new Error("agent_completion_failed:unknown");
 }
 
+async function recordLlmUsageEvent(input: {
+  env: BotEnv;
+  organizationId: string;
+  workspaceId: string;
+  conversationSourceId: string;
+  sourceMessageId: string;
+  model: string;
+  interactionMode: "passive_ingest" | "dm_reply" | "proactive_followup";
+  payload: ChatCompletionResponse;
+}): Promise<void> {
+  const usage = input.payload.usage;
+  if (!usage) {
+    return;
+  }
+
+  const promptTokens = Number(usage.prompt_tokens ?? 0);
+  const completionTokens = Number(usage.completion_tokens ?? 0);
+  const totalTokens = Number(usage.total_tokens ?? promptTokens + completionTokens);
+
+  await input.env.DB
+    .prepare(
+      `INSERT INTO llm_usage_events (
+         id, organization_id, workspace_id, provider, model, prompt_tokens, completion_tokens,
+         total_tokens, request_type, source, source_message_id, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      crypto.randomUUID(),
+      input.organizationId,
+      input.workspaceId,
+      "openai",
+      input.model,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      input.interactionMode,
+      input.conversationSourceId,
+      input.sourceMessageId,
+      new Date().toISOString()
+    )
+    .run();
+}
+
 async function executeTool(
   toolCall: ChatCompletionToolCall,
   ctx: ToolContext,
@@ -746,6 +818,7 @@ async function executeTool(
   }
 
   const writeTools = new Set([
+    "record_feedback",
     "write_note",
     "create_task",
     "update_task",
@@ -759,6 +832,52 @@ async function executeTool(
   const readLimitMax = clampEnvNumber(ctx.env.AGENT_TOOL_READ_LIMIT, 100, 20, 500);
 
   switch (toolCall.function.name) {
+    case "record_feedback": {
+      const feedbackType =
+        args.feedback_type === "not_a_task" ||
+        args.feedback_type === "wrong_assignee" ||
+        args.feedback_type === "wrong_status" ||
+        args.feedback_type === "wrong_priority" ||
+        args.feedback_type === "other"
+          ? args.feedback_type
+          : null;
+      if (!feedbackType) {
+        return { ok: false, error: "invalid_feedback_type" };
+      }
+
+      const taskId = typeof args.task_id === "string" && args.task_id.trim() ? args.task_id.trim() : null;
+      const note = typeof args.note === "string" && args.note.trim() ? args.note.trim() : null;
+      const details =
+        typeof args.details === "object" && args.details !== null
+          ? (args.details as Record<string, unknown>)
+          : {};
+
+      await ctx.env.DB
+        .prepare(
+          `INSERT INTO task_feedback (
+             id, organization_id, workspace_id, conversation_source_id, source_message_id, task_id,
+             feedback_type, details_json, actor_platform, actor_id, actor_user_id, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          crypto.randomUUID(),
+          ctx.organizationId,
+          ctx.workspaceId,
+          ctx.currentConversationSourceId,
+          ctx.event.messageId,
+          taskId,
+          feedbackType,
+          JSON.stringify({ ...(note ? { note } : {}), ...details }),
+          "slack",
+          ctx.actorExternalUserId,
+          ctx.actorInternalUserId,
+          new Date().toISOString()
+        )
+        .run();
+
+      return { ok: true, feedback_type: feedbackType, task_id: taskId };
+    }
+
     case "search_tasks": {
       const searchInput: AclTaskSearchInput = {
         organizationId: ctx.organizationId,
@@ -1717,16 +1836,27 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
   };
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
+    const selectedModel = input.env.DEFAULT_LLM_MODEL ?? "gpt-4.1-mini";
     const payload = await callChatCompletionWithRetry({
       env: input.env,
       body: {
-        model: input.env.DEFAULT_LLM_MODEL ?? "gpt-4.1-mini",
+        model: selectedModel,
         temperature: 0,
         tool_choice: "auto",
         parallel_tool_calls: false,
         tools: toolDefinitions(interactionMode),
         messages
       }
+    });
+    await recordLlmUsageEvent({
+      env: input.env,
+      organizationId: input.organizationId,
+      workspaceId: input.workspaceId,
+      conversationSourceId: input.conversationSourceId,
+      sourceMessageId: input.event.messageId,
+      model: selectedModel,
+      interactionMode,
+      payload
     });
 
     const assistantMessage = payload.choices?.[0]?.message;

@@ -2,8 +2,13 @@ import { D1TaskRepository } from "@ask-thane/data";
 import { healthcheck } from "./routes/health";
 import { handleSlackEvents } from "./routes/slack-events";
 import { handleSlackInstallStart, handleSlackOAuthCallback } from "./routes/slack-oauth";
+import { isAdminAuthorized } from "./services/admin-auth";
+import { aggregateDailyUsage, getUsageStatus, syncUsageToStripe } from "./services/billing-usage";
 import { ConversationAccessResolver } from "./services/conversation-access";
+import { runEvalReplay } from "./services/eval-harness";
 import { runScheduledFollowUpJobs } from "./services/follow-up-jobs";
+import { getSlackInstallDiagnostics } from "./services/onboarding-diagnostics";
+import { getOpsSummary, getWorkspaceOpsSummary } from "./services/ops-dashboard";
 import { runScheduledReminderDigests, runWorkspaceReminderDigestsNow } from "./services/reminder-digests";
 import { pollSlackWorkspacesForTasks } from "./services/slack-poller";
 import { SlackInstallStore } from "./services/slack-install-store";
@@ -90,22 +95,20 @@ async function runSlackPollWithMembershipRefresh(env: BotEnv) {
   return pollSlackWorkspacesForTasks(env);
 }
 
-function isAdminAuthorized(request: Request, env: BotEnv): boolean {
-  const requiredToken = env.ADMIN_TRIGGER_TOKEN?.trim();
-  if (!requiredToken) {
-    return false;
+async function requireAdmin(request: Request, env: BotEnv): Promise<Response | null> {
+  if (await isAdminAuthorized(request, env)) {
+    return null;
   }
+  return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+}
 
-  const authHeader = request.headers.get("authorization") ?? "";
-  if (authHeader.startsWith("Bearer ")) {
-    const bearer = authHeader.slice("Bearer ".length).trim();
-    if (bearer && bearer === requiredToken) {
-      return true;
-    }
+async function parseJsonBody<T>(request: Request): Promise<{ ok: true; value: T } | { ok: false; response: Response }> {
+  try {
+    const payload = (await request.json()) as T;
+    return { ok: true, value: payload };
+  } catch {
+    return { ok: false, response: Response.json({ ok: false, error: "invalid_json_body" }, { status: 400 }) };
   }
-
-  const headerToken = request.headers.get("x-admin-token")?.trim();
-  return Boolean(headerToken && headerToken === requiredToken);
 }
 
 async function getPollStatus(env: BotEnv): Promise<Record<string, unknown>> {
@@ -187,7 +190,8 @@ async function getFollowUpStatus(env: BotEnv): Promise<Record<string, unknown>> 
 
 export default {
   async fetch(request: Request, env: BotEnv): Promise<Response> {
-    const { pathname } = new URL(request.url);
+    const url = new URL(request.url);
+    const { pathname } = url;
 
     if (pathname === "/health") {
       return healthcheck();
@@ -206,47 +210,51 @@ export default {
     }
 
     if (pathname === "/admin/poll/run" && request.method === "POST") {
-      if (!isAdminAuthorized(request, env)) {
-        return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
       }
       const summary = await runSlackPollWithMembershipRefresh(env);
       return Response.json({ ok: true, summary }, { status: 200 });
     }
 
     if (pathname === "/admin/poll/status" && request.method === "GET") {
-      if (!isAdminAuthorized(request, env)) {
-        return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
       }
       const status = await getPollStatus(env);
       return Response.json(status, { status: 200 });
     }
 
     if (pathname === "/admin/reminders/run" && request.method === "POST") {
-      if (!isAdminAuthorized(request, env)) {
-        return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
       }
       const summary = await runScheduledReminderDigests(env);
       return Response.json({ ok: true, summary }, { status: 200 });
     }
 
     if (pathname === "/admin/reminders/status" && request.method === "GET") {
-      if (!isAdminAuthorized(request, env)) {
-        return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
       }
       const status = await getDigestStatus(env);
       return Response.json(status, { status: 200 });
     }
 
     if (pathname === "/admin/reminders/run-workspace" && request.method === "POST") {
-      if (!isAdminAuthorized(request, env)) {
-        return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
       }
-      let payload: { workspaceId?: string; includeAllWorkspaceUsers?: boolean } = {};
-      try {
-        payload = (await request.json()) as { workspaceId?: string; includeAllWorkspaceUsers?: boolean };
-      } catch {
-        return Response.json({ ok: false, error: "invalid_json_body" }, { status: 400 });
+      const parsed = await parseJsonBody<{ workspaceId?: string; includeAllWorkspaceUsers?: boolean }>(request);
+      if (!parsed.ok) {
+        return parsed.response;
       }
+      const payload = parsed.value;
 
       const workspaceId = typeof payload.workspaceId === "string" ? payload.workspaceId.trim() : "";
       if (!workspaceId) {
@@ -262,19 +270,132 @@ export default {
     }
 
     if (pathname === "/admin/followups/run" && request.method === "POST") {
-      if (!isAdminAuthorized(request, env)) {
-        return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
       }
       const summary = await runScheduledFollowUpJobs(env);
       return Response.json({ ok: true, summary }, { status: 200 });
     }
 
     if (pathname === "/admin/followups/status" && request.method === "GET") {
-      if (!isAdminAuthorized(request, env)) {
-        return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
       }
       const status = await getFollowUpStatus(env);
       return Response.json(status, { status: 200 });
+    }
+
+    if (pathname === "/admin/ops/summary" && request.method === "GET") {
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
+      }
+      const summary = await getOpsSummary(env);
+      return Response.json(summary, { status: 200 });
+    }
+
+    if (pathname === "/admin/ops/workspace" && request.method === "GET") {
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
+      }
+      const workspaceId = url.searchParams.get("workspaceId")?.trim() ?? "";
+      if (!workspaceId) {
+        return Response.json({ ok: false, error: "workspace_id_required" }, { status: 400 });
+      }
+      const summary = await getWorkspaceOpsSummary(env, workspaceId);
+      return Response.json(summary, { status: 200 });
+    }
+
+    if (pathname === "/admin/usage/aggregate" && request.method === "POST") {
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
+      }
+      const parsed = await parseJsonBody<{ usageDate?: string }>(request);
+      if (!parsed.ok) {
+        return parsed.response;
+      }
+      const summary = await aggregateDailyUsage(env, parsed.value.usageDate);
+      return Response.json(summary, { status: 200 });
+    }
+
+    if (pathname === "/admin/usage/sync-stripe" && request.method === "POST") {
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
+      }
+      const parsed = await parseJsonBody<{ usageDate?: string }>(request);
+      if (!parsed.ok) {
+        return parsed.response;
+      }
+      const summary = await syncUsageToStripe(env, parsed.value.usageDate);
+      return Response.json(summary, { status: (summary as { ok?: boolean }).ok ? 200 : 400 });
+    }
+
+    if (pathname === "/admin/usage/status" && request.method === "GET") {
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
+      }
+      const status = await getUsageStatus(env);
+      return Response.json(status, { status: 200 });
+    }
+
+    if (pathname === "/admin/evals/replay" && request.method === "POST") {
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
+      }
+      const parsed = await parseJsonBody<{
+        workspaceId?: string;
+        externalWorkspaceId?: string;
+        organizationId?: string;
+        cases?: Array<{
+          id: string;
+          text: string;
+          channelId?: string;
+          authorExternalUserId: string;
+          expected?: {
+            minCreated?: number;
+            maxCreated?: number;
+            expectActions?: Array<
+              "create" | "mark_done" | "mark_cancelled" | "mark_blocked" | "reopen" | "merge_into" | "edit"
+            >;
+          };
+        }>;
+      }>(request);
+      if (!parsed.ok) {
+        return parsed.response;
+      }
+      const payload = parsed.value;
+      if (!payload.workspaceId || !payload.externalWorkspaceId || !payload.organizationId || !payload.cases) {
+        return Response.json(
+          {
+            ok: false,
+            error: "workspace_id_external_workspace_id_organization_id_and_cases_required"
+          },
+          { status: 400 }
+        );
+      }
+      const summary = await runEvalReplay(env, {
+        workspaceId: payload.workspaceId,
+        externalWorkspaceId: payload.externalWorkspaceId,
+        organizationId: payload.organizationId,
+        cases: payload.cases
+      });
+      return Response.json(summary, { status: (summary as { ok?: boolean }).ok ? 200 : 400 });
+    }
+
+    if (pathname === "/admin/slack/installs/diagnostics" && request.method === "GET") {
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
+      }
+      const diagnostics = await getSlackInstallDiagnostics(env);
+      return Response.json(diagnostics, { status: 200 });
     }
 
     return new Response("Not Found", { status: 404 });
@@ -284,5 +405,6 @@ export default {
     ctx.waitUntil(sendReminders(env));
     ctx.waitUntil(runScheduledFollowUpJobs(env));
     ctx.waitUntil(runSlackPollWithMembershipRefresh(env));
+    ctx.waitUntil(aggregateDailyUsage(env));
   }
 };
