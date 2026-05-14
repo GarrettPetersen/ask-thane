@@ -322,6 +322,10 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
             title: { type: "string" },
             description: { type: "string" },
             assignee_user_id: { type: "string" },
+            assignee_user_ids: {
+              type: "array",
+              items: { type: "string" }
+            },
             urgency: { type: "string", enum: ["low", "medium", "high", "critical"] },
             difficulty: { type: "string", enum: ["low", "medium", "high"] },
             due_at: { type: "string" }
@@ -524,6 +528,7 @@ function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"
     "Examples: if someone says they finished work and no task exists, create_task(that work) + update_task(mark_done) in the same run.",
     "When assignee is not explicit, treat first-person commitments as self-assigned by default.",
     "When the task is a delegation to someone else, set assignee_user_id explicitly after using workspace people/context tools.",
+    "When work is clearly committed by a collective (for example team-level or first-person plural commitment), you may assign multiple people by using assignee_user_ids and create linked per-assignee tasks.",
     "Interpret deictic second-person address using conversation context: when the speaker addresses another participant (for example 'you' in a shared channel), do not assign to the speaker unless context explicitly indicates self-assignment.",
     "Use person-level notes and ownership patterns for disambiguation when deciding assignees in ambiguous requests.",
     "You may write person notes for other workspace participants when the message contains durable facts about them.",
@@ -671,6 +676,39 @@ async function resolveAssigneeExternalUserId(input: {
   }
 
   return { resolvedExternalUserId: trimmed, source: "raw_unresolved" };
+}
+
+async function resolveAssigneeExternalUserIds(input: {
+  requested: unknown;
+  ctx: ToolContext;
+  allowWorkspaceLookupFallback: boolean;
+}): Promise<string[]> {
+  if (!Array.isArray(input.requested)) {
+    return [];
+  }
+
+  const resolved: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of input.requested) {
+    if (typeof raw !== "string") {
+      continue;
+    }
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const candidate = await resolveAssigneeExternalUserId({
+      requested: trimmed,
+      ctx: input.ctx,
+      allowWorkspaceLookupFallback: input.allowWorkspaceLookupFallback
+    });
+    if (seen.has(candidate.resolvedExternalUserId)) {
+      continue;
+    }
+    seen.add(candidate.resolvedExternalUserId);
+    resolved.push(candidate.resolvedExternalUserId);
+  }
+  return resolved;
 }
 
 async function inferAssigneeFromConversationContext(ctx: ToolContext): Promise<string> {
@@ -1162,75 +1200,108 @@ async function executeTool(
         return { ok: false, error: "title_required" };
       }
 
-      const assigneeExternal =
-        typeof args.assignee_user_id === "string" && args.assignee_user_id.trim()
-          ? (
-              await resolveAssigneeExternalUserId({
-                requested: args.assignee_user_id,
-                ctx,
-                allowWorkspaceLookupFallback: true
-              })
-            ).resolvedExternalUserId
-          : await inferAssigneeFromConversationContext(ctx);
-
-      const task: TaskRecord = {
-        id: crypto.randomUUID(),
-        workspaceId: ctx.workspaceId,
-        primaryConversationSourceId: ctx.currentConversationSourceId,
-        channelId: ctx.event.channelId,
-        sourceMessageId: ctx.event.messageId,
-        title,
-        assignee: {
-          platform: "slack",
-          platformUserId: assigneeExternal
-        },
-        assigner: {
-          platform: "slack",
-          platformUserId: ctx.actorExternalUserId
-        },
-        createdAt: new Date().toISOString(),
-        urgency: asUrgency(args.urgency),
-        difficulty: asDifficulty(args.difficulty),
-        status: "incomplete",
-        confidence: 0.7,
-        metadata: {
-          extractor: "tool_agent_runtime",
-          message_id: ctx.event.messageId
-        }
-      };
-
-      if (typeof args.description === "string" && args.description.trim()) {
-        task.description = args.description.trim();
-      }
-      if (typeof args.due_at === "string" && args.due_at.trim()) {
-        const parsed = new Date(args.due_at);
-        if (!Number.isNaN(parsed.valueOf())) {
-          task.dueAt = parsed.toISOString();
-        }
-      }
-
-      await ctx.repo.save(task);
-      await ctx.repo.performTaskAction({
-        id: crypto.randomUUID(),
-        organizationId: ctx.organizationId,
-        workspaceId: ctx.workspaceId,
-        taskId: task.id,
-        actionType: "create",
-        actorPlatform: "slack",
-        actorId: ctx.actorExternalUserId,
-        sourceConversationSourceId: ctx.currentConversationSourceId,
-        payload: {
-          tool: "create_task",
-          source_message_id: ctx.event.messageId,
-          source_channel_id: ctx.event.channelId,
-          source_text: ctx.event.text
-        },
-        createdAt: new Date().toISOString()
+      const explicitAssignees = await resolveAssigneeExternalUserIds({
+        requested: args.assignee_user_ids,
+        ctx,
+        allowWorkspaceLookupFallback: true
       });
+      if (
+        explicitAssignees.length === 0 &&
+        typeof args.assignee_user_id === "string" &&
+        args.assignee_user_id.trim()
+      ) {
+        const single = await resolveAssigneeExternalUserId({
+          requested: args.assignee_user_id,
+          ctx,
+          allowWorkspaceLookupFallback: true
+        });
+        explicitAssignees.push(single.resolvedExternalUserId);
+      }
 
-      ctx.createdTaskIds.push(task.id);
+      const assigneeExternals =
+        explicitAssignees.length > 0 ? explicitAssignees : [await inferAssigneeFromConversationContext(ctx)];
+
+      const sharedIntentGroupId = assigneeExternals.length > 1 ? crypto.randomUUID() : null;
+      const createdTasks: TaskRecord[] = [];
+
+      for (let i = 0; i < assigneeExternals.length; i += 1) {
+        const assigneeExternal = assigneeExternals[i];
+        if (!assigneeExternal) {
+          continue;
+        }
+
+        const task: TaskRecord = {
+          id: crypto.randomUUID(),
+          workspaceId: ctx.workspaceId,
+          primaryConversationSourceId: ctx.currentConversationSourceId,
+          channelId: ctx.event.channelId,
+          sourceMessageId: ctx.event.messageId,
+          title,
+          assignee: {
+            platform: "slack",
+            platformUserId: assigneeExternal
+          },
+          assigner: {
+            platform: "slack",
+            platformUserId: ctx.actorExternalUserId
+          },
+          createdAt: new Date().toISOString(),
+          urgency: asUrgency(args.urgency),
+          difficulty: asDifficulty(args.difficulty),
+          status: "incomplete",
+          confidence: 0.7,
+          metadata: {
+            extractor: "tool_agent_runtime",
+            message_id: ctx.event.messageId,
+            ...(sharedIntentGroupId ? { shared_intent_group_id: sharedIntentGroupId } : {}),
+            ...(sharedIntentGroupId ? { shared_assignee_count: assigneeExternals.length } : {}),
+            ...(sharedIntentGroupId ? { shared_assignee_index: i } : {})
+          }
+        };
+
+        if (typeof args.description === "string" && args.description.trim()) {
+          task.description = args.description.trim();
+        }
+        if (typeof args.due_at === "string" && args.due_at.trim()) {
+          const parsed = new Date(args.due_at);
+          if (!Number.isNaN(parsed.valueOf())) {
+            task.dueAt = parsed.toISOString();
+          }
+        }
+
+        await ctx.repo.save(task);
+        await ctx.repo.performTaskAction({
+          id: crypto.randomUUID(),
+          organizationId: ctx.organizationId,
+          workspaceId: ctx.workspaceId,
+          taskId: task.id,
+          actionType: "create",
+          actorPlatform: "slack",
+          actorId: ctx.actorExternalUserId,
+          sourceConversationSourceId: ctx.currentConversationSourceId,
+          payload: {
+            tool: "create_task",
+            source_message_id: ctx.event.messageId,
+            source_channel_id: ctx.event.channelId,
+            source_text: ctx.event.text,
+            ...(sharedIntentGroupId ? { shared_intent_group_id: sharedIntentGroupId } : {})
+          },
+          createdAt: new Date().toISOString()
+        });
+        createdTasks.push(task);
+        ctx.createdTaskIds.push(task.id);
+      }
+
+      if (createdTasks.length === 0) {
+        return { ok: false, error: "no_assignees_resolved" };
+      }
       ctx.taskActionTypes.add("create");
-      return { ok: true, task: summarizeTask(task) };
+      return {
+        ok: true,
+        tasks: createdTasks.map((task) => summarizeTask(task)),
+        task_ids: createdTasks.map((task) => task.id),
+        ...(sharedIntentGroupId ? { shared_intent_group_id: sharedIntentGroupId } : {})
+      };
     }
 
     case "update_task": {
