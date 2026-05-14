@@ -165,6 +165,7 @@ async function shouldRespondToMessage(input: {
   const threadTs = (input.payload.event as { thread_ts?: string } | undefined)?.thread_ts?.trim();
   if (threadTs && threadTs !== input.messageTs && botUserId) {
     const tokens = uniqueTokens(install.botToken, input.env.SLACK_BOT_TOKEN);
+    let lastReason: string | undefined;
     for (const token of tokens) {
       try {
         const parent = await fetchSlackMessageByTs({
@@ -177,17 +178,17 @@ async function shouldRespondToMessage(input: {
         }
         break;
       } catch (error) {
-        if (isSlackAuthError(error)) {
-          continue;
-        }
-        console.warn("slack_parent_message_lookup_failed", {
-          externalWorkspaceId: input.externalWorkspaceId,
-          channelId: input.channelId,
-          threadTs,
-          reason: error instanceof Error ? error.message : String(error)
-        });
-        break;
+        lastReason = error instanceof Error ? error.message : String(error);
+        continue;
       }
+    }
+    if (lastReason) {
+      console.warn("slack_parent_message_lookup_failed", {
+        externalWorkspaceId: input.externalWorkspaceId,
+        channelId: input.channelId,
+        threadTs,
+        reason: lastReason
+      });
     }
   }
 
@@ -372,6 +373,7 @@ async function processSlackEventsPayload(payload: SlackEnvelope & { type?: strin
       if (tokens.length > 0) {
         const threadTs = (payload.event as { thread_ts?: string } | undefined)?.thread_ts?.trim();
         let sent = false;
+        let lastReason: string | undefined;
         for (const token of tokens) {
           try {
             await postSlackMessage({
@@ -388,16 +390,8 @@ async function processSlackEventsPayload(payload: SlackEnvelope & { type?: strin
             sent = true;
             break;
           } catch (error) {
-            if (isSlackAuthError(error)) {
-              continue;
-            }
-            console.warn("slack_post_reply_failed", {
-              externalWorkspaceId,
-              channelId: event.channelId,
-              messageTs: event.messageId,
-              reason: error instanceof Error ? error.message : String(error)
-            });
-            break;
+            lastReason = error instanceof Error ? error.message : String(error);
+            continue;
           }
         }
         if (!sent) {
@@ -405,7 +399,7 @@ async function processSlackEventsPayload(payload: SlackEnvelope & { type?: strin
             externalWorkspaceId,
             channelId: event.channelId,
             messageTs: event.messageId,
-            reason: "all_tokens_failed"
+            reason: lastReason ?? "all_tokens_failed"
           });
         }
       }
@@ -437,6 +431,7 @@ async function processSlackEventsPayload(payload: SlackEnvelope & { type?: strin
     if (tokens.length > 0) {
       for (const reaction of taskActionTypes) {
         let reacted = false;
+        let lastReason: string | undefined;
         for (const token of tokens) {
           try {
             await addSlackReaction({
@@ -448,17 +443,8 @@ async function processSlackEventsPayload(payload: SlackEnvelope & { type?: strin
             reacted = true;
             break;
           } catch (error) {
-            if (isSlackAuthError(error)) {
-              continue;
-            }
-            console.warn("Failed to add task-event reaction", {
-              externalWorkspaceId,
-              channelId: event.channelId,
-              messageTs: event.messageId,
-              reaction,
-              reason: error instanceof Error ? error.message : String(error)
-            });
-            break;
+            lastReason = error instanceof Error ? error.message : String(error);
+            continue;
           }
         }
         if (!reacted) {
@@ -467,7 +453,7 @@ async function processSlackEventsPayload(payload: SlackEnvelope & { type?: strin
             channelId: event.channelId,
             messageTs: event.messageId,
             reaction,
-            reason: "all_tokens_failed"
+            reason: lastReason ?? "all_tokens_failed"
           });
         }
       }
