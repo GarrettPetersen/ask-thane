@@ -456,6 +456,8 @@ function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"
     "When assignee is not explicit in shared channels, infer from candidate people in context: prioritize recent speakers, then other active channel members; only default to author if still ambiguous.",
     "Interpret deictic second-person address using conversation context: when the speaker addresses another participant (for example 'you' in a shared channel), do not assign to the speaker unless context explicitly indicates self-assignment.",
     "Use person-level notes and ownership patterns for disambiguation when deciding assignees in ambiguous requests.",
+    "You may write person notes for other workspace participants when the message contains durable facts about them.",
+    "For names and nicknames, resolve candidates with workspace people search and context instead of rigid phrase rules.",
     "Ignore non-task chatter such as weather commentary unless it changes a task state.",
     "If task completion/cancellation is asserted in private context and visibility is unclear, create a permission waiver request.",
     "When writing notes, prefer short durable facts (skills, ownership patterns, constraints).",
@@ -720,8 +722,22 @@ async function executeTool(
       if (scopeType === "user" && scopeId !== ctx.actorInternalUserId) {
         return permissionError(toolCall.function.name, "user_scope_not_allowed");
       }
-      if (scopeType === "person" && ctx.actorPersonId && scopeId !== ctx.actorPersonId) {
-        return permissionError(toolCall.function.name, "person_scope_not_allowed");
+      if (scopeType === "person" && scopeId !== ctx.actorPersonId) {
+        const workspaceUsers = await ctx.repo.listWorkspaceUsers({
+          organizationId: ctx.organizationId,
+          workspaceId: ctx.workspaceId,
+          limit: 200
+        });
+        const personIds = new Set<string>();
+        for (const workspaceUser of workspaceUsers) {
+          const linkedPerson = await ctx.repo.getPersonByUserId(ctx.organizationId, workspaceUser.userId);
+          if (linkedPerson?.id) {
+            personIds.add(linkedPerson.id);
+          }
+        }
+        if (!personIds.has(scopeId)) {
+          return permissionError(toolCall.function.name, "person_scope_not_allowed");
+        }
       }
 
       await ctx.repo.addAgentNote({
@@ -1331,6 +1347,11 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     userId: actorUser.userId,
     limit: 50
   });
+  const workspacePeopleSeed = await repo.listWorkspaceUsers({
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    limit: 100
+  });
   const activeConversationParticipants = await resolver.listActiveSlackConversationParticipants({
     organizationId: input.organizationId,
     conversationSourceId: input.conversationSourceId
@@ -1427,6 +1448,11 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
       recent_speakers: recentSpeakerCandidates,
       active_channel_members: activeConversationMembers.filter((id) => id !== input.event.author.platformUserId)
     },
+    workspace_people_seed: workspacePeopleSeed.map((person) => ({
+      external_user_id: person.externalUserId,
+      display_name: person.displayName ?? null,
+      email: person.email ?? null
+    })),
     conversation_participants: activeConversationParticipants
       .filter((participant) => participant.externalUserId !== botUserId)
       .map((participant) => ({

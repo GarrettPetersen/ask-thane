@@ -291,6 +291,7 @@ export class ConversationAccessResolver {
   }): Promise<{ conversationsChecked: number; membershipsUpserted: number }> {
     const nowIso = params.nowIso ?? new Date().toISOString();
     const maxConversations = params.maxConversations ?? 100;
+    const profileCache = new Map<string, { displayName?: string; email?: string }>();
 
     const sourcesResult = await this.db
       .prepare(
@@ -317,11 +318,22 @@ export class ConversationAccessResolver {
       const memberUserIds = new Set<string>();
 
       for (const platformUserId of memberPlatformIds) {
+        let profile = profileCache.get(platformUserId);
+        if (!profile) {
+          try {
+            profile = await this.fetchSlackUserProfile(platformUserId, params.botToken);
+          } catch {
+            profile = {};
+          }
+          profileCache.set(platformUserId, profile);
+        }
         const user = await this.ensureSlackUser({
           organizationId: params.organizationId,
           workspaceId: params.workspaceId,
           platformUserId,
-          nowIso
+          nowIso,
+          ...(profile.displayName ? { displayName: profile.displayName } : {}),
+          ...(profile.email ? { email: profile.email } : {})
         });
         memberUserIds.add(user.userId);
         await this.upsertConversationMembership({
@@ -549,5 +561,48 @@ export class ConversationAccessResolver {
     } while (cursor);
 
     return Array.from(members);
+  }
+
+  private async fetchSlackUserProfile(
+    platformUserId: string,
+    botToken: string
+  ): Promise<{ displayName?: string; email?: string }> {
+    const params = new URLSearchParams({ user: platformUserId });
+    const response = await fetch(`https://slack.com/api/users.info?${params.toString()}`, {
+      headers: {
+        Authorization: `Bearer ${botToken}`
+      }
+    });
+    if (!response.ok) {
+      throw new Error(`slack_user_info_fetch_failed:${response.status}`);
+    }
+
+    const payload = (await response.json()) as {
+      ok?: boolean;
+      error?: string;
+      user?: {
+        profile?: {
+          display_name?: string;
+          real_name?: string;
+          email?: string;
+        };
+        name?: string;
+      };
+    };
+    if (!payload.ok) {
+      throw new Error(`slack_user_info_error:${payload.error ?? "unknown"}`);
+    }
+
+    const displayName =
+      payload.user?.profile?.display_name?.trim() ||
+      payload.user?.profile?.real_name?.trim() ||
+      payload.user?.name?.trim() ||
+      undefined;
+    const email = payload.user?.profile?.email?.trim() || undefined;
+
+    return {
+      ...(displayName ? { displayName } : {}),
+      ...(email ? { email } : {})
+    };
   }
 }

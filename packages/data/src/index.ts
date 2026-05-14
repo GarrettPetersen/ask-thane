@@ -892,6 +892,24 @@ export class D1TaskRepository implements TaskRepository {
     return row ? toPersonRecord(row) : null;
   }
 
+  async isPersonLinkedToWorkspace(organizationId: string, workspaceId: string, personId: string): Promise<boolean> {
+    const row = await this.db
+      .prepare(
+        `SELECT 1
+         FROM identity_accounts ia
+         JOIN users u ON u.id = ia.user_id
+         WHERE ia.organization_id = ?
+           AND ia.person_id = ?
+           AND u.organization_id = ?
+           AND u.workspace_id = ?
+         LIMIT 1`
+      )
+      .bind(organizationId, personId, organizationId, workspaceId)
+      .first<Record<string, unknown>>();
+
+    return Boolean(row);
+  }
+
   async addAgentNote(input: AgentNoteInput): Promise<void> {
     await this.db
       .prepare(
