@@ -14,6 +14,11 @@ interface WorkspacePollTarget {
   botToken: string;
 }
 
+function isSlackAuthError(error: unknown): boolean {
+  const reason = error instanceof Error ? error.message : String(error);
+  return reason.includes("invalid_auth") || reason.includes("not_authed");
+}
+
 interface WorkspacePollStats {
   channelsScanned: number;
   messagesSeen: number;
@@ -457,6 +462,43 @@ export async function pollSlackWorkspacesForTasks(env: BotEnv): Promise<PollRunS
       totals.identitiesLinked += stats.identitiesLinked;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      if (isSlackAuthError(error) && env.SLACK_BOT_TOKEN && env.SLACK_BOT_TOKEN !== target.botToken) {
+        try {
+          const retryStats = await processWorkspaceMessages(
+            {
+              ...target,
+              botToken: env.SLACK_BOT_TOKEN
+            },
+            env
+          );
+          workspaceResults.push({
+            organizationId: target.organizationId,
+            workspaceId: target.workspaceId,
+            ok: true,
+            stats: retryStats
+          });
+          totals.channelsScanned += retryStats.channelsScanned;
+          totals.messagesSeen += retryStats.messagesSeen;
+          totals.messagesIngested += retryStats.messagesIngested;
+          totals.tasksCreated += retryStats.tasksCreated;
+          totals.identitiesLinked += retryStats.identitiesLinked;
+          continue;
+        } catch (retryError) {
+          const retryReason = retryError instanceof Error ? retryError.message : String(retryError);
+          console.error("slack_poll_workspace_retry_failed", {
+            organizationId: target.organizationId,
+            workspaceId: target.workspaceId,
+            reason: retryReason
+          });
+          workspaceResults.push({
+            organizationId: target.organizationId,
+            workspaceId: target.workspaceId,
+            ok: false,
+            error: retryReason
+          });
+          continue;
+        }
+      }
       console.error("slack_poll_workspace_failed", {
         organizationId: target.organizationId,
         workspaceId: target.workspaceId,

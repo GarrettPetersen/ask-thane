@@ -81,6 +81,22 @@ function hasBotNameCue(text: string): boolean {
   return false;
 }
 
+function isSlackAuthError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("invalid_auth") || message.includes("not_authed");
+}
+
+function uniqueTokens(primary: string | null, fallback: string | undefined): string[] {
+  const tokens: string[] = [];
+  if (primary) {
+    tokens.push(primary);
+  }
+  if (fallback && fallback !== primary) {
+    tokens.push(fallback);
+  }
+  return tokens;
+}
+
 async function shouldRespondToMessage(input: {
   env: BotEnv;
   payload: SlackEnvelope;
@@ -105,23 +121,31 @@ async function shouldRespondToMessage(input: {
   }
 
   const threadTs = (input.payload.event as { thread_ts?: string } | undefined)?.thread_ts?.trim();
-  if (threadTs && threadTs !== input.messageTs && botUserId && install.botToken) {
-    try {
-      const parent = await fetchSlackMessageByTs({
-        botToken: install.botToken,
-        channelId: input.channelId,
-        messageTs: threadTs
-      });
-      if (parent.message?.user === botUserId) {
-        return true;
+  if (threadTs && threadTs !== input.messageTs && botUserId) {
+    const tokens = uniqueTokens(install.botToken, input.env.SLACK_BOT_TOKEN);
+    for (const token of tokens) {
+      try {
+        const parent = await fetchSlackMessageByTs({
+          botToken: token,
+          channelId: input.channelId,
+          messageTs: threadTs
+        });
+        if (parent.message?.user === botUserId) {
+          return true;
+        }
+        break;
+      } catch (error) {
+        if (isSlackAuthError(error)) {
+          continue;
+        }
+        console.warn("slack_parent_message_lookup_failed", {
+          externalWorkspaceId: input.externalWorkspaceId,
+          channelId: input.channelId,
+          threadTs,
+          reason: error instanceof Error ? error.message : String(error)
+        });
+        break;
       }
-    } catch (error) {
-      console.warn("slack_parent_message_lookup_failed", {
-        externalWorkspaceId: input.externalWorkspaceId,
-        channelId: input.channelId,
-        threadTs,
-        reason: error instanceof Error ? error.message : String(error)
-      });
     }
   }
 
@@ -293,15 +317,41 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
 
     if (shouldRespond && agentRun.replyText) {
       const install = await resolveSlackInstall({ env, externalWorkspaceId });
-      const token = install.botToken;
-      if (token) {
+      const tokens = uniqueTokens(install.botToken, env.SLACK_BOT_TOKEN);
+      if (tokens.length > 0) {
         const threadTs = (payload.event as { thread_ts?: string } | undefined)?.thread_ts?.trim();
-        await postSlackMessage({
-          botToken: token,
-          channelId: event.channelId,
-          text: agentRun.replyText,
-          ...(threadTs && threadTs !== event.messageId ? { threadTs } : {})
-        });
+        let sent = false;
+        for (const token of tokens) {
+          try {
+            await postSlackMessage({
+              botToken: token,
+              channelId: event.channelId,
+              text: agentRun.replyText,
+              ...(threadTs && threadTs !== event.messageId ? { threadTs } : {})
+            });
+            sent = true;
+            break;
+          } catch (error) {
+            if (isSlackAuthError(error)) {
+              continue;
+            }
+            console.warn("slack_post_reply_failed", {
+              externalWorkspaceId,
+              channelId: event.channelId,
+              messageTs: event.messageId,
+              reason: error instanceof Error ? error.message : String(error)
+            });
+            break;
+          }
+        }
+        if (!sent) {
+          console.warn("slack_post_reply_failed", {
+            externalWorkspaceId,
+            channelId: event.channelId,
+            messageTs: event.messageId,
+            reason: "all_tokens_failed"
+          });
+        }
       }
     }
   } catch (error) {
@@ -321,23 +371,41 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
 
   if (taskActionTypes.length > 0) {
     const install = await resolveSlackInstall({ env, externalWorkspaceId });
-    const token = install.botToken;
-    if (token) {
+    const tokens = uniqueTokens(install.botToken, env.SLACK_BOT_TOKEN);
+    if (tokens.length > 0) {
       for (const reaction of taskActionTypes) {
-        try {
-          await addSlackReaction({
-            botToken: token,
-            channelId: event.channelId,
-            messageTs: event.messageId,
-            reaction
-          });
-        } catch (error) {
+        let reacted = false;
+        for (const token of tokens) {
+          try {
+            await addSlackReaction({
+              botToken: token,
+              channelId: event.channelId,
+              messageTs: event.messageId,
+              reaction
+            });
+            reacted = true;
+            break;
+          } catch (error) {
+            if (isSlackAuthError(error)) {
+              continue;
+            }
+            console.warn("Failed to add task-event reaction", {
+              externalWorkspaceId,
+              channelId: event.channelId,
+              messageTs: event.messageId,
+              reaction,
+              reason: error instanceof Error ? error.message : String(error)
+            });
+            break;
+          }
+        }
+        if (!reacted) {
           console.warn("Failed to add task-event reaction", {
             externalWorkspaceId,
             channelId: event.channelId,
             messageTs: event.messageId,
             reaction,
-            reason: error instanceof Error ? error.message : String(error)
+            reason: "all_tokens_failed"
           });
         }
       }

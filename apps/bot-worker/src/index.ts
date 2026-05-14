@@ -13,17 +13,47 @@ async function sendReminders(env: BotEnv): Promise<void> {
   await runScheduledReminderDigests(env);
 }
 
+function isSlackAuthError(error: unknown): boolean {
+  const reason = error instanceof Error ? error.message : String(error);
+  return reason.includes("invalid_auth") || reason.includes("not_authed");
+}
+
 async function reconcileSlackMemberships(env: BotEnv): Promise<void> {
   const resolver = new ConversationAccessResolver(env.DB);
   const installs = new SlackInstallStore(env.DB);
   const workspaceInstalls = await installs.listWorkspaceInstalls();
 
   for (const workspace of workspaceInstalls) {
-    await resolver.reconcileSlackConversationMemberships({
-      organizationId: workspace.organizationId,
-      workspaceId: workspace.workspaceId,
-      botToken: workspace.botToken
-    });
+    try {
+      await resolver.reconcileSlackConversationMemberships({
+        organizationId: workspace.organizationId,
+        workspaceId: workspace.workspaceId,
+        botToken: workspace.botToken
+      });
+    } catch (error) {
+      if (isSlackAuthError(error) && env.SLACK_BOT_TOKEN && env.SLACK_BOT_TOKEN !== workspace.botToken) {
+        try {
+          await resolver.reconcileSlackConversationMemberships({
+            organizationId: workspace.organizationId,
+            workspaceId: workspace.workspaceId,
+            botToken: env.SLACK_BOT_TOKEN
+          });
+          continue;
+        } catch (retryError) {
+          console.warn("reconcile_memberships_failed", {
+            organizationId: workspace.organizationId,
+            workspaceId: workspace.workspaceId,
+            reason: retryError instanceof Error ? retryError.message : String(retryError)
+          });
+          continue;
+        }
+      }
+      console.warn("reconcile_memberships_failed", {
+        organizationId: workspace.organizationId,
+        workspaceId: workspace.workspaceId,
+        reason: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 
   if (!env.SLACK_BOT_TOKEN) {
@@ -39,11 +69,19 @@ async function reconcileSlackMemberships(env: BotEnv): Promise<void> {
       continue;
     }
 
-    await resolver.reconcileSlackConversationMemberships({
-      organizationId: workspace.organizationId,
-      workspaceId: workspace.workspaceId,
-      botToken: env.SLACK_BOT_TOKEN
-    });
+    try {
+      await resolver.reconcileSlackConversationMemberships({
+        organizationId: workspace.organizationId,
+        workspaceId: workspace.workspaceId,
+        botToken: env.SLACK_BOT_TOKEN
+      });
+    } catch (error) {
+      console.warn("reconcile_memberships_failed", {
+        organizationId: workspace.organizationId,
+        workspaceId: workspace.workspaceId,
+        reason: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 }
 

@@ -487,6 +487,11 @@ async function resolveSlackInstall(input: {
   return { botToken: input.env.SLACK_BOT_TOKEN ?? null };
 }
 
+function isSlackAuthError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("invalid_auth") || message.includes("not_authed");
+}
+
 function permissionError(tool: string, reason: string): Record<string, unknown> {
   return { ok: false, tool, error: "permission_denied", reason };
 }
@@ -1266,7 +1271,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     installStore,
     externalWorkspaceId: input.externalWorkspaceId
   });
-  const botToken = slackInstall.botToken;
+  let botToken = slackInstall.botToken;
   const botUserId = slackInstall.botUserId;
 
   if (!botToken) {
@@ -1282,12 +1287,47 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
       maxPages: 2
     });
   } catch (error) {
-    console.warn("agent_runtime_history_fetch_failed", {
-      organizationId: input.organizationId,
-      workspaceId: input.workspaceId,
-      channelId: input.event.channelId,
-      reason: error instanceof Error ? error.message : String(error)
-    });
+    const envFallbackToken = input.env.SLACK_BOT_TOKEN ?? null;
+    if (
+      botToken &&
+      envFallbackToken &&
+      envFallbackToken !== botToken &&
+      isSlackAuthError(error)
+    ) {
+      try {
+        recentMessages = await fetchSlackConversationHistory({
+          botToken: envFallbackToken,
+          channelId: input.event.channelId,
+          limit: 40,
+          maxPages: 2
+        });
+        botToken = envFallbackToken;
+      } catch (fallbackError) {
+        console.warn("agent_runtime_history_fetch_failed", {
+          organizationId: input.organizationId,
+          workspaceId: input.workspaceId,
+          channelId: input.event.channelId,
+          reason: fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+        });
+      }
+      if (recentMessages.length > 0) {
+        // history fetched successfully with fallback token
+      } else {
+        console.warn("agent_runtime_history_fetch_failed", {
+          organizationId: input.organizationId,
+          workspaceId: input.workspaceId,
+          channelId: input.event.channelId,
+          reason: error instanceof Error ? error.message : String(error)
+        });
+      }
+    } else {
+      console.warn("agent_runtime_history_fetch_failed", {
+        organizationId: input.organizationId,
+        workspaceId: input.workspaceId,
+        channelId: input.event.channelId,
+        reason: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 
   const searchSeed = input.event.text
