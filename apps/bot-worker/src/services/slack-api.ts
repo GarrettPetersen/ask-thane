@@ -46,6 +46,47 @@ interface SlackAddReactionResponse {
   error?: string;
 }
 
+interface SlackUserProfileResponse {
+  ok?: boolean;
+  error?: string;
+  user?: {
+    id?: string;
+    deleted?: boolean;
+    is_bot?: boolean;
+    name?: string;
+    profile?: {
+      display_name?: string;
+      real_name?: string;
+      email?: string;
+    };
+  };
+}
+
+interface SlackUsersListResponse {
+  ok?: boolean;
+  error?: string;
+  members?: Array<{
+    id?: string;
+    deleted?: boolean;
+    is_bot?: boolean;
+    name?: string;
+    profile?: {
+      display_name?: string;
+      real_name?: string;
+      email?: string;
+    };
+  }>;
+  response_metadata?: {
+    next_cursor?: string;
+  };
+}
+
+export interface SlackWorkspaceUserProfile {
+  id: string;
+  displayName?: string;
+  email?: string;
+}
+
 export async function fetchSlackConversationHistory(input: {
   botToken: string;
   channelId: string;
@@ -230,4 +271,99 @@ export async function addSlackReaction(input: {
   if (!payload.ok && payload.error !== "already_reacted") {
     throw new Error(`slack_reaction_error:${payload.error ?? "unknown"}`);
   }
+}
+
+export async function fetchSlackUserProfile(input: {
+  botToken: string;
+  userId: string;
+}): Promise<SlackWorkspaceUserProfile | null> {
+  const params = new URLSearchParams({ user: input.userId });
+  const response = await fetch(`https://slack.com/api/users.info?${params.toString()}`, {
+    headers: {
+      Authorization: `Bearer ${input.botToken}`
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`slack_user_info_http_error:${response.status}`);
+  }
+
+  const payload = (await response.json()) as SlackUserProfileResponse;
+  if (!payload.ok) {
+    throw new Error(`slack_user_info_error:${payload.error ?? "unknown"}`);
+  }
+  if (!payload.user?.id || payload.user.deleted || payload.user.is_bot) {
+    return null;
+  }
+
+  const displayName =
+    payload.user.profile?.display_name?.trim() ||
+    payload.user.profile?.real_name?.trim() ||
+    payload.user.name?.trim() ||
+    undefined;
+  const email = payload.user.profile?.email?.trim() || undefined;
+
+  return {
+    id: payload.user.id,
+    ...(displayName ? { displayName } : {}),
+    ...(email ? { email } : {})
+  };
+}
+
+export async function listSlackWorkspaceUsers(input: {
+  botToken: string;
+  limit?: number;
+  maxPages?: number;
+}): Promise<SlackWorkspaceUserProfile[]> {
+  const users: SlackWorkspaceUserProfile[] = [];
+  const seen = new Set<string>();
+  let cursor: string | null = null;
+  const limit = Math.min(Math.max(input.limit ?? 200, 1), 200);
+  const maxPages = Math.min(Math.max(input.maxPages ?? 10, 1), 100);
+  let pages = 0;
+
+  do {
+    const params = new URLSearchParams({
+      limit: String(limit)
+    });
+    if (cursor) {
+      params.set("cursor", cursor);
+    }
+
+    const response = await fetch(`https://slack.com/api/users.list?${params.toString()}`, {
+      headers: {
+        Authorization: `Bearer ${input.botToken}`
+      }
+    });
+    if (!response.ok) {
+      throw new Error(`slack_users_list_http_error:${response.status}`);
+    }
+
+    const payload = (await response.json()) as SlackUsersListResponse;
+    if (!payload.ok) {
+      throw new Error(`slack_users_list_error:${payload.error ?? "unknown"}`);
+    }
+
+    for (const member of payload.members ?? []) {
+      const id = member.id?.trim();
+      if (!id || member.deleted || member.is_bot || seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+      const displayName = member.profile?.display_name?.trim() || member.profile?.real_name?.trim() || member.name?.trim() || undefined;
+      const email = member.profile?.email?.trim() || undefined;
+      users.push({
+        id,
+        ...(displayName ? { displayName } : {}),
+        ...(email ? { email } : {})
+      });
+    }
+
+    pages += 1;
+    cursor = payload.response_metadata?.next_cursor?.trim() || null;
+    if (pages >= maxPages) {
+      break;
+    }
+  } while (cursor);
+
+  return users;
 }

@@ -6,7 +6,7 @@ import {
   type SlackEnvelope
 } from "@ask-thane/integrations";
 import { runConversationalAgentForSlackMessage } from "../services/agent-runtime";
-import { addSlackReaction, fetchSlackMessageByTs, postSlackMessage } from "../services/slack-api";
+import { addSlackReaction, fetchSlackMessageByTs, fetchSlackUserProfile, postSlackMessage } from "../services/slack-api";
 import { mapTaskActionTypesToSlackReactions } from "../services/slack-task-reactions";
 import type { BotEnv } from "../services/task-inference";
 import { ConversationAccessResolver } from "../services/conversation-access";
@@ -95,6 +95,44 @@ function uniqueTokens(primary: string | null, fallback: string | undefined): str
     tokens.push(fallback);
   }
   return tokens;
+}
+
+async function fetchAuthorProfile(input: {
+  env: BotEnv;
+  externalWorkspaceId: string;
+  authorUserId: string;
+}): Promise<{ displayName?: string; email?: string } | null> {
+  const install = await resolveSlackInstall({
+    env: input.env,
+    externalWorkspaceId: input.externalWorkspaceId
+  });
+  const tokens = uniqueTokens(install.botToken, input.env.SLACK_BOT_TOKEN);
+  for (const token of tokens) {
+    try {
+      const profile = await fetchSlackUserProfile({
+        botToken: token,
+        userId: input.authorUserId
+      });
+      if (!profile) {
+        return null;
+      }
+      return {
+        ...(profile.displayName ? { displayName: profile.displayName } : {}),
+        ...(profile.email ? { email: profile.email } : {})
+      };
+    } catch (error) {
+      if (isSlackAuthError(error)) {
+        continue;
+      }
+      console.warn("slack_author_profile_fetch_failed", {
+        externalWorkspaceId: input.externalWorkspaceId,
+        authorUserId: input.authorUserId,
+        reason: error instanceof Error ? error.message : String(error)
+      });
+      break;
+    }
+  }
+  return null;
 }
 
 async function shouldRespondToMessage(input: {
@@ -280,6 +318,40 @@ export async function handleSlackEvents(request: Request, env: BotEnv): Promise<
     platformUserId: event.author.platformUserId,
     nowIso: event.occurredAt
   });
+  try {
+    const profile = await fetchAuthorProfile({
+      env,
+      externalWorkspaceId,
+      authorUserId: event.author.platformUserId
+    });
+    if (profile?.displayName || profile?.email) {
+      const enrichedUser = await resolver.ensureSlackUser({
+        organizationId,
+        workspaceId: workspaceRef.workspaceId,
+        platformUserId: event.author.platformUserId,
+        nowIso: event.occurredAt,
+        ...(profile.displayName ? { displayName: profile.displayName } : {}),
+        ...(profile.email ? { email: profile.email } : {})
+      });
+      await ingestRepo.resolveOrCreatePersonForIdentity({
+        organizationId,
+        provider: "slack",
+        externalWorkspaceId,
+        externalUserId: event.author.platformUserId,
+        linkedUserId: enrichedUser.userId,
+        ...(profile.displayName ? { displayName: profile.displayName } : {}),
+        ...(profile.email ? { email: profile.email } : {}),
+        confidence: 0.85,
+        nowIso: event.occurredAt
+      });
+    }
+  } catch (error) {
+    console.warn("slack_author_profile_enrichment_failed", {
+      organizationId,
+      workspaceId: workspaceRef.workspaceId,
+      reason: error instanceof Error ? error.message : String(error)
+    });
+  }
 
   let agentUsed = false;
   let tasksCreatedByAgent = 0;

@@ -2,7 +2,13 @@ import { D1TaskRepository } from "@ask-thane/data";
 import type { MessageEvent } from "@ask-thane/domain";
 import { runConversationalAgentForSlackMessage } from "./agent-runtime";
 import { ConversationAccessResolver } from "./conversation-access";
-import { addSlackReaction, fetchSlackConversationHistory, type SlackHistoryMessage, type SlackReaction } from "./slack-api";
+import {
+  addSlackReaction,
+  fetchSlackConversationHistory,
+  listSlackWorkspaceUsers,
+  type SlackHistoryMessage,
+  type SlackReaction
+} from "./slack-api";
 import { SlackInstallStore } from "./slack-install-store";
 import { mapTaskActionTypesToSlackReactions } from "./slack-task-reactions";
 import type { BotEnv } from "./task-inference";
@@ -189,12 +195,16 @@ async function ensureIdentityForSlackUser(input: {
   externalWorkspaceId: string;
   platformUserId: string;
   nowIso: string;
+  displayName?: string;
+  email?: string;
 }): Promise<{ userId: string }> {
   const user = await input.resolver.ensureSlackUser({
     organizationId: input.organizationId,
     workspaceId: input.workspaceId,
     platformUserId: input.platformUserId,
-    nowIso: input.nowIso
+    nowIso: input.nowIso,
+    ...(input.displayName ? { displayName: input.displayName } : {}),
+    ...(input.email ? { email: input.email } : {})
   });
 
   await input.repo.resolveOrCreatePersonForIdentity({
@@ -202,6 +212,8 @@ async function ensureIdentityForSlackUser(input: {
     provider: "slack",
     externalWorkspaceId: input.externalWorkspaceId,
     externalUserId: input.platformUserId,
+    ...(input.displayName ? { displayName: input.displayName } : {}),
+    ...(input.email ? { email: input.email } : {}),
     linkedUserId: user.userId,
     confidence: 0.75,
     isVerified: false,
@@ -209,6 +221,33 @@ async function ensureIdentityForSlackUser(input: {
   });
 
   return user;
+}
+
+async function syncWorkspaceUserProfiles(input: {
+  target: WorkspacePollTarget;
+  resolver: ConversationAccessResolver;
+  repo: D1TaskRepository;
+}): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const users = await listSlackWorkspaceUsers({
+    botToken: input.target.botToken,
+    limit: 200,
+    maxPages: 20
+  });
+
+  for (const user of users) {
+    await ensureIdentityForSlackUser({
+      resolver: input.resolver,
+      repo: input.repo,
+      organizationId: input.target.organizationId,
+      workspaceId: input.target.workspaceId,
+      externalWorkspaceId: input.target.externalWorkspaceId,
+      platformUserId: user.id,
+      ...(user.displayName ? { displayName: user.displayName } : {}),
+      ...(user.email ? { email: user.email } : {}),
+      nowIso
+    });
+  }
 }
 
 async function hasTaskForSourceMessage(input: {
@@ -235,6 +274,15 @@ async function hasTaskForSourceMessage(input: {
 async function processWorkspaceMessages(target: WorkspacePollTarget, env: BotEnv): Promise<WorkspacePollStats> {
   const repo = new D1TaskRepository(env.DB);
   const resolver = new ConversationAccessResolver(env.DB);
+  try {
+    await syncWorkspaceUserProfiles({ target, resolver, repo });
+  } catch (error) {
+    console.warn("workspace_user_profile_sync_failed", {
+      organizationId: target.organizationId,
+      workspaceId: target.workspaceId,
+      reason: error instanceof Error ? error.message : String(error)
+    });
+  }
   const channels = await listJoinedChannels(target.botToken);
   const stats: WorkspacePollStats = {
     channelsScanned: channels.length,
