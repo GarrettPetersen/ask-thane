@@ -80,6 +80,7 @@ interface ToolContext {
   interactionMode: "passive_ingest" | "dm_reply" | "proactive_followup";
   readOnlyTools: boolean;
   botExternalUserId?: string;
+  workspaceUsers: Array<{ userId: string; externalUserId: string; displayName?: string; email?: string }>;
 }
 
 function clampLimit(limit: unknown, fallback: number, max: number): number {
@@ -170,7 +171,8 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
       type: "function",
       function: {
         name: "search_tasks",
-        description: "Search visible tasks in the organization with ACL already enforced.",
+        description:
+          "Search visible tasks in the organization with ACL already enforced. assignee_user_id accepts Slack external_user_id and workspace user_id.",
         parameters: {
           type: "object",
           additionalProperties: false,
@@ -287,7 +289,8 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
       type: "function",
       function: {
         name: "search_workspace_people",
-        description: "Search people/users in this workspace by name/email/user id.",
+        description:
+          "Search people/users in this workspace by name/email/user id. Use external_user_id for task assignee filters and assignment.",
         parameters: {
           type: "object",
           additionalProperties: false,
@@ -516,6 +519,46 @@ function extractSlackMentionIds(text: string): string[] {
   return Array.from(mentions);
 }
 
+function looksLikeSlackExternalUserId(value: string): boolean {
+  return /^U[A-Z0-9]+$/.test(value) || value === "USLACKBOT";
+}
+
+function resolveExternalUserIdFromWorkspaceDirectory(
+  rawIdentifier: string,
+  workspaceUsers: Array<{ userId: string; externalUserId: string; displayName?: string; email?: string }>
+): string | null {
+  const trimmed = rawIdentifier.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (looksLikeSlackExternalUserId(trimmed)) {
+    return trimmed;
+  }
+
+  const byInternal = workspaceUsers.find((user) => user.userId === trimmed);
+  if (byInternal) {
+    return byInternal.externalUserId;
+  }
+
+  const normalized = trimmed.toLowerCase();
+  const byExternal = workspaceUsers.find((user) => user.externalUserId.toLowerCase() === normalized);
+  if (byExternal) {
+    return byExternal.externalUserId;
+  }
+
+  const byDisplayName = workspaceUsers.find((user) => user.displayName?.trim().toLowerCase() === normalized);
+  if (byDisplayName) {
+    return byDisplayName.externalUserId;
+  }
+
+  const byEmail = workspaceUsers.find((user) => user.email?.trim().toLowerCase() === normalized);
+  if (byEmail) {
+    return byEmail.externalUserId;
+  }
+
+  return null;
+}
+
 async function inferAssigneeFromConversationContext(ctx: ToolContext): Promise<string> {
   const explicitMentions = extractSlackMentionIds(ctx.event.text).filter(
     (id) => id !== ctx.actorExternalUserId && (!ctx.botExternalUserId || id !== ctx.botExternalUserId)
@@ -672,7 +715,9 @@ async function executeTool(
         searchInput.query = args.query.trim();
       }
       if (typeof args.assignee_user_id === "string" && args.assignee_user_id.trim()) {
-        searchInput.assigneeId = args.assignee_user_id.trim();
+        searchInput.assigneeId =
+          resolveExternalUserIdFromWorkspaceDirectory(args.assignee_user_id, ctx.workspaceUsers) ??
+          args.assignee_user_id.trim();
       }
       const statuses = asTaskStatusList(args.statuses);
       if (statuses) {
@@ -904,7 +949,8 @@ async function executeTool(
 
       const assigneeExternal =
         typeof args.assignee_user_id === "string" && args.assignee_user_id.trim()
-          ? args.assignee_user_id.trim()
+          ? (resolveExternalUserIdFromWorkspaceDirectory(args.assignee_user_id, ctx.workspaceUsers) ??
+            args.assignee_user_id.trim())
           : await inferAssigneeFromConversationContext(ctx);
 
       const task: TaskRecord = {
@@ -1560,6 +1606,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     event: input.event,
     interactionMode,
     readOnlyTools,
+    workspaceUsers: workspacePeopleSeed,
     ...(botUserId ? { botExternalUserId: botUserId } : {})
   };
 
