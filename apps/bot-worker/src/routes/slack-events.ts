@@ -7,7 +7,7 @@ import {
 } from "@ask-thane/integrations";
 import { runConversationalAgentForSlackMessage } from "../services/agent-runtime";
 import { addSlackReaction, fetchSlackMessageByTs, fetchSlackUserProfile, postSlackMessage } from "../services/slack-api";
-import { mapTaskActionTypesToSlackReactions } from "../services/slack-task-reactions";
+import { mapAgentEventTypesToSlackReactions, mapTaskActionTypesToSlackReactions } from "../services/slack-task-reactions";
 import type { BotEnv } from "../services/task-inference";
 import { ConversationAccessResolver } from "../services/conversation-access";
 import { OrgRegistry } from "../services/org-registry";
@@ -319,7 +319,7 @@ async function processSlackEventsPayload(payload: SlackEnvelope & { type?: strin
 
   let agentUsed = false;
   let tasksCreatedByAgent = 0;
-  let taskActionTypes: ReturnType<typeof mapTaskActionTypesToSlackReactions> = [];
+  let reactionEmojis: string[] = [];
   let agentSummary: string | undefined;
   let shouldRespond = false;
 
@@ -355,7 +355,9 @@ async function processSlackEventsPayload(payload: SlackEnvelope & { type?: strin
     });
     agentUsed = agentRun.usedTools;
     tasksCreatedByAgent = agentRun.createdTaskIds.length;
-    taskActionTypes = mapTaskActionTypesToSlackReactions(agentRun.taskActionTypes);
+    const taskEventReactions = mapTaskActionTypesToSlackReactions(agentRun.taskActionTypes);
+    const nonTaskEventReactions = mapAgentEventTypesToSlackReactions(agentRun.eventTypes);
+    reactionEmojis = Array.from(new Set([...taskEventReactions, ...nonTaskEventReactions]));
     agentSummary = agentRun.finalSummary;
     console.log("thane_agent_run_result", {
       externalWorkspaceId,
@@ -364,7 +366,8 @@ async function processSlackEventsPayload(payload: SlackEnvelope & { type?: strin
       usedTools: agentRun.usedTools,
       hasReplyText: Boolean(agentRun.replyText?.trim()),
       createdTasks: agentRun.createdTaskIds.length,
-      actionTypes: agentRun.taskActionTypes
+      actionTypes: agentRun.taskActionTypes,
+      eventTypes: agentRun.eventTypes
     });
 
     if (shouldRespond && agentRun.replyText) {
@@ -425,11 +428,11 @@ async function processSlackEventsPayload(payload: SlackEnvelope & { type?: strin
     );
   }
 
-  if (taskActionTypes.length > 0) {
+  if (reactionEmojis.length > 0) {
     const install = await resolveSlackInstall({ env, externalWorkspaceId });
     const tokens = uniqueTokens(install.botToken, env.SLACK_BOT_TOKEN);
     if (tokens.length > 0) {
-      for (const reaction of taskActionTypes) {
+      for (const reaction of reactionEmojis) {
         let reacted = false;
         let lastReason: string | undefined;
         for (const token of tokens) {

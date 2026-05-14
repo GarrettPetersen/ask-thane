@@ -60,6 +60,7 @@ interface AgentRunResult {
   createdTaskIds: string[];
   updatedTaskIds: string[];
   taskActionTypes: TaskActionType[];
+  eventTypes: string[];
   finalSummary?: string;
   replyText?: string;
 }
@@ -80,6 +81,7 @@ interface ToolContext {
   botToken: string;
   createdTaskIds: string[];
   taskActionTypes: Set<TaskActionType>;
+  eventTypes: Set<string>;
   recentMessages: SlackHistoryMessage[];
   event: MessageEvent;
   interactionMode: "passive_ingest" | "dm_reply" | "proactive_followup";
@@ -310,11 +312,12 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
       type: "function",
       function: {
         name: "create_task",
-        description: "Create a new task from conversational intent.",
+        description:
+          "Create a new task from conversational intent. Infer urgency/difficulty from context when not explicit. Infer due_at when reasonably supported by context.",
         parameters: {
           type: "object",
           additionalProperties: false,
-          required: ["title"],
+          required: ["title", "urgency", "difficulty"],
           properties: {
             title: { type: "string" },
             description: { type: "string" },
@@ -330,7 +333,8 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
       type: "function",
       function: {
         name: "update_task",
-        description: "Apply a task action to an existing task when state changed from conversation.",
+        description:
+          "Apply a task action to an existing task when state changed from conversation. Use action_type='edit' for metadata updates (title, description, due_at, urgency, difficulty).",
         parameters: {
           type: "object",
           additionalProperties: false,
@@ -347,7 +351,9 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
             },
             title: { type: "string" },
             description: { type: "string" },
-            due_at: { type: "string" },
+            due_at: { type: ["string", "null"] },
+            urgency: { type: "string", enum: ["low", "medium", "high", "critical"] },
+            difficulty: { type: "string", enum: ["low", "medium", "high"] },
             target_task_id: { type: "string" }
           }
         }
@@ -503,6 +509,9 @@ function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"
     "A single message may contain multiple independent task events; detect each event and apply all needed tool calls in the same run.",
     "For statements that imply progress/completion/cancellation/blocking, always search existing tasks first and update matching tasks instead of creating duplicates.",
     "For each clause: (1) classify clause intent, (2) if it references existing work then update_task, (3) if it introduces new work then create_task.",
+    "For every created or edited task, set urgency and difficulty using explicit cues when present and contextual judgment when implicit.",
+    "Infer due dates from temporal cues (for example today/this week/by Friday) and normalize to ISO when possible; if timing is truly unclear, leave due_at unset.",
+    "When urgency/difficulty/due date changes are implied, use update_task with action_type='edit' to update those fields.",
     "Some statements imply urgent work even without imperative wording; when context indicates operational impact, infer and track the implied task.",
     "Examples: 'the website is down' in a web business context implies an incident task to restore service (and possibly investigation/fix follow-up).",
     "Counter-example: 'I need to pick up my kids' in a work channel is usually context/explanation, not a trackable org task.",
@@ -859,6 +868,7 @@ async function executeTool(
         )
         .run();
 
+      ctx.eventTypes.add("feedback_recorded");
       return { ok: true, feedback_type: feedbackType, task_id: taskId };
     }
 
@@ -1010,6 +1020,7 @@ async function executeTool(
       });
 
       notesWrittenCountRef.count += 1;
+      ctx.eventTypes.add("note_written");
       return { ok: true };
     }
 
@@ -1209,7 +1220,10 @@ async function executeTool(
         actorId: ctx.actorExternalUserId,
         sourceConversationSourceId: ctx.currentConversationSourceId,
         payload: {
-          tool: "create_task"
+          tool: "create_task",
+          source_message_id: ctx.event.messageId,
+          source_channel_id: ctx.event.channelId,
+          source_text: ctx.event.text
         },
         createdAt: new Date().toISOString()
       });
@@ -1259,7 +1273,9 @@ async function executeTool(
         status?: TaskStatus;
         title?: string;
         description?: string;
-        dueAt?: string;
+        dueAt?: string | null;
+        urgency?: TaskUrgency;
+        difficulty?: TaskDifficulty;
         targetTaskId?: string;
         payload: Record<string, unknown>;
         createdAt: string;
@@ -1273,7 +1289,10 @@ async function executeTool(
         actorId: ctx.actorExternalUserId,
         sourceConversationSourceId: ctx.currentConversationSourceId,
         payload: {
-          tool: "update_task"
+          tool: "update_task",
+          source_message_id: ctx.event.messageId,
+          source_channel_id: ctx.event.channelId,
+          source_text: ctx.event.text
         },
         createdAt: new Date().toISOString()
       };
@@ -1288,7 +1307,21 @@ async function executeTool(
         updateInput.description = args.description;
       }
       if (typeof args.due_at === "string") {
-        updateInput.dueAt = args.due_at;
+        const trimmed = args.due_at.trim();
+        if (trimmed) {
+          const parsed = new Date(trimmed);
+          if (!Number.isNaN(parsed.valueOf())) {
+            updateInput.dueAt = parsed.toISOString();
+          }
+        }
+      } else if (args.due_at === null) {
+        updateInput.dueAt = null;
+      }
+      if (args.urgency === "low" || args.urgency === "medium" || args.urgency === "high" || args.urgency === "critical") {
+        updateInput.urgency = args.urgency;
+      }
+      if (args.difficulty === "low" || args.difficulty === "medium" || args.difficulty === "high") {
+        updateInput.difficulty = args.difficulty;
       }
       if (typeof args.target_task_id === "string") {
         updateInput.targetTaskId = args.target_task_id;
@@ -1347,6 +1380,7 @@ async function executeTool(
       await ctx.repo.requestPermissionWaiver(waiverInput);
 
       waiversRequestedCountRef.count += 1;
+      ctx.eventTypes.add("permission_waiver_requested");
       return { ok: true };
     }
 
@@ -1431,6 +1465,7 @@ async function executeTool(
         createdAt: existing?.createdAt ?? nowIso
       });
 
+      ctx.eventTypes.add("notification_cadence_updated");
       return {
         ok: true,
         cadence: {
@@ -1475,6 +1510,7 @@ async function executeTool(
         createdAt: nowIso
       });
 
+      ctx.eventTypes.add("follow_up_scheduled");
       return { ok: true, schedule_at: scheduleAt };
     }
 
@@ -1489,10 +1525,10 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
   const maxTurns = clampEnvNumber(input.env.AGENT_MAX_TOOL_TURNS, 8, 1, 20);
 
   if ((input.env.DEFAULT_LLM_PROVIDER ?? "openai") !== "openai") {
-    return { usedTools: false, createdTaskIds: [], updatedTaskIds: [], taskActionTypes: [] };
+    return { usedTools: false, createdTaskIds: [], updatedTaskIds: [], taskActionTypes: [], eventTypes: [] };
   }
   if (!input.env.OPENAI_API_KEY) {
-    return { usedTools: false, createdTaskIds: [], updatedTaskIds: [], taskActionTypes: [] };
+    return { usedTools: false, createdTaskIds: [], updatedTaskIds: [], taskActionTypes: [], eventTypes: [] };
   }
 
   const repo = new D1TaskRepository(input.env.DB);
@@ -1530,7 +1566,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
   const botUserId = slackInstall.botUserId;
 
   if (!botToken) {
-    return { usedTools: false, createdTaskIds: [], updatedTaskIds: [], taskActionTypes: [] };
+    return { usedTools: false, createdTaskIds: [], updatedTaskIds: [], taskActionTypes: [], eventTypes: [] };
   }
 
   let recentMessages: Awaited<ReturnType<typeof fetchSlackConversationHistory>> = [];
@@ -1788,6 +1824,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
 
   const createdTaskIds: string[] = [];
   const taskActionTypes = new Set<TaskActionType>();
+  const eventTypes = new Set<string>();
   const updatedTaskIds = new Set<string>();
   const notesWrittenCountRef = { count: 0 };
   const waiversRequestedCountRef = { count: 0 };
@@ -1812,6 +1849,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     botToken,
     createdTaskIds,
     taskActionTypes,
+    eventTypes,
     recentMessages,
     event: input.event,
     interactionMode,
@@ -1913,7 +1951,8 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     usedTools,
     createdTaskIds,
     updatedTaskIds: Array.from(updatedTaskIds),
-    taskActionTypes: Array.from(taskActionTypes)
+    taskActionTypes: Array.from(taskActionTypes),
+    eventTypes: Array.from(eventTypes)
   };
 
   if (interactionMode === "passive_ingest") {

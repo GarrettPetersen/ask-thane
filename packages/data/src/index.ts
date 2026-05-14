@@ -7,8 +7,10 @@ import type {
   PermissionWaiverStatus,
   PersonRecord,
   TaskActionType,
+  TaskDifficulty,
   TaskRecord,
   TaskStatus,
+  TaskUrgency,
   UserRef
 } from "@ask-thane/domain";
 
@@ -103,7 +105,9 @@ export interface TaskActionInput {
   status?: TaskStatus;
   title?: string;
   description?: string;
-  dueAt?: string;
+  dueAt?: string | null;
+  urgency?: TaskUrgency;
+  difficulty?: TaskDifficulty;
 }
 
 export interface PermissionWaiverRequestInput {
@@ -1024,15 +1028,27 @@ export class D1TaskRepository implements TaskRepository {
     }
 
     if (input.actionType === "edit") {
+      const shouldUpdateDueAt = input.dueAt !== undefined;
       await this.db
         .prepare(
           `UPDATE tasks
            SET title = COALESCE(?, title),
                description = COALESCE(?, description),
-               due_at = COALESCE(?, due_at)
+               due_at = CASE WHEN ? = 1 THEN ? ELSE due_at END,
+               urgency = COALESCE(?, urgency),
+               difficulty = COALESCE(?, difficulty)
            WHERE id = ? AND organization_id = ?`
         )
-        .bind(input.title ?? null, input.description ?? null, input.dueAt ?? null, input.taskId, input.organizationId)
+        .bind(
+          input.title ?? null,
+          input.description ?? null,
+          shouldUpdateDueAt ? 1 : 0,
+          shouldUpdateDueAt ? (input.dueAt ?? null) : null,
+          input.urgency ?? null,
+          input.difficulty ?? null,
+          input.taskId,
+          input.organizationId
+        )
         .run();
 
       await this.recordTaskAction({

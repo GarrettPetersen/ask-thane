@@ -32,3 +32,27 @@ export function mapTaskActionTypesToSlackReactions(actionTypes: TaskActionType[]
 
   return reactions;
 }
+
+const EVENT_TO_REACTION: Record<string, string> = {
+  feedback_recorded: "mag",
+  note_written: "spiral_note_pad",
+  permission_waiver_requested: "lock",
+  notification_cadence_updated: "alarm_clock",
+  follow_up_scheduled: "spiral_calendar_pad"
+};
+
+export function mapAgentEventTypesToSlackReactions(eventTypes: string[]): string[] {
+  const reactions: string[] = [];
+  const seen = new Set<string>();
+
+  for (const eventType of eventTypes) {
+    const reaction = EVENT_TO_REACTION[eventType];
+    if (!reaction || seen.has(reaction)) {
+      continue;
+    }
+    seen.add(reaction);
+    reactions.push(reaction);
+  }
+
+  return reactions;
+}
