@@ -144,6 +144,10 @@ async function shouldRespondToMessage(input: {
   text: string;
   conversationKind: "public_channel" | "private_channel" | "group_dm" | "dm";
 }): Promise<boolean> {
+  if (input.payload.event?.type === "app_mention") {
+    return true;
+  }
+
   if (input.conversationKind === "dm") {
     return true;
   }
