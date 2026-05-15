@@ -1077,7 +1077,7 @@ async function recordLlmUsageEvent(input: {
          id, organization_id, workspace_id, provider, model, prompt_tokens, completion_tokens,
          total_tokens, prompt_cost_usd, completion_cost_usd, total_cost_usd, currency, pricing_version,
          api_endpoint, request_type, source, source_message_id, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       crypto.randomUUID(),
