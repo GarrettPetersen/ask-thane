@@ -12,12 +12,21 @@ vi.mock("@ask-thane/data", () => ({
 }));
 
 describe("@ask-thane/api-worker", () => {
+  const env = {
+    DB: {},
+    INTERNAL_API_BEARER_TOKEN: "test-internal-token"
+  } as never;
+
+  const authHeaders = {
+    Authorization: "Bearer test-internal-token"
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("serves health", async () => {
-    const res = await worker.fetch(new Request("https://api.local/health"), { DB: {} } as never);
+    const res = await worker.fetch(new Request("https://api.local/health"), env);
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({
       ok: true,
@@ -26,15 +35,26 @@ describe("@ask-thane/api-worker", () => {
   });
 
   it("validates required params for open tasks endpoint", async () => {
-    const res = await worker.fetch(new Request("https://api.local/v1/tasks/open"), { DB: {} } as never);
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/tasks/open", { headers: authHeaders }),
+      env
+    );
     expect(res.status).toBe(400);
+  });
+
+  it("rejects unauthenticated requests to task endpoints", async () => {
+    const res = await worker.fetch(new Request("https://api.local/v1/tasks/open"), env);
+    expect(res.status).toBe(401);
+    await expect(res.json()).resolves.toEqual({ error: "unauthorized" });
   });
 
   it("returns open tasks", async () => {
     listOpenByAssignee.mockResolvedValueOnce([{ id: "task_1" }]);
     const res = await worker.fetch(
-      new Request("https://api.local/v1/tasks/open?workspace_id=ws_1&assignee_id=U1"),
-      { DB: {} } as never
+      new Request("https://api.local/v1/tasks/open?workspace_id=ws_1&assignee_id=U1", {
+        headers: authHeaders
+      }),
+      env
     );
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({
@@ -47,9 +67,10 @@ describe("@ask-thane/api-worker", () => {
     listOpenByAssigneeWithAcl.mockResolvedValueOnce([{ id: "task_2" }]);
     const res = await worker.fetch(
       new Request(
-        "https://api.local/v1/tasks/open-visible?organization_id=org_0&assignee_id=U1&readable_conversation_source_ids=conv_1,conv_2&allow_unscoped=true"
+        "https://api.local/v1/tasks/open-visible?organization_id=org_0&assignee_id=U1&readable_conversation_source_ids=conv_1,conv_2&allow_unscoped=true",
+        { headers: authHeaders }
       ),
-      { DB: {} } as never
+      env
     );
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({

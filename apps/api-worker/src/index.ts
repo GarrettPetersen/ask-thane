@@ -2,9 +2,23 @@ import { D1TaskRepository } from "@ask-thane/data";
 
 interface Env {
   DB: D1Database;
+  INTERNAL_API_BEARER_TOKEN?: string;
   BUILD_ENV?: string;
   BUILD_GIT_SHA?: string;
   BUILD_DEPLOYED_AT?: string;
+}
+
+function isAuthorizedRequest(request: Request, env: Env): boolean {
+  const expectedToken = env.INTERNAL_API_BEARER_TOKEN?.trim();
+  if (!expectedToken) {
+    return false;
+  }
+  const authHeader = request.headers.get("authorization") ?? "";
+  if (!authHeader.toLowerCase().startsWith("bearer ")) {
+    return false;
+  }
+  const providedToken = authHeader.slice("bearer ".length).trim();
+  return providedToken.length > 0 && providedToken === expectedToken;
 }
 
 export default {
@@ -23,6 +37,10 @@ export default {
         gitSha: env.BUILD_GIT_SHA ?? "unknown",
         deployedAt: env.BUILD_DEPLOYED_AT ?? "unknown"
       });
+    }
+
+    if (url.pathname.startsWith("/v1/tasks/") && !isAuthorizedRequest(request, env)) {
+      return Response.json({ error: "unauthorized" }, { status: 401 });
     }
 
     if (url.pathname === "/v1/tasks/open") {
