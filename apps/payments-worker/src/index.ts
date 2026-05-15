@@ -516,7 +516,7 @@ async function applyStripeEntitlementFromCheckoutSession(input: {
       organizationId,
       externalAccountType: "customer",
       externalAccountId: customerId,
-      displayName: customerEmail ?? undefined,
+      ...(customerEmail ? { displayName: customerEmail } : {}),
       metadata: {
         workspace_id: workspaceId,
         latest_plan_tier: planTier,
@@ -532,7 +532,7 @@ async function applyStripeEntitlementFromCheckoutSession(input: {
       organizationId,
       externalAccountType: "subscription",
       externalAccountId: subscriptionId,
-      displayName: customerEmail ?? undefined,
+      ...(customerEmail ? { displayName: customerEmail } : {}),
       metadata: {
         workspace_id: workspaceId,
         plan_tier: planTier,
@@ -548,11 +548,18 @@ async function applyStripeEntitlementFromCheckoutSession(input: {
 async function handleStripeWebhook(input: { env: Env; request: Request }): Promise<Response> {
   const rawBody = await input.request.text();
   const signatureHeader = input.request.headers.get("stripe-signature");
-  const isValid = await verifyStripeSignatureWithBody({
-    rawBody,
-    signatureHeader,
-    secret: input.env.STRIPE_WEBHOOK_SECRET
-  });
+  const isValid = await verifyStripeSignatureWithBody(
+    input.env.STRIPE_WEBHOOK_SECRET
+      ? {
+          rawBody,
+          signatureHeader,
+          secret: input.env.STRIPE_WEBHOOK_SECRET
+        }
+      : {
+          rawBody,
+          signatureHeader
+        }
+  );
   if (!isValid) {
     return json({ error: "invalid_signature" }, 400);
   }

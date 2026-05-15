@@ -32,7 +32,7 @@ Instead of asking people to maintain Jira/Linear-style tickets manually, Thane l
   - reminders/follow-ups
   - admin/ops/eval endpoints
 - `apps/api-worker`: API surface for task/analytics read endpoints (early-stage).
-- `apps/payments-worker`: Stripe webhook and billing hooks (early-stage).
+- `apps/payments-worker`: Stripe webhook and billing hooks.
   - includes hosted pricing/checkout page at `/subscribe` and checkout session API at `/api/checkout/session`
 - `apps/landing`: marketing site worker for `askthane.com`.
   - includes public legal pages: Privacy, Terms, Acceptable Use, Subprocessors
@@ -56,8 +56,12 @@ Instead of asking people to maintain Jira/Linear-style tickets manually, Thane l
   - feedback and LLM/usage telemetry
   - workspace billing settings + workspace user activity ledger
 
-## Current Development Status (May 2026)
-### Working now
+## Current Product Status (May 2026)
+### Live now
+- Public Slack app distribution is enabled.
+- Users can install Thane into a workspace through the website install flow.
+- Paid plans can be selected on `askthane.com` and completed through Stripe checkout.
+- New installs default to free tier, and paid checkout upgrades plan tier at the org/workspace level.
 - Slack app OAuth install flow (`/slack/install`, `/slack/oauth/callback`).
 - Event ingestion + dedupe for Slack webhook traffic.
 - Task inference agent with read/write tools over internal DB.
@@ -73,12 +77,6 @@ Instead of asking people to maintain Jira/Linear-style tickets manually, Thane l
 - Billing tier/product packaging and invoice UX.
 - API-worker and payments-worker feature depth.
 - Staging/production promotion workflow and strict release gating.
-
-### Not production-ready for external customers yet
-- Full staging environment parity and release promotion controls.
-- Broader test coverage and automated smoke tests post-deploy.
-- Mature observability dashboards/alerts.
-- Security review, tenant hardening, and incident runbooks.
 
 ## Environments
 Ask Thane runs separate `staging` and `production` environments.
@@ -203,15 +201,11 @@ pnpm dev:landing
   - `production` with `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
 - Add required reviewers on the `production` environment for approval gating.
 
-## Quiet Launch Checklist
-Use the detailed checklist here:
-- [docs/quiet-launch-checklist.md](/Users/garrettpetersen/ask-thane/docs/quiet-launch-checklist.md)
-
-At a minimum before a quiet launch:
-- Confirm Slack OAuth install works in staging and creates both a `workspaces` row and an `organization_external_accounts` row.
-- Confirm staging bot can ingest, infer, and send reminder digests for at least one real workspace.
-- Confirm production deploy gate enforces passing tests and successful staging deploy for the same commit SHA.
-- Keep Slack app unlisted/public-off until these checks are stable for multiple days.
+## Post-Launch Ops Checks
+- Keep production deploy gate requirements enabled: passing `pnpm test` and successful staging run for the same commit SHA.
+- Verify Stripe webhook processing after billing changes (`checkout.session.completed` -> plan tier + external account mapping).
+- Periodically run billing smoke validation (`pnpm test:billing:e2e` or the manual workflow) before pricing/billing rollout changes.
+- Monitor free-tier AI spend cap enforcement and upgrade prompts in production.
 
 ## Key Docs
 - Architecture overview and environment topology:

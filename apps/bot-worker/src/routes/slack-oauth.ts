@@ -364,7 +364,7 @@ export async function handleSlackInstallStart(request: Request, env: BotEnv): Pr
   const state = await issueState({
     secret: env.SLACK_OAUTH_STATE_SECRET,
     installPlan,
-    selectedTier
+    ...(selectedTier ? { selectedTier } : {})
   });
   const scopes = env.SLACK_BOT_SCOPES ?? DEFAULT_SCOPES;
   const redirectUri = resolveRedirectUri(request, env);
@@ -562,7 +562,7 @@ export async function handleSlackOAuthCallback(request: Request, env: BotEnv): P
   });
   await sendInstallOnboardingDm({
     botToken: payload.access_token,
-    installerExternalUserId: payload.authed_user?.id,
+    ...(payload.authed_user?.id ? { installerExternalUserId: payload.authed_user.id } : {}),
     installPlan,
     billingSubscribeUrl
   });
