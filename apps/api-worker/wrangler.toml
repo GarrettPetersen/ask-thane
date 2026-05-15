@@ -17,8 +17,8 @@ name = "ask-thane-api-staging"
 
 [[env.staging.d1_databases]]
 binding = "DB"
-database_name = "ask-thane"
-database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"
+database_name = "ask-thane-staging"
+database_id = "02db76d8-728f-40a4-84f8-f17779f8e8de"
 
 [env.staging.vars]
 BUILD_ENV = "staging"

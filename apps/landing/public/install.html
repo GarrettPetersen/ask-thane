@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Install Thane | Ask Thane</title>
+    <meta
+      name="description"
+      content="Install Thane for your Slack workspace. Choose free or paid onboarding and complete setup in a guided flow."
+    />
+    <style>
+      :root {
+        --bg: #f7f3ea;
+        --ink: #141414;
+        --muted: #616161;
+        --brand: #0f5fd7;
+        --brand-dark: #0848a6;
+        --surface: #fffdf8;
+        --border: #e7decd;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        font-family: "Avenir Next", "Segoe UI", sans-serif;
+        background:
+          radial-gradient(980px 420px at 100% -10%, #ffe4be 0%, transparent 65%),
+          radial-gradient(680px 400px at -10% 0%, #dceaff 0%, transparent 60%),
+          var(--bg);
+      }
+
+      .container {
+        width: min(980px, 100% - 2rem);
+        margin: 0 auto;
+        padding: 24px 0 36px;
+      }
+
+      .brand {
+        display: inline-flex;
+      }
+
+      .brand img {
+        width: 168px;
+        height: auto;
+      }
+
+      .hero {
+        margin-top: 14px;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: var(--surface);
+        padding: 24px;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: clamp(1.8rem, 4.8vw, 3rem);
+      }
+
+      .lead {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .plans {
+        margin-top: 16px;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: #fff;
+        padding: 16px;
+      }
+
+      .card h2 {
+        margin: 0 0 8px;
+      }
+
+      .card p,
+      .card li {
+        color: var(--muted);
+      }
+
+      ul {
+        margin: 0 0 12px;
+        padding-left: 18px;
+      }
+
+      .button {
+        display: inline-block;
+        border-radius: 10px;
+        padding: 11px 13px;
+        text-decoration: none;
+        background: var(--brand);
+        color: #fff;
+        font-weight: 700;
+      }
+
+      .button:hover {
+        background: var(--brand-dark);
+      }
+
+      .secondary {
+        margin-left: 8px;
+        background: #e8f1ff;
+        color: var(--brand-dark);
+      }
+
+      .flow {
+        margin-top: 16px;
+        border: 1px dashed #d7ccba;
+        border-radius: 12px;
+        background: #fff;
+        padding: 14px;
+      }
+
+      .flow h3 {
+        margin: 0 0 8px;
+      }
+
+      .flow ol {
+        margin: 0;
+        padding-left: 18px;
+      }
+
+      .flow li {
+        margin-bottom: 7px;
+        color: var(--muted);
+      }
+
+      @media (max-width: 860px) {
+        .plans {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="container">
+      <a class="brand" href="/">
+        <img src="/brand/ask-thane-gray-logo-with-text.svg" alt="Ask Thane" />
+      </a>
+
+      <section class="hero">
+        <h1>Install Thane in Slack</h1>
+        <p class="lead">
+          Choose your tier first. Thane will connect to Slack, then paid tiers continue straight to Stripe checkout for
+          the selected plan.
+        </p>
+
+        <section class="plans">
+          <article class="card">
+            <h2>Free</h2>
+            <ul>
+              <li>Install Thane to one Slack workspace</li>
+              <li>Use free tier limits by default</li>
+              <li>Upgrade anytime later</li>
+            </ul>
+            <a class="button" href="https://bot.askthane.com/slack/install?plan=free">Install Free</a>
+          </article>
+
+          <article class="card">
+            <h2>Team</h2>
+            <ul>
+              <li>$99/month</li>
+              <li>25 participants included, then $3/user</li>
+              <li>$20 monthly AI credit</li>
+            </ul>
+            <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=team">Choose Team</a>
+          </article>
+
+          <article class="card">
+            <h2>Growth</h2>
+            <ul>
+              <li>$299/month</li>
+              <li>100 participants included, then $2/user</li>
+              <li>$120 monthly AI credit</li>
+            </ul>
+            <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=growth">Choose Growth</a>
+          </article>
+
+          <article class="card">
+            <h2>Scale</h2>
+            <ul>
+              <li>$699/month</li>
+              <li>300 participants included, then $1.25/user</li>
+              <li>$400 monthly AI credit</li>
+            </ul>
+            <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=scale">Choose Scale</a>
+          </article>
+
+          <article class="card">
+            <h2>Scale Plus</h2>
+            <ul>
+              <li>$1499/month</li>
+              <li>1000 participants included, then $1/user</li>
+              <li>$1000 monthly AI credit</li>
+            </ul>
+            <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=scale_plus">Choose Scale Plus</a>
+          </article>
+        </section>
+
+        <section class="flow">
+          <h3>What Happens Next</h3>
+          <ol>
+            <li>Approve Slack OAuth so Thane can identify your workspace.</li>
+            <li>For paid tiers, you are automatically sent to Stripe checkout for the tier you selected.</li>
+            <li>After install, invite Thane to channels with <code>/invite @Thane</code>.</li>
+            <li>Assign work naturally in channel or DM and Thane will track it.</li>
+          </ol>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>

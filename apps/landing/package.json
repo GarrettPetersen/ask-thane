@@ -9,7 +9,7 @@
     "build": "wrangler deploy --dry-run",
     "typecheck": "echo 'No TypeScript source in landing app yet'",
     "lint": "echo 'No lint task yet for @ask-thane/landing'",
-    "test": "echo 'No tests yet for @ask-thane/landing'"
+    "test": "pnpm -w exec vitest run apps/landing/test"
   },
   "devDependencies": {
     "wrangler": "^4.17.0"

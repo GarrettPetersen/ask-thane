@@ -32,6 +32,8 @@ Fill these values:
 - [ ] `CLOUDFLARE_ACCOUNT_ID`
 - [ ] `CLOUDFLARE_API_TOKEN`
 - [ ] `OPENAI_API_KEY`
+- [ ] `OPENAI_ADMIN_API_KEY` (recommended for `/v1/organization/costs` reconciliation)
+- [ ] `OPENAI_ORGANIZATION_ID` (optional explicit org routing)
 - [ ] `ANTHROPIC_API_KEY` (optional if not using Anthropic yet)
 - [ ] `SLACK_SIGNING_SECRET`
 - [ ] `SLACK_BOT_TOKEN` (legacy fallback; optional once OAuth installs are live)
@@ -42,12 +44,33 @@ Fill these values:
 - [ ] `SLACK_BOT_SCOPES` (optional override; defaults exist in worker config)
 - [ ] `STRIPE_SECRET_KEY` (optional currently)
 - [ ] `STRIPE_WEBHOOK_SECRET` (optional currently)
+- [ ] `BILLING_E2E_STRIPE_SECRET_KEY` (GitHub environment secret for `.github/workflows/billing-e2e-smoke.yml`; use restricted key)
+- [ ] `STRIPE_PRICE_TEAM_MONTHLY` (required for hosted checkout)
+- [ ] `STRIPE_PRICE_GROWTH_MONTHLY` (required for hosted checkout)
+- [ ] `STRIPE_PRICE_SCALE_MONTHLY` (required for hosted checkout)
+- [ ] `STRIPE_PRICE_SCALE_PLUS_MONTHLY` (required for hosted checkout)
 - [ ] `STRIPE_METER_NAME_ACTIVE_USERS` (if using Stripe metered billing)
 - [ ] `STRIPE_METER_NAME_ACTIVE_CHANNELS` (if using Stripe metered billing)
 - [ ] `STRIPE_METER_NAME_TASK_EVENTS` (if using Stripe metered billing)
+- [ ] `STRIPE_METER_NAME_AI_OVERAGE_USD` (recommended meter for AI overage billing)
+- [ ] `STRIPE_METER_NAME_LLM_COST_USD` (optional legacy/raw meter; keep unset to avoid raw-cost billing)
+- [ ] `OPENAI_PRICE_PROMPT_PER_1K_USD` (for per-call USD cost estimation)
+- [ ] `OPENAI_PRICE_COMPLETION_PER_1K_USD` (for per-call USD cost estimation)
+- [ ] `OPENAI_PRICING_VERSION` (optional label for pricing config revisions)
+- [ ] `OPENAI_COST_RECONCILIATION_ENABLED` (default `true`)
+- [ ] `OPENAI_RECON_ALERT_THRESHOLD_PCT` (default `10`; can also be set as ratio like `0.1`)
 - [ ] `DEFAULT_LLM_PROVIDER` (default `openai`)
-- [ ] `DEFAULT_LLM_MODEL` (default `gpt-4.1-mini`)
-- [ ] `DEFAULT_ORGANIZATION_ID` (default `org_0`)
+- [ ] `DEFAULT_LLM_MODEL` (default `gpt-5.4-mini`)
+- [ ] `FREE_TIER_LLM_MODEL` (optional lower-cost model for free workspaces)
+- [ ] `FREE_TIER_MONTHLY_AI_CAP_USD` (default `10`)
+- [ ] `SUBSCRIPTION_PAGE_URL` (upgrade URL shown when free-tier AI spend cap is reached)
+- [ ] `PAID_TIER_LLM_MODEL` (optional paid-tier fallback model)
+- [ ] `TEAM_TIER_LLM_MODEL` (optional override)
+- [ ] `GROWTH_TIER_LLM_MODEL` (optional override)
+- [ ] `SCALE_TIER_LLM_MODEL` (optional override)
+- [ ] `SCALE_PLUS_TIER_LLM_MODEL` (optional override)
+- [ ] `PAID_TIER_DIGEST_LLM_MODEL` (optional paid digest-specific override)
+- [ ] `DEFAULT_ORGANIZATION_ID` (optional legacy fallback for local/dev only)
 - [ ] `ADMIN_TRIGGER_TOKEN` (for protected manual poll/status endpoints)
 - [ ] `ADMIN_HMAC_KEYS` (optional stronger admin auth: `keyId:secret,keyId2:secret2`)
 - [ ] `ADMIN_HMAC_MAX_SKEW_SECONDS` (optional, default `300`)
@@ -55,35 +78,34 @@ Fill these values:
 Notes:
 - `.env` is for local workflows and your own reference.
 - Cloudflare Workers do not automatically consume your local `.env` in production; set secrets/vars in Cloudflare too.
+- Use `node scripts/setup-stripe-prices.mjs` to create/reuse Stripe monthly prices and print the four `STRIPE_PRICE_*` values.
 
-## 3) Create and migrate D1
+## 3) Create and migrate D1 (separate staging and production)
 From `apps/bot-worker`:
 
 ```bash
 cd apps/bot-worker
 npx wrangler d1 create ask-thane
+npx wrangler d1 create ask-thane-staging
 ```
 
 After creation:
-- [ ] Copy the returned `database_id`.
-- [ ] Replace `database_id` in:
+- [ ] Copy both returned `database_id` values.
+- [ ] Bind production envs to `ask-thane` DB id and staging envs to `ask-thane-staging` DB id in:
   - `apps/bot-worker/wrangler.toml`
   - `apps/api-worker/wrangler.toml`
 
-Apply schema and migrations (remote):
+Initialize each DB from the canonical schema snapshot (remote):
 
 ```bash
 npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/schema.sql
-npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0001_org-multitenancy.sql
-npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0002_access-control-foundations.sql
-npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0003_slack-workspace-installs.sql
-npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0004_waitlist-signups.sql
-npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0005-identity-notes-task-actions-and-waivers.sql
-npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0006-workspace-poll-cursors.sql
-npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0007-user-notification-cadences-and-digest-deliveries.sql
-npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0008-follow-up-jobs.sql
-npx wrangler d1 execute ask-thane --remote --file ../../infra/d1/migrations/0009-observability-feedback-and-billing.sql
+npx wrangler d1 execute ask-thane-staging --remote --file ../../infra/d1/schema.sql
 ```
+
+Note:
+- `infra/d1/schema.sql` is the current canonical schema snapshot and already includes all migration effects.
+- Do not replay the full historical migration chain on a fresh DB after loading `schema.sql`; that can cause duplicate-column/table errors.
+- For upgrades of an already-running older DB, apply only the incremental migration files that have not yet been applied.
 
 ## 4) Configure bot Worker (`ask-thane-bot`)
 Deploy once to create/update the Worker:
@@ -109,7 +131,7 @@ npx wrangler secret put ADMIN_TRIGGER_TOKEN
 Set non-secret vars in `apps/bot-worker/wrangler.toml`:
 - [ ] `DEFAULT_LLM_PROVIDER`
 - [ ] `DEFAULT_LLM_MODEL`
-- [ ] `DEFAULT_ORGANIZATION_ID`
+- [ ] `DEFAULT_ORGANIZATION_ID` (optional legacy fallback)
 
 Verify endpoint:
 - [ ] `GET /health` returns 200 on bot Worker URL
@@ -130,7 +152,7 @@ npx wrangler deploy
 ```
 
 Checklist:
-- [ ] D1 binding points at same `ask-thane` database as bot worker
+- [ ] Staging API worker binds to `ask-thane-staging`; production API worker binds to `ask-thane`
 - [ ] `GET /health` returns 200
 - [ ] `GET /v1/tasks/open-visible?...` returns JSON
 
@@ -151,6 +173,9 @@ npx wrangler secret put STRIPE_SECRET_KEY
 Checklist:
 - [ ] `GET /health` returns 200
 - [ ] `POST /webhooks/stripe` endpoint exists
+- [ ] `GET /subscribe` renders hosted pricing page
+- [ ] `POST /api/checkout/session` creates Stripe Checkout sessions for configured plans
+- [ ] Run `BILLING_E2E_ENABLED=true pnpm test:billing:e2e` against staging (creates and then expires checkout sessions; no completed charge flow)
 
 ## 7) Slack app configuration
 In Slack app settings:
@@ -169,6 +194,7 @@ In Slack app settings:
 - [ ] Open install URL and complete install:
   - `https://<your-bot-worker-domain>/slack/install`
 - [ ] Confirm install record exists in D1 table `slack_workspace_installs`.
+- [ ] Confirm org-account mapping row exists in `organization_external_accounts` for this install.
 - [ ] Confirm callback output has `missingRecommendedScopes: []` (or add missing scopes and reinstall).
 
 ### Bot token scopes (for current code path)
@@ -232,10 +258,14 @@ Reality check:
 ## 12) GitHub Actions deploy workflow
 - Staging workflow: `.github/workflows/deploy-workers-staging.yml`
   - Pushes to `master` deploy changed worker apps (`bot`, `api`, `payments`) to Wrangler `--env staging`.
+  - Validates migration SQL with `scripts/check-d1-migrations-nondestructive.mjs` before applying migrations.
+  - Applies D1 migrations to staging before bot/api deploy.
   - `landing` is intentionally excluded (Cloudflare Pages/Worker integration already handles it).
 - Production workflow: `.github/workflows/deploy-workers-production.yml`
   - Manual `workflow_dispatch` only.
   - Deploy target env is Wrangler `--env production`.
+  - Validates migration SQL with `scripts/check-d1-migrations-nondestructive.mjs` before applying migrations.
+  - Applies D1 migrations to production before bot/api deploy.
   - Attach GitHub Environment approval rules to `production` for release gating.
 
 ## Reference docs

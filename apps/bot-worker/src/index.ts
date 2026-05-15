@@ -3,7 +3,15 @@ import { healthcheck } from "./routes/health";
 import { handleSlackEvents } from "./routes/slack-events";
 import { handleSlackInstallStart, handleSlackOAuthCallback } from "./routes/slack-oauth";
 import { isAdminAuthorized } from "./services/admin-auth";
-import { aggregateDailyUsage, getUsageStatus, syncUsageToStripe } from "./services/billing-usage";
+import {
+  aggregateDailyUsage,
+  getBillingPreviewStatus,
+  getOpenAiCostReconciliationStatus,
+  getWorkspaceBillingPreview,
+  getUsageStatus,
+  syncOpenAiCostReconciliation,
+  syncUsageToStripe
+} from "./services/billing-usage";
 import { ConversationAccessResolver } from "./services/conversation-access";
 import { runEvalReplay } from "./services/eval-harness";
 import { runScheduledFollowUpJobs } from "./services/follow-up-jobs";
@@ -383,6 +391,71 @@ export default {
       return Response.json(summary, { status: (summary as { ok?: boolean }).ok ? 200 : 400 });
     }
 
+    if (pathname === "/admin/usage/reconcile-openai" && request.method === "POST") {
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
+      }
+      const parsed = await parseJsonBody<{ usageDate?: string }>(request);
+      if (!parsed.ok) {
+        return parsed.response;
+      }
+      const summary = await syncOpenAiCostReconciliation(env, parsed.value.usageDate);
+      return Response.json(summary, { status: (summary as { ok?: boolean }).ok ? 200 : 400 });
+    }
+
+    if (pathname === "/admin/usage/reconcile-status" && request.method === "GET") {
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
+      }
+      const status = await getOpenAiCostReconciliationStatus(env);
+      return Response.json(status, { status: 200 });
+    }
+
+    if (pathname === "/admin/usage/billing-preview" && request.method === "GET") {
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
+      }
+      const workspaceId = url.searchParams.get("workspaceId")?.trim() ?? "";
+      const month = url.searchParams.get("month")?.trim() ?? undefined;
+      if (!workspaceId) {
+        return Response.json({ ok: false, error: "workspace_id_required" }, { status: 400 });
+      }
+
+      const ws = await env.DB
+        .prepare(
+          `SELECT organization_id
+           FROM workspaces
+           WHERE id = ?
+           LIMIT 1`
+        )
+        .bind(workspaceId)
+        .first<Record<string, unknown>>();
+      if (!ws?.organization_id) {
+        return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
+      }
+
+      const preview = await getWorkspaceBillingPreview({
+        env,
+        organizationId: String(ws.organization_id),
+        workspaceId,
+        ...(month ? { month } : {})
+      });
+      return Response.json(preview, { status: 200 });
+    }
+
+    if (pathname === "/admin/usage/billing-preview-status" && request.method === "GET") {
+      const unauthorized = await requireAdmin(request, env);
+      if (unauthorized) {
+        return unauthorized;
+      }
+      const month = url.searchParams.get("month")?.trim() ?? undefined;
+      const status = await getBillingPreviewStatus(env, month);
+      return Response.json(status, { status: 200 });
+    }
+
     if (pathname === "/admin/usage/status" && request.method === "GET") {
       const unauthorized = await requireAdmin(request, env);
       if (unauthorized) {
@@ -463,5 +536,6 @@ export default {
     ctx.waitUntil(runScheduledFollowUpJobs(env));
     ctx.waitUntil(runSlackPollWithMembershipRefresh(env));
     ctx.waitUntil(aggregateDailyUsage(env));
+    ctx.waitUntil(syncOpenAiCostReconciliation(env));
   }
 };

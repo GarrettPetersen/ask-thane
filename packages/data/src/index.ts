@@ -27,6 +27,11 @@ export interface IngestEventInput {
   providerEventId: string;
   providerMessageId?: string;
   conversationSourceId?: string;
+  eventType?: string;
+  eventSubtype?: string;
+  channelId?: string;
+  actorExternalUserId?: string;
+  eventTs?: string;
   receivedAt: string;
 }
 
@@ -108,6 +113,9 @@ export interface TaskActionInput {
   dueAt?: string | null;
   urgency?: TaskUrgency;
   difficulty?: TaskDifficulty;
+  assigneePlatform?: UserRef["platform"];
+  assigneeId?: string;
+  assigneeName?: string | null;
 }
 
 export interface PermissionWaiverRequestInput {
@@ -271,6 +279,16 @@ function buildEffectiveTaskStatusExpression(
   };
 }
 
+function escapeLikePattern(raw: string, maxLength = 120): string {
+  const normalized = raw.trim().toLowerCase().slice(0, maxLength);
+  return normalized.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
+function isLikePatternTooComplexError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.toLowerCase().includes("like or glob pattern too complex");
+}
+
 export class D1TaskRepository implements TaskRepository {
   constructor(private readonly db: D1Database) {}
 
@@ -413,8 +431,9 @@ export class D1TaskRepository implements TaskRepository {
   async recordIngestEvent(input: IngestEventInput): Promise<boolean> {
     const stmt = this.db.prepare(
       `INSERT INTO ingest_events (
-         id, organization_id, provider, provider_event_id, provider_message_id, conversation_source_id, received_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?)
+         id, organization_id, provider, provider_event_id, provider_message_id, conversation_source_id,
+         event_type, event_subtype, channel_id, actor_external_user_id, event_ts, received_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(organization_id, provider, provider_event_id) DO NOTHING`
     );
 
@@ -426,6 +445,11 @@ export class D1TaskRepository implements TaskRepository {
         input.providerEventId,
         input.providerMessageId ?? null,
         input.conversationSourceId ?? null,
+        input.eventType ?? null,
+        input.eventSubtype ?? null,
+        input.channelId ?? null,
+        input.actorExternalUserId ?? null,
+        input.eventTs ?? null,
         input.receivedAt
       )
       .run();
@@ -581,8 +605,10 @@ export class D1TaskRepository implements TaskRepository {
 
     const query = input.query?.trim();
     if (query) {
-      whereParts.push("(LOWER(vt.title) LIKE ? OR LOWER(COALESCE(vt.description, '')) LIKE ?)");
-      const like = `%${query.toLowerCase()}%`;
+      whereParts.push(
+        "(LOWER(vt.title) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(vt.description, '')) LIKE ? ESCAPE '\\')"
+      );
+      const like = `%${escapeLikePattern(query)}%`;
       bindings.push(like, like);
     }
 
@@ -599,8 +625,16 @@ export class D1TaskRepository implements TaskRepository {
        ORDER BY vt.created_at DESC
        LIMIT ?`;
 
-    const result = await this.db.prepare(sql).bind(...bindings).all<Record<string, unknown>>();
-    return (result.results ?? []).map((row) => toTaskRecord(row));
+    try {
+      const result = await this.db.prepare(sql).bind(...bindings).all<Record<string, unknown>>();
+      return (result.results ?? []).map((row) => toTaskRecord(row));
+    } catch (error) {
+      if (query && isLikePatternTooComplexError(error)) {
+        const { query: _query, ...retryInput } = input;
+        return this.searchTasksWithAcl(retryInput);
+      }
+      throw error;
+    }
   }
 
   async getTaskByIdWithAcl(input: AclTaskGetByIdInput): Promise<TaskRecord | null> {
@@ -742,22 +776,33 @@ export class D1TaskRepository implements TaskRepository {
 
     const query = input.query?.trim().toLowerCase();
     if (query) {
-      where.push("(LOWER(COALESCE(display_name, '')) LIKE ? OR LOWER(COALESCE(email, '')) LIKE ? OR LOWER(external_user_id) LIKE ?)");
-      const like = `%${query}%`;
+      where.push(
+        "(LOWER(COALESCE(display_name, '')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(email, '')) LIKE ? ESCAPE '\\' OR LOWER(external_user_id) LIKE ? ESCAPE '\\')"
+      );
+      const like = `%${escapeLikePattern(query)}%`;
       bindings.push(like, like, like);
     }
 
     bindings.push(limit);
-    const result = await this.db
-      .prepare(
-        `SELECT id, external_user_id, display_name, email
-         FROM users
-         WHERE ${where.join(" AND ")}
-         ORDER BY updated_at DESC
-         LIMIT ?`
-      )
-      .bind(...bindings)
-      .all<Record<string, unknown>>();
+    let result: D1Result<Record<string, unknown>>;
+    try {
+      result = await this.db
+        .prepare(
+          `SELECT id, external_user_id, display_name, email
+           FROM users
+           WHERE ${where.join(" AND ")}
+           ORDER BY updated_at DESC
+           LIMIT ?`
+        )
+        .bind(...bindings)
+        .all<Record<string, unknown>>();
+    } catch (error) {
+      if (query && isLikePatternTooComplexError(error)) {
+        const { query: _query, ...retryInput } = input;
+        return this.listWorkspaceUsers(retryInput);
+      }
+      throw error;
+    }
 
     return (result.results ?? []).map((row) => ({
       userId: String(row.id),
@@ -1029,6 +1074,7 @@ export class D1TaskRepository implements TaskRepository {
 
     if (input.actionType === "edit") {
       const shouldUpdateDueAt = input.dueAt !== undefined;
+      const shouldUpdateAssignee = typeof input.assigneeId === "string" && input.assigneeId.trim().length > 0;
       await this.db
         .prepare(
           `UPDATE tasks
@@ -1036,7 +1082,10 @@ export class D1TaskRepository implements TaskRepository {
                description = COALESCE(?, description),
                due_at = CASE WHEN ? = 1 THEN ? ELSE due_at END,
                urgency = COALESCE(?, urgency),
-               difficulty = COALESCE(?, difficulty)
+               difficulty = COALESCE(?, difficulty),
+               assignee_platform = CASE WHEN ? = 1 THEN ? ELSE assignee_platform END,
+               assignee_id = CASE WHEN ? = 1 THEN ? ELSE assignee_id END,
+               assignee_name = CASE WHEN ? = 1 THEN ? ELSE assignee_name END
            WHERE id = ? AND organization_id = ?`
         )
         .bind(
@@ -1046,6 +1095,12 @@ export class D1TaskRepository implements TaskRepository {
           shouldUpdateDueAt ? (input.dueAt ?? null) : null,
           input.urgency ?? null,
           input.difficulty ?? null,
+          shouldUpdateAssignee ? 1 : 0,
+          shouldUpdateAssignee ? (input.assigneePlatform ?? "slack") : null,
+          shouldUpdateAssignee ? 1 : 0,
+          shouldUpdateAssignee ? input.assigneeId : null,
+          shouldUpdateAssignee ? 1 : 0,
+          shouldUpdateAssignee ? (input.assigneeName ?? null) : null,
           input.taskId,
           input.organizationId
         )

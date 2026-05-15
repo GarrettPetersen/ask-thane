@@ -14,6 +14,25 @@ import { OrgRegistry } from "../services/org-registry";
 import { SlackInstallStore } from "../services/slack-install-store";
 import { verifySlackRequestSignature } from "../services/slack-signature";
 
+function resolveSlackEnterpriseId(payload: SlackEnvelope): string | undefined {
+  const fromTopLevel = (payload as { enterprise_id?: unknown }).enterprise_id;
+  if (typeof fromTopLevel === "string" && fromTopLevel.trim()) {
+    return fromTopLevel.trim();
+  }
+  const fromContext = (payload as { context_enterprise_id?: unknown }).context_enterprise_id;
+  if (typeof fromContext === "string" && fromContext.trim()) {
+    return fromContext.trim();
+  }
+  const authorizations = (payload as { authorizations?: Array<Record<string, unknown>> }).authorizations;
+  if (Array.isArray(authorizations) && authorizations.length > 0) {
+    const fromAuth = authorizations[0]?.enterprise_id;
+    if (typeof fromAuth === "string" && fromAuth.trim()) {
+      return fromAuth.trim();
+    }
+  }
+  return undefined;
+}
+
 async function resolveSlackInstall(input: {
   env: BotEnv;
   externalWorkspaceId: string;
@@ -27,58 +46,6 @@ async function resolveSlackInstall(input: {
     };
   }
   return { botToken: input.env.SLACK_BOT_TOKEN ?? null };
-}
-
-function normalizeForAddressing(input: string): string[] {
-  return input
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .filter((token) => token.length > 0);
-}
-
-function editDistance(a: string, b: string): number {
-  if (a === b) {
-    return 0;
-  }
-  if (!a.length) {
-    return b.length;
-  }
-  if (!b.length) {
-    return a.length;
-  }
-  const dp: number[][] = Array.from({ length: a.length + 1 }, (_, i) => Array.from({ length: b.length + 1 }, (_, j) => i + j));
-  for (let i = 0; i <= a.length; i += 1) {
-    dp[i]![0] = i;
-  }
-  for (let j = 0; j <= b.length; j += 1) {
-    dp[0]![j] = j;
-  }
-  for (let i = 1; i <= a.length; i += 1) {
-    for (let j = 1; j <= b.length; j += 1) {
-      const substitution = dp[i - 1]![j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1);
-      const deletion = dp[i - 1]![j]! + 1;
-      const insertion = dp[i]![j - 1]! + 1;
-      dp[i]![j] = Math.min(substitution, deletion, insertion);
-    }
-  }
-  return dp[a.length]![b.length]!;
-}
-
-function hasBotNameCue(text: string): boolean {
-  const tokens = normalizeForAddressing(text);
-  if (tokens.length === 0) {
-    return false;
-  }
-  for (const token of tokens.slice(0, 6)) {
-    if (token === "thane") {
-      return true;
-    }
-    if (token.length >= 4 && token.length <= 8 && editDistance(token, "thane") <= 2) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function isSlackAuthError(error: unknown): boolean {
@@ -158,7 +125,7 @@ async function shouldRespondToMessage(input: {
   });
   const botUserId = install.botUserId;
   const botMentioned = Boolean(botUserId && input.text.includes(`<@${botUserId}>`));
-  if (botMentioned || hasBotNameCue(input.text)) {
+  if (botMentioned) {
     return true;
   }
 
@@ -202,15 +169,11 @@ async function processSlackEventsPayload(payload: SlackEnvelope & { type?: strin
   }
 
   const registry = new OrgRegistry(env.DB);
+  const enterpriseId = resolveSlackEnterpriseId(payload);
   const workspaceRef = await registry.resolveOrCreateSlackWorkspace(
-    env.DEFAULT_ORGANIZATION_ID
-      ? {
-          externalWorkspaceId,
-          defaultOrganizationId: env.DEFAULT_ORGANIZATION_ID
-        }
-      : {
-          externalWorkspaceId
-        }
+    enterpriseId
+      ? { externalWorkspaceId, externalOrganizationId: enterpriseId }
+      : { externalWorkspaceId }
   );
   const organizationId = workspaceRef.organizationId;
 
@@ -218,13 +181,24 @@ async function processSlackEventsPayload(payload: SlackEnvelope & { type?: strin
   const providerEventId =
     payload.event_id ??
     `${payload.event?.type ?? "unknown"}:${payload.event?.channel ?? "unknown"}:${payload.event?.ts ?? payload.event_time ?? "unknown"}`;
+  const slackEventTs =
+    typeof payload.event?.ts === "string" && payload.event.ts.trim().length > 0
+      ? payload.event.ts.trim()
+      : typeof payload.event_time === "number"
+        ? String(payload.event_time)
+        : undefined;
   const ingestInput = {
     id: crypto.randomUUID(),
     organizationId,
     provider: "slack",
     providerEventId,
+    ...(payload.event?.type ? { eventType: payload.event.type } : {}),
+    ...(payload.event?.subtype ? { eventSubtype: payload.event.subtype } : {}),
+    ...(payload.event?.channel ? { channelId: payload.event.channel } : {}),
+    ...(payload.event?.user ? { actorExternalUserId: payload.event.user } : {}),
+    ...(slackEventTs ? { eventTs: slackEventTs } : {}),
     receivedAt: new Date().toISOString()
-  } as const;
+  } as Parameters<D1TaskRepository["recordIngestEvent"]>[0];
   const isFirstIngest = await ingestRepo.recordIngestEvent(
     payload.event?.ts
       ? {

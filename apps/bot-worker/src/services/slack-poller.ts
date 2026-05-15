@@ -1,6 +1,7 @@
 import { D1TaskRepository } from "@ask-thane/data";
 import type { MessageEvent } from "@ask-thane/domain";
 import { runConversationalAgentForSlackMessage } from "./agent-runtime";
+import { markWorkspaceUsersDeactivated } from "./billing-policy";
 import { ConversationAccessResolver } from "./conversation-access";
 import {
   addSlackReaction,
@@ -253,6 +254,7 @@ async function ensureIdentityForSlackUser(input: {
 }
 
 async function syncWorkspaceUserProfiles(input: {
+  db: D1Database;
   target: WorkspacePollTarget;
   resolver: ConversationAccessResolver;
   repo: D1TaskRepository;
@@ -277,6 +279,14 @@ async function syncWorkspaceUserProfiles(input: {
       nowIso
     });
   }
+
+  await markWorkspaceUsersDeactivated({
+    db: input.db,
+    organizationId: input.target.organizationId,
+    workspaceId: input.target.workspaceId,
+    activeExternalUserIds: users.map((user) => user.id),
+    nowIso
+  });
 }
 
 async function hasTaskForSourceMessage(input: {
@@ -304,7 +314,7 @@ async function processWorkspaceMessages(target: WorkspacePollTarget, env: BotEnv
   const repo = new D1TaskRepository(env.DB);
   const resolver = new ConversationAccessResolver(env.DB);
   try {
-    await syncWorkspaceUserProfiles({ target, resolver, repo });
+    await syncWorkspaceUserProfiles({ db: env.DB, target, resolver, repo });
   } catch (error) {
     console.warn("workspace_user_profile_sync_failed", {
       organizationId: target.organizationId,
@@ -368,15 +378,21 @@ async function processWorkspaceMessages(target: WorkspacePollTarget, env: BotEnv
       newestSeenTs = message.ts;
 
       const providerEventId = `poll:${channel.id}:${message.ts}`;
-      const ingestCreated = await repo.recordIngestEvent({
+      const ingestInput = {
         id: crypto.randomUUID(),
         organizationId: target.organizationId,
         provider: "slack_poll",
         providerEventId,
         providerMessageId: message.ts,
         conversationSourceId: source.id,
+        eventType: "message",
+        ...(message.subtype ? { eventSubtype: message.subtype } : {}),
+        channelId: channel.id,
+        actorExternalUserId: message.user,
+        eventTs: message.ts,
         receivedAt: nowIso
-      });
+      } as Parameters<D1TaskRepository["recordIngestEvent"]>[0];
+      const ingestCreated = await repo.recordIngestEvent(ingestInput);
 
       if (!ingestCreated) {
         continue;

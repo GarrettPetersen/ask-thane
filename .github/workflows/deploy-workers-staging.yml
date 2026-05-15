@@ -65,9 +65,80 @@ jobs:
               - "package.json"
               - "tsconfig.base.json"
 
-  deploy-bot:
+  test-suite:
     runs-on: ubuntu-latest
     needs: detect-changes
+    if: >
+      github.event_name == 'workflow_dispatch' && (inputs.deploy_bot || inputs.deploy_api || inputs.deploy_payments) ||
+      github.event_name == 'push' && (needs.detect-changes.outputs.bot == 'true' || needs.detect-changes.outputs.api == 'true' || needs.detect-changes.outputs.payments == 'true')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Run Test Suite
+        run: pnpm test
+
+  apply-migrations:
+    runs-on: ubuntu-latest
+    needs: [detect-changes, test-suite]
+    environment: staging
+    if: >
+      github.event_name == 'workflow_dispatch' && (inputs.deploy_bot || inputs.deploy_api) ||
+      github.event_name == 'push' && (needs.detect-changes.outputs.bot == 'true' || needs.detect-changes.outputs.api == 'true')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Validate migrations are non-destructive
+        run: node scripts/check-d1-migrations-nondestructive.mjs
+
+      - name: Install
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Apply D1 migrations (staging)
+        working-directory: apps/bot-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler d1 migrations apply DB --env staging --remote
+
+      - name: Verify D1 migration state (staging)
+        working-directory: apps/bot-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler d1 migrations list DB --env staging --remote
+
+  deploy-bot:
+    runs-on: ubuntu-latest
+    needs: [detect-changes, test-suite, apply-migrations]
     environment: staging
     if: >
       github.event_name == 'workflow_dispatch' && inputs.deploy_bot ||
@@ -99,13 +170,13 @@ jobs:
           GIT_SHA="$(git rev-parse HEAD)"
           DEPLOYED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           npx wrangler deploy --env staging \
-            --var BUILD_GIT_SHA="$GIT_SHA" \
-            --var BUILD_ENV="staging" \
-            --var BUILD_DEPLOYED_AT="$DEPLOYED_AT"
+            --var "BUILD_GIT_SHA:$GIT_SHA" \
+            --var "BUILD_ENV:staging" \
+            --var "BUILD_DEPLOYED_AT:$DEPLOYED_AT"
 
   deploy-api:
     runs-on: ubuntu-latest
-    needs: detect-changes
+    needs: [detect-changes, test-suite, apply-migrations]
     environment: staging
     if: >
       github.event_name == 'workflow_dispatch' && inputs.deploy_api ||
@@ -137,13 +208,13 @@ jobs:
           GIT_SHA="$(git rev-parse HEAD)"
           DEPLOYED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           npx wrangler deploy --env staging \
-            --var BUILD_GIT_SHA="$GIT_SHA" \
-            --var BUILD_ENV="staging" \
-            --var BUILD_DEPLOYED_AT="$DEPLOYED_AT"
+            --var "BUILD_GIT_SHA:$GIT_SHA" \
+            --var "BUILD_ENV:staging" \
+            --var "BUILD_DEPLOYED_AT:$DEPLOYED_AT"
 
   deploy-payments:
     runs-on: ubuntu-latest
-    needs: detect-changes
+    needs: [detect-changes, test-suite]
     environment: staging
     if: >
       github.event_name == 'workflow_dispatch' && inputs.deploy_payments ||
@@ -175,6 +246,6 @@ jobs:
           GIT_SHA="$(git rev-parse HEAD)"
           DEPLOYED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           npx wrangler deploy --env staging \
-            --var BUILD_GIT_SHA="$GIT_SHA" \
-            --var BUILD_ENV="staging" \
-            --var BUILD_DEPLOYED_AT="$DEPLOYED_AT"
+            --var "BUILD_GIT_SHA:$GIT_SHA" \
+            --var "BUILD_ENV:staging" \
+            --var "BUILD_DEPLOYED_AT:$DEPLOYED_AT"

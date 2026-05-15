@@ -34,7 +34,8 @@ export async function getOpsSummary(env: BotEnv): Promise<Record<string, unknown
          COUNT(*) AS llm_calls_24h,
          SUM(prompt_tokens) AS prompt_tokens_24h,
          SUM(completion_tokens) AS completion_tokens_24h,
-         SUM(total_tokens) AS total_tokens_24h
+         SUM(total_tokens) AS total_tokens_24h,
+         COALESCE(SUM(total_cost_usd), 0) AS total_cost_usd_24h
        FROM llm_usage_events
        WHERE created_at >= ?`
     )
@@ -84,7 +85,8 @@ export async function getOpsSummary(env: BotEnv): Promise<Record<string, unknown
       calls24h: Number(llmStats?.llm_calls_24h ?? 0),
       promptTokens24h: Number(llmStats?.prompt_tokens_24h ?? 0),
       completionTokens24h: Number(llmStats?.completion_tokens_24h ?? 0),
-      totalTokens24h: Number(llmStats?.total_tokens_24h ?? 0)
+      totalTokens24h: Number(llmStats?.total_tokens_24h ?? 0),
+      totalCostUsd24h: Number(llmStats?.total_cost_usd_24h ?? 0)
     },
     feedback: {
       total24h: Number(feedbackStats?.feedback_items_24h ?? 0),
@@ -137,7 +139,8 @@ export async function getWorkspaceOpsSummary(env: BotEnv, workspaceId: string): 
       .prepare(
         `SELECT
            COUNT(*) AS llm_calls_24h,
-           SUM(total_tokens) AS llm_tokens_24h
+           SUM(total_tokens) AS llm_tokens_24h,
+           COALESCE(SUM(total_cost_usd), 0) AS llm_cost_usd_24h
          FROM llm_usage_events
          WHERE workspace_id = ?
            AND created_at >= ?`
@@ -176,7 +179,8 @@ export async function getWorkspaceOpsSummary(env: BotEnv, workspaceId: string): 
     },
     llm: {
       calls24h: Number(llmStats?.llm_calls_24h ?? 0),
-      tokens24h: Number(llmStats?.llm_tokens_24h ?? 0)
+      tokens24h: Number(llmStats?.llm_tokens_24h ?? 0),
+      costUsd24h: Number(llmStats?.llm_cost_usd_24h ?? 0)
     },
     feedback: {
       total24h: Number(feedbackStats?.feedback_24h ?? 0)

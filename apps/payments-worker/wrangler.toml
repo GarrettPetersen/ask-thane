@@ -2,23 +2,52 @@ name = "ask-thane-payments"
 main = "src/index.ts"
 compatibility_date = "2026-05-08"
 
+[[d1_databases]]
+binding = "DB"
+database_name = "ask-thane"
+database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"
+migrations_dir = "../../infra/d1/migrations"
+
 [vars]
 BUILD_ENV = "local"
 BUILD_GIT_SHA = "dev"
 BUILD_DEPLOYED_AT = "local"
+THANE_BASE_URL = "https://askthane.com"
 
 [env.staging]
 name = "ask-thane-payments-staging"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "ask-thane-staging"
+database_id = "02db76d8-728f-40a4-84f8-f17779f8e8de"
+migrations_dir = "../../infra/d1/migrations"
 
 [env.staging.vars]
 BUILD_ENV = "staging"
 BUILD_GIT_SHA = "unknown"
 BUILD_DEPLOYED_AT = "unknown"
+THANE_BASE_URL = "https://askthane.com"
+
+[[env.staging.routes]]
+pattern = "payments-staging.askthane.com"
+custom_domain = true
 
 [env.production]
 name = "ask-thane-payments"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "ask-thane"
+database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"
+migrations_dir = "../../infra/d1/migrations"
 
 [env.production.vars]
 BUILD_ENV = "production"
 BUILD_GIT_SHA = "unknown"
 BUILD_DEPLOYED_AT = "unknown"
+THANE_BASE_URL = "https://askthane.com"
+
+[[env.production.routes]]
+pattern = "payments.askthane.com"
+custom_domain = true

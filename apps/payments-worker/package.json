@@ -9,7 +9,7 @@
     "build": "wrangler deploy --dry-run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "echo 'No lint task yet for @ask-thane/payments-worker'",
-    "test": "echo 'No tests yet for @ask-thane/payments-worker'"
+    "test": "pnpm -w exec vitest run apps/payments-worker/test"
   },
   "devDependencies": {
     "wrangler": "^4.17.0"

@@ -10,6 +10,23 @@ CREATE TABLE IF NOT EXISTS organizations (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS organization_external_accounts (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  external_account_type TEXT NOT NULL,
+  external_account_id TEXT NOT NULL,
+  display_name TEXT,
+  metadata_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  UNIQUE(provider, external_account_type, external_account_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_org_external_accounts_org
+  ON organization_external_accounts(organization_id, provider);
+
 CREATE TABLE IF NOT EXISTS workspaces (
   id TEXT PRIMARY KEY,
   organization_id TEXT NOT NULL,
@@ -200,6 +217,11 @@ CREATE TABLE IF NOT EXISTS ingest_events (
   provider_event_id TEXT NOT NULL,
   provider_message_id TEXT,
   conversation_source_id TEXT,
+  event_type TEXT,
+  event_subtype TEXT,
+  channel_id TEXT,
+  actor_external_user_id TEXT,
+  event_ts TEXT,
   received_at TEXT NOT NULL,
   processed_at TEXT,
   FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
@@ -211,6 +233,8 @@ CREATE INDEX IF NOT EXISTS idx_ingest_events_org_provider_message
   ON ingest_events(organization_id, provider, provider_message_id);
 CREATE INDEX IF NOT EXISTS idx_ingest_events_org_conversation
   ON ingest_events(organization_id, conversation_source_id);
+CREATE INDEX IF NOT EXISTS idx_ingest_events_org_event_type_received
+  ON ingest_events(organization_id, provider, event_type, received_at DESC);
 
 CREATE TABLE IF NOT EXISTS external_identities (
   id TEXT PRIMARY KEY,
@@ -490,6 +514,12 @@ CREATE TABLE IF NOT EXISTS llm_usage_events (
   prompt_tokens INTEGER NOT NULL DEFAULT 0,
   completion_tokens INTEGER NOT NULL DEFAULT 0,
   total_tokens INTEGER NOT NULL DEFAULT 0,
+  prompt_cost_usd REAL,
+  completion_cost_usd REAL,
+  total_cost_usd REAL,
+  currency TEXT,
+  pricing_version TEXT,
+  api_endpoint TEXT,
   request_type TEXT,
   source TEXT,
   source_message_id TEXT,
@@ -518,3 +548,73 @@ CREATE TABLE IF NOT EXISTS usage_daily_aggregates (
 
 CREATE INDEX IF NOT EXISTS idx_usage_daily_aggregates_org_date
   ON usage_daily_aggregates(organization_id, usage_date);
+
+CREATE TABLE IF NOT EXISTS billing_workspace_settings (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  included_active_users INTEGER,
+  hard_cap_active_users INTEGER,
+  active_user_window_days INTEGER NOT NULL DEFAULT 30,
+  overage_enabled INTEGER NOT NULL DEFAULT 1,
+  is_enabled INTEGER NOT NULL DEFAULT 1,
+  metadata_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  UNIQUE(organization_id, workspace_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_billing_workspace_settings_workspace
+  ON billing_workspace_settings(organization_id, workspace_id);
+
+CREATE TABLE IF NOT EXISTS workspace_user_activity (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT,
+  external_user_id TEXT NOT NULL,
+  first_activity_at TEXT NOT NULL,
+  last_activity_at TEXT NOT NULL,
+  last_event_type TEXT,
+  last_conversation_source_id TEXT,
+  last_source_message_id TEXT,
+  is_billable INTEGER NOT NULL DEFAULT 1,
+  is_deactivated INTEGER NOT NULL DEFAULT 0,
+  deactivated_at TEXT,
+  metadata_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (last_conversation_source_id) REFERENCES conversation_sources(id) ON DELETE SET NULL,
+  UNIQUE(organization_id, workspace_id, external_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_user_activity_active
+  ON workspace_user_activity(organization_id, workspace_id, is_billable, is_deactivated, last_activity_at);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_user_activity_user
+  ON workspace_user_activity(organization_id, workspace_id, user_id);
+
+CREATE TABLE IF NOT EXISTS openai_cost_reconciliation_daily (
+  id TEXT PRIMARY KEY,
+  usage_date TEXT NOT NULL UNIQUE,
+  estimated_cost_usd REAL NOT NULL DEFAULT 0,
+  actual_cost_usd REAL NOT NULL DEFAULT 0,
+  variance_cost_usd REAL NOT NULL DEFAULT 0,
+  variance_ratio REAL,
+  alert_threshold_ratio REAL NOT NULL DEFAULT 0.10,
+  alert_triggered INTEGER NOT NULL DEFAULT 0,
+  alerted_at TEXT,
+  currency TEXT NOT NULL DEFAULT 'usd',
+  openai_request_id TEXT,
+  source_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_openai_cost_reconciliation_daily_date
+  ON openai_cost_reconciliation_daily(usage_date DESC);

@@ -90,6 +90,9 @@ function buildSystemPrompt(): string {
     "You extract actionable tasks from Slack messages.",
     "Only extract tasks when a concrete request, assignment, or commitment is present.",
     "If there is no clear task, return an empty tasks array.",
+    "If text is an instruction to Thane about changing an existing task (for example add details/update metadata), do not output a new task.",
+    "Task title must be concise and action-only; do not include assignee phrases such as 'with Danika' in title.",
+    "Use description for collaborator/context details and constraints.",
     "Prefer assignee_user_id from Slack mentions like <@U123>. If unclear, leave assignee_user_id null.",
     "Output must match the provided JSON schema exactly."
   ].join(" ");

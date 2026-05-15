@@ -10,6 +10,15 @@ export interface BotEnv {
   BUILD_DEPLOYED_AT?: string;
   DEFAULT_LLM_PROVIDER?: "openai" | "anthropic";
   DEFAULT_LLM_MODEL?: string;
+  FREE_TIER_LLM_MODEL?: string;
+  PAID_TIER_LLM_MODEL?: string;
+  TEAM_TIER_LLM_MODEL?: string;
+  GROWTH_TIER_LLM_MODEL?: string;
+  SCALE_TIER_LLM_MODEL?: string;
+  SCALE_PLUS_TIER_LLM_MODEL?: string;
+  PAID_TIER_DIGEST_LLM_MODEL?: string;
+  FREE_TIER_MONTHLY_AI_CAP_USD?: string;
+  SUBSCRIPTION_PAGE_URL?: string;
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
   SLACK_SIGNING_SECRET?: string;
@@ -32,6 +41,17 @@ export interface BotEnv {
   STRIPE_METER_NAME_ACTIVE_USERS?: string;
   STRIPE_METER_NAME_ACTIVE_CHANNELS?: string;
   STRIPE_METER_NAME_TASK_EVENTS?: string;
+  STRIPE_METER_NAME_LLM_COST_USD?: string;
+  STRIPE_METER_NAME_AI_OVERAGE_USD?: string;
+  OPENAI_ADMIN_API_KEY?: string;
+  OPENAI_ORGANIZATION_ID?: string;
+  OPENAI_COST_RECONCILIATION_ENABLED?: string;
+  OPENAI_RECON_ALERT_THRESHOLD_PCT?: string;
+  OPENAI_PRICE_PROMPT_PER_1K_USD?: string;
+  OPENAI_PRICE_COMPLETION_PER_1K_USD?: string;
+  OPENAI_PRICE_INPUT_PER_1K_USD?: string;
+  OPENAI_PRICE_OUTPUT_PER_1K_USD?: string;
+  OPENAI_PRICING_VERSION?: string;
 }
 
 export async function inferAndPersistTasks(event: MessageEvent, env: BotEnv) {

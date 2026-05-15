@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ask Thane Subprocessors</title>
+    <meta name="description" content="Current third-party subprocessors used by Ask Thane." />
+    <meta name="theme-color" content="#f7f3ea" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <style>
+      body { margin: 0; font-family: "Avenir Next", "Segoe UI", sans-serif; background: #f7f3ea; color: #131313; }
+      .container { width: min(900px, 100% - 2rem); margin: 0 auto; }
+      article { background: #fffdf8; border: 1px solid #e7decd; border-radius: 16px; padding: 22px; margin: 24px 0; }
+      table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+      th, td { border: 1px solid #e7decd; padding: 10px; text-align: left; vertical-align: top; }
+      th { background: #f1eadb; }
+      p, li { line-height: 1.6; }
+      a { color: #0f5fd7; }
+      footer { margin: 0 0 28px; }
+    </style>
+  </head>
+  <body>
+    <main class="container">
+      <article>
+        <h1>Subprocessors</h1>
+        <p><strong>Last updated:</strong> May 14, 2026</p>
+        <p>
+          Ask Thane uses the following subprocessors to operate the service.
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <th>Purpose</th>
+              <th>Data Categories</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Cloudflare</td>
+              <td>Hosting, edge runtime, and database infrastructure</td>
+              <td>Application data and operational metadata</td>
+            </tr>
+            <tr>
+              <td>Slack</td>
+              <td>Messaging platform integration</td>
+              <td>Message content, channel metadata, workspace and user identifiers</td>
+            </tr>
+            <tr>
+              <td>OpenAI</td>
+              <td>LLM inference for task and reminder intelligence</td>
+              <td>Prompted message/task context and metadata necessary for inference</td>
+            </tr>
+            <tr>
+              <td>Anthropic (optional)</td>
+              <td>Alternative LLM inference provider when configured</td>
+              <td>Prompted message/task context and metadata necessary for inference</td>
+            </tr>
+            <tr>
+              <td>Stripe (when billing enabled)</td>
+              <td>Payment processing and usage-based billing</td>
+              <td>Billing identifiers, metered usage totals, and payment metadata</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h2>Updates</h2>
+        <p>
+          We may update this list as infrastructure changes. Material additions will be reflected on this
+          page.
+        </p>
+      </article>
+      <footer>
+        <a href="/">Back</a> | <a href="/terms.html">Terms</a> | <a href="/privacy.html">Privacy</a>
+      </footer>
+    </main>
+  </body>
+</html>

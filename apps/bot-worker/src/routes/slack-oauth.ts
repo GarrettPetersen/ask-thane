@@ -25,6 +25,8 @@ const RECOMMENDED_SCOPES = [
 interface StatePayload {
   ts: number;
   nonce: string;
+  installPlan?: "free" | "paid";
+  selectedTier?: "team" | "growth" | "scale" | "scale_plus";
 }
 
 interface SlackOAuthResponse {
@@ -38,6 +40,11 @@ interface SlackOAuthResponse {
     id?: string;
     name?: string;
   };
+  enterprise?: {
+    id?: string;
+    name?: string;
+  };
+  is_enterprise_install?: boolean;
   authed_user?: {
     id?: string;
   };
@@ -53,10 +60,23 @@ function renderInstallPage(input: {
   message: string;
   details?: string[];
   ok: boolean;
+  ctaHref?: string;
+  ctaLabel?: string;
+  autoRedirectMs?: number;
 }): Response {
   const detailsHtml = (input.details ?? [])
     .map((item) => `<li>${item}</li>`)
     .join("");
+  const ctaHref = input.ctaHref?.trim();
+  const ctaLabel = input.ctaLabel?.trim();
+  const ctaHtml =
+    ctaHref && ctaLabel
+      ? `<p style="margin:18px 0 0"><a href="${ctaHref}" style="display:inline-block;background:#0f5fd7;color:#fff;padding:10px 14px;border-radius:10px;text-decoration:none;font-weight:700">${ctaLabel}</a></p>`
+      : "";
+  const redirectScript =
+    ctaHref && input.autoRedirectMs && input.autoRedirectMs > 0
+      ? `<script>setTimeout(() => { window.location.href = ${JSON.stringify(ctaHref)}; }, ${Math.floor(input.autoRedirectMs)});</script>`
+      : "";
 
   const html = `<!doctype html>
 <html lang="en">
@@ -109,8 +129,10 @@ function renderInstallPage(input: {
       <div class="status">${input.ok ? "Install complete" : "Install failed"}</div>
       <h1>${input.title}</h1>
       <p>${input.message}</p>
+      ${ctaHtml}
       ${detailsHtml ? `<ul>${detailsHtml}</ul>` : ""}
     </section>
+    ${redirectScript}
   </body>
 </html>`;
 
@@ -164,34 +186,44 @@ async function signState(payloadPart: string, secret: string): Promise<string> {
   return base64UrlEncode(binary);
 }
 
-async function issueState(secret: string): Promise<string> {
+async function issueState(input: {
+  secret: string;
+  installPlan?: "free" | "paid";
+  selectedTier?: "team" | "growth" | "scale" | "scale_plus";
+}): Promise<string> {
   const payload: StatePayload = {
     ts: Date.now(),
-    nonce: crypto.randomUUID()
+    nonce: crypto.randomUUID(),
+    ...(input.installPlan ? { installPlan: input.installPlan } : {}),
+    ...(input.selectedTier ? { selectedTier: input.selectedTier } : {})
   };
   const payloadPart = base64UrlEncode(JSON.stringify(payload));
-  const sigPart = await signState(payloadPart, secret);
+  const sigPart = await signState(payloadPart, input.secret);
   return `${payloadPart}.${sigPart}`;
 }
 
-async function verifyState(state: string, secret: string): Promise<boolean> {
+async function verifyState(state: string, secret: string): Promise<StatePayload | null> {
   const [payloadPart, sigPart] = state.split(".");
   if (!payloadPart || !sigPart) {
-    return false;
+    return null;
   }
 
   const expectedSig = await signState(payloadPart, secret);
   if (!constantTimeEqual(sigPart, expectedSig)) {
-    return false;
+    return null;
   }
 
   const payloadRaw = base64UrlDecode(payloadPart);
   const parsed = JSON.parse(payloadRaw) as StatePayload;
   if (typeof parsed.ts !== "number") {
-    return false;
+    return null;
   }
 
-  return Date.now() - parsed.ts <= STATE_TTL_MS;
+  if (Date.now() - parsed.ts > STATE_TTL_MS) {
+    return null;
+  }
+
+  return parsed;
 }
 
 function resolveRedirectUri(request: Request, env: BotEnv): string {
@@ -206,6 +238,38 @@ function resolveRedirectUri(request: Request, env: BotEnv): string {
   return `${new URL(request.url).origin}/slack/oauth/callback`;
 }
 
+function resolveSubscriptionPageUrl(env: BotEnv): string {
+  const configured = env.SUBSCRIPTION_PAGE_URL?.trim();
+  if (configured) {
+    return configured;
+  }
+  return "https://payments.askthane.com/subscribe";
+}
+
+function workspaceBillingSubscribeUrl(input: {
+  env: BotEnv;
+  organizationId: string;
+  workspaceId: string;
+  selectedTier?: "team" | "growth" | "scale" | "scale_plus";
+}): string {
+  const base = resolveSubscriptionPageUrl(input.env);
+  const url = new URL(base);
+  url.searchParams.set("organization_id", input.organizationId);
+  url.searchParams.set("workspace_id", input.workspaceId);
+  if (input.selectedTier) {
+    url.searchParams.set("plan_tier", input.selectedTier);
+    url.searchParams.set("autostart", "1");
+  }
+  return url.toString();
+}
+
+function normalizeSelectedTier(value: string | null): "team" | "growth" | "scale" | "scale_plus" | null {
+  if (value === "team" || value === "growth" || value === "scale" || value === "scale_plus") {
+    return value;
+  }
+  return null;
+}
+
 function getMissingRecommendedScopes(scopeCsv: string | undefined): string[] {
   const configured = new Set<string>();
   for (const rawScope of (scopeCsv ?? "").split(",")) {
@@ -215,6 +279,61 @@ function getMissingRecommendedScopes(scopeCsv: string | undefined): string[] {
     }
   }
   return RECOMMENDED_SCOPES.filter((scope) => !configured.has(scope));
+}
+
+async function sendInstallOnboardingDm(input: {
+  botToken: string;
+  installerExternalUserId?: string;
+  installPlan: "free" | "paid";
+  billingSubscribeUrl: string;
+}): Promise<void> {
+  const userId = input.installerExternalUserId?.trim();
+  if (!userId) {
+    return;
+  }
+
+  const onboardingLines = [
+    "Thane is installed for your workspace.",
+    "Next step: add me to any channel where you want automatic task tracking.",
+    "In that channel, run: /invite @Thane",
+    "Then assign a task naturally (for example: \"Alex, please send the draft by Friday\")."
+  ];
+  if (input.installPlan === "paid") {
+    onboardingLines.push(`To activate paid features now: ${input.billingSubscribeUrl}`);
+  }
+
+  try {
+    const openResponse = await fetch("https://slack.com/api/conversations.open", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${input.botToken}`,
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      body: JSON.stringify({ users: userId })
+    });
+    const openPayload = (await openResponse.json()) as {
+      ok?: boolean;
+      channel?: { id?: string };
+    };
+    const channelId = openPayload.ok ? openPayload.channel?.id : undefined;
+    if (!channelId) {
+      return;
+    }
+
+    await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${input.botToken}`,
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      body: JSON.stringify({
+        channel: channelId,
+        text: onboardingLines.join("\n")
+      })
+    });
+  } catch {
+    // Non-fatal: install success should not be blocked by onboarding DM failures.
+  }
 }
 
 export async function handleSlackInstallStart(request: Request, env: BotEnv): Promise<Response> {
@@ -238,7 +357,15 @@ export async function handleSlackInstallStart(request: Request, env: BotEnv): Pr
     );
   }
 
-  const state = await issueState(env.SLACK_OAUTH_STATE_SECRET);
+  const requestedPlan = new URL(request.url).searchParams.get("plan");
+  const installPlan: "free" | "paid" = requestedPlan === "paid" ? "paid" : "free";
+  const requestedTier = normalizeSelectedTier(new URL(request.url).searchParams.get("tier"));
+  const selectedTier = installPlan === "paid" ? requestedTier ?? "team" : undefined;
+  const state = await issueState({
+    secret: env.SLACK_OAUTH_STATE_SECRET,
+    installPlan,
+    selectedTier
+  });
   const scopes = env.SLACK_BOT_SCOPES ?? DEFAULT_SCOPES;
   const redirectUri = resolveRedirectUri(request, env);
 
@@ -304,8 +431,8 @@ export async function handleSlackOAuthCallback(request: Request, env: BotEnv): P
     return Response.json({ ok: false, error: "missing_code_or_state" }, { status: 400 });
   }
 
-  const isStateValid = await verifyState(state, env.SLACK_OAUTH_STATE_SECRET);
-  if (!isStateValid) {
+  const statePayload = await verifyState(state, env.SLACK_OAUTH_STATE_SECRET);
+  if (!statePayload) {
     if (wantsHtml(request)) {
       return renderInstallPage({
         ok: false,
@@ -370,16 +497,20 @@ export async function handleSlackOAuthCallback(request: Request, env: BotEnv): P
   const registry = new OrgRegistry(env.DB);
   const workspaceParams: {
     externalWorkspaceId: string;
-    defaultOrganizationId?: string;
     workspaceName?: string;
+    externalOrganizationId?: string;
+    organizationName?: string;
   } = {
     externalWorkspaceId: payload.team.id
   };
-  if (env.DEFAULT_ORGANIZATION_ID) {
-    workspaceParams.defaultOrganizationId = env.DEFAULT_ORGANIZATION_ID;
-  }
   if (payload.team.name) {
     workspaceParams.workspaceName = payload.team.name;
+  }
+  if (payload.enterprise?.id) {
+    workspaceParams.externalOrganizationId = payload.enterprise.id;
+  }
+  if (payload.enterprise?.name) {
+    workspaceParams.organizationName = payload.enterprise.name;
   }
 
   const workspaceRef = await registry.resolveOrCreateSlackWorkspace(workspaceParams);
@@ -421,8 +552,41 @@ export async function handleSlackOAuthCallback(request: Request, env: BotEnv): P
   }
   await installs.upsertWorkspaceInstall(installInput);
   const missingScopes = getMissingRecommendedScopes(payload.scope);
+  const installPlan = statePayload.installPlan ?? "free";
+  const selectedTier = installPlan === "paid" ? statePayload.selectedTier ?? "team" : undefined;
+  const billingSubscribeUrl = workspaceBillingSubscribeUrl({
+    env,
+    organizationId: workspaceRef.organizationId,
+    workspaceId: workspaceRef.workspaceId,
+    ...(selectedTier ? { selectedTier } : {})
+  });
+  await sendInstallOnboardingDm({
+    botToken: payload.access_token,
+    installerExternalUserId: payload.authed_user?.id,
+    installPlan,
+    billingSubscribeUrl
+  });
 
   if (wantsHtml(request)) {
+    if (installPlan === "paid") {
+      return renderInstallPage({
+        ok: true,
+        title: "Slack Connected: Continue To Checkout",
+        message:
+          "Your workspace is now linked to Thane. Continue to Stripe checkout to activate the selected paid plan.",
+        ctaHref: billingSubscribeUrl,
+        ctaLabel: "Continue To Stripe Checkout",
+        autoRedirectMs: 1500,
+        details: [
+          `Team: ${payload.team.name ?? payload.team.id}`,
+          `External workspace ID: ${payload.team.id}`,
+          ...(selectedTier ? [`Selected paid tier: ${selectedTier}`] : []),
+          "Add Thane to channels with: /invite @Thane",
+          ...(missingScopes.length > 0 ? [`Missing recommended scopes: ${missingScopes.join(", ")}`] : [])
+        ]
+      });
+    }
+
     return renderInstallPage({
       ok: true,
       title: "Thane Installed Successfully",
@@ -430,8 +594,10 @@ export async function handleSlackOAuthCallback(request: Request, env: BotEnv): P
       details: [
         `Team: ${payload.team.name ?? payload.team.id}`,
         `External workspace ID: ${payload.team.id}`,
+        "Add Thane to channels with: /invite @Thane",
         ...(missingScopes.length > 0 ? [`Missing recommended scopes: ${missingScopes.join(", ")}`] : []),
-        "You can now add Thane to channels and continue backend setup."
+        `Optional upgrade: ${billingSubscribeUrl}`,
+        "After inviting Thane to a channel, assign a task in normal language."
       ]
     });
   }
@@ -444,6 +610,10 @@ export async function handleSlackOAuthCallback(request: Request, env: BotEnv): P
       workspaceId: workspaceRef.workspaceId,
       externalWorkspaceId: payload.team.id,
       teamName: payload.team.name ?? null,
+      installPlan,
+      ...(selectedTier ? { selectedTier } : {}),
+      billingSubscribeUrl,
+      nextStep: installPlan === "paid" ? "checkout" : "use_free_tier",
       missingRecommendedScopes: missingScopes
     },
     { status: 200 }

@@ -51,6 +51,8 @@ interface SlackUserProfileResponse {
   error?: string;
   user?: {
     id?: string;
+    team_id?: string;
+    is_stranger?: boolean;
     deleted?: boolean;
     is_bot?: boolean;
     name?: string;
@@ -67,6 +69,8 @@ interface SlackUsersListResponse {
   error?: string;
   members?: Array<{
     id?: string;
+    team_id?: string;
+    is_stranger?: boolean;
     deleted?: boolean;
     is_bot?: boolean;
     name?: string;
@@ -83,6 +87,8 @@ interface SlackUsersListResponse {
 
 export interface SlackWorkspaceUserProfile {
   id: string;
+  teamId?: string;
+  isStranger?: boolean;
   displayName?: string;
   email?: string;
 }
@@ -304,6 +310,8 @@ export async function fetchSlackUserProfile(input: {
 
   return {
     id: payload.user.id,
+    ...(payload.user.team_id?.trim() ? { teamId: payload.user.team_id.trim() } : {}),
+    ...(payload.user.is_stranger === true ? { isStranger: true } : {}),
     ...(displayName ? { displayName } : {}),
     ...(email ? { email } : {})
   };
@@ -353,6 +361,8 @@ export async function listSlackWorkspaceUsers(input: {
       const email = member.profile?.email?.trim() || undefined;
       users.push({
         id,
+        ...(member.team_id?.trim() ? { teamId: member.team_id.trim() } : {}),
+        ...(member.is_stranger === true ? { isStranger: true } : {}),
         ...(displayName ? { displayName } : {}),
         ...(email ? { email } : {})
       });

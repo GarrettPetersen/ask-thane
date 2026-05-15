@@ -9,7 +9,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "echo 'No lint task yet for @ask-thane/ai'",
-    "test": "echo 'No tests yet for @ask-thane/ai'"
+    "test": "pnpm -w exec vitest run packages/ai/test"
   },
   "dependencies": {
     "@ask-thane/domain": "workspace:*"

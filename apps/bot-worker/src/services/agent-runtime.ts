@@ -9,9 +9,18 @@ import type {
   TaskUrgency
 } from "@ask-thane/domain";
 import type { MessageEvent } from "@ask-thane/domain";
+import {
+  evaluateActiveUserGateForTaskWrite,
+  evaluateFreeTierAiSpendGateForTaskWrite,
+  recordWorkspaceUserActivity,
+  resolveModelForWorkspaceTier,
+  resolveWorkspaceBillingPolicy,
+  type WorkspaceBillingPolicy
+} from "./billing-policy";
 import { ConversationAccessResolver } from "./conversation-access";
 import { computeNextDigestAt, defaultCadenceSpec, normalizeCadenceSpec, normalizeTimezone } from "./notification-cadence";
-import { fetchSlackConversationHistory, type SlackHistoryMessage } from "./slack-api";
+import { estimateOpenAiUsageCost } from "./openai-pricing";
+import { fetchSlackConversationHistory, postSlackMessage, type SlackHistoryMessage } from "./slack-api";
 import { SlackInstallStore } from "./slack-install-store";
 import type { BotEnv } from "./task-inference";
 
@@ -88,6 +97,7 @@ interface ToolContext {
   readOnlyTools: boolean;
   botExternalUserId?: string;
   workspaceUsers: Array<{ userId: string; externalUserId: string; displayName?: string; email?: string }>;
+  billingPolicy: WorkspaceBillingPolicy;
 }
 
 function clampLimit(limit: unknown, fallback: number, max: number): number {
@@ -157,9 +167,16 @@ function asDifficulty(raw: unknown): TaskDifficulty {
 }
 
 function summarizeTask(task: TaskRecord): Record<string, unknown> {
+  const sharedIntentGroupId =
+    typeof task.metadata?.shared_intent_group_id === "string" ? task.metadata.shared_intent_group_id : null;
+  const sharedAssigneeCount =
+    typeof task.metadata?.shared_assignee_count === "number" ? task.metadata.shared_assignee_count : null;
+  const sharedAssigneeIndex =
+    typeof task.metadata?.shared_assignee_index === "number" ? task.metadata.shared_assignee_index : null;
   return {
     id: task.id,
     title: task.title,
+    description: task.description ?? null,
     status: task.status,
     assignee_user_id: task.assignee.platformUserId,
     assigner_user_id: task.assigner.platformUserId,
@@ -168,7 +185,10 @@ function summarizeTask(task: TaskRecord): Record<string, unknown> {
     created_at: task.createdAt,
     due_at: task.dueAt ?? null,
     channel_id: task.channelId ?? null,
-    source_message_id: task.sourceMessageId ?? null
+    source_message_id: task.sourceMessageId ?? null,
+    shared_intent_group_id: sharedIntentGroupId,
+    shared_assignee_count: sharedAssigneeCount,
+    shared_assignee_index: sharedAssigneeIndex
   };
 }
 
@@ -313,7 +333,7 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
       function: {
         name: "create_task",
         description:
-          "Create a new task from conversational intent. Infer urgency/difficulty from context when not explicit. Infer due_at when reasonably supported by context.",
+          "Create a new task from conversational intent. Infer urgency/difficulty from context when not explicit. Infer due_at when reasonably supported by context. Keep title concise and action-focused; put collaborator/background detail in description. Do not use this for adding details to an existing task.",
         parameters: {
           type: "object",
           additionalProperties: false,
@@ -328,7 +348,8 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
             },
             urgency: { type: "string", enum: ["low", "medium", "high", "critical"] },
             difficulty: { type: "string", enum: ["low", "medium", "high"] },
-            due_at: { type: "string" }
+            due_at: { type: "string" },
+            confirm_separate_task_when_similar: { type: "boolean" }
           }
         }
       }
@@ -338,7 +359,7 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
       function: {
         name: "update_task",
         description:
-          "Apply a task action to an existing task when state changed from conversation. Use action_type='edit' for metadata updates (title, description, due_at, urgency, difficulty).",
+          "Apply a task action to an existing task when state changed from conversation. Use action_type='edit' for metadata updates (title, description, due_at, urgency, difficulty, assignee_user_id).",
         parameters: {
           type: "object",
           additionalProperties: false,
@@ -358,7 +379,26 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
             due_at: { type: ["string", "null"] },
             urgency: { type: "string", enum: ["low", "medium", "high", "critical"] },
             difficulty: { type: "string", enum: ["low", "medium", "high"] },
+            assignee_user_id: { type: "string" },
             target_task_id: { type: "string" }
+          }
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "add_task_details",
+        description:
+          "Add or replace descriptive details on an existing task without creating a new task. Use this when someone adds context/notes/details to already tracked work.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          required: ["task_id", "details_text"],
+          properties: {
+            task_id: { type: "string" },
+            details_text: { type: "string" },
+            replace_existing: { type: "boolean" }
           }
         }
       }
@@ -482,6 +522,7 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
       (tool) =>
         tool.function.name !== "create_task" &&
         tool.function.name !== "update_task" &&
+        tool.function.name !== "add_task_details" &&
         tool.function.name !== "record_feedback" &&
         tool.function.name !== "write_note" &&
         tool.function.name !== "request_permission_waiver" &&
@@ -513,6 +554,10 @@ function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"
     "A single message may contain multiple independent task events; detect each event and apply all needed tool calls in the same run.",
     "For statements that imply progress/completion/cancellation/blocking, always search existing tasks first and update matching tasks instead of creating duplicates.",
     "For each clause: (1) classify clause intent, (2) if it references existing work then update_task, (3) if it introduces new work then create_task.",
+    "When someone adds details or context to existing work, do not create a new task for that instruction; use add_task_details (or update_task edit) on the existing task.",
+    "Never create meta-instruction tasks like 'add details to ...' or 'update task ...'; those are instructions to Thane, not work items.",
+    "Keep task titles concise and action-focused; avoid embedding assignee names in the title (for example avoid '... with Danika').",
+    "Put supporting context, collaborator notes, and constraints into description instead of the title.",
     "For every created or edited task, set urgency and difficulty using explicit cues when present and contextual judgment when implicit.",
     "Infer due dates from temporal cues (for example today/this week/by Friday) and normalize to ISO when possible; if timing is truly unclear, leave due_at unset.",
     "When urgency/difficulty/due date changes are implied, use update_task with action_type='edit' to update those fields.",
@@ -522,6 +567,8 @@ function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"
     "If one clause closes or changes an existing task and another clause introduces remaining or new work, emit both update_task and create_task actions.",
     "If someone reports completed work and no matching task exists, you may create a historical task and immediately mark it done so completion is tracked.",
     "When users correct Thane (for example not-a-task, wrong assignee, wrong status), record this feedback with record_feedback and then make corrective task updates when possible.",
+    "When reading tasks (for example when listing/searching), detect obvious malformed tracker artifacts from prior mistakes and repair them in the same run before replying.",
+    "Repair strategy: prefer update_task(edit) to correct title/description, add_task_details to move context into description, and mark_cancelled/merge_into for stray helper tasks.",
     "Examples: 'I am done the dishes, but I still need to water the gnomes' => mark_done(dishes) + create_task(water gnomes) if missing.",
     "Examples: 'I'm done watering the gnomes, but I still need to elevate the cake and bloviate the sneed' => mark_done(water gnomes) + create_task(elevate cake) + create_task(bloviate sneed).",
     "Examples: 'I froze the beef last night' should update existing freeze-beef task to done when a matching open task exists.",
@@ -529,6 +576,9 @@ function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"
     "When assignee is not explicit, treat first-person commitments as self-assigned by default.",
     "When the task is a delegation to someone else, set assignee_user_id explicitly after using workspace people/context tools.",
     "When work is clearly committed by a collective (for example team-level or first-person plural commitment), you may assign multiple people by using assignee_user_ids and create linked per-assignee tasks.",
+    "If create_task returns potential_duplicate_tasks, make the final judgment call: merge/update when it is the same work, or call create_task again with confirm_separate_task_when_similar=true when similar wording still represents separate work.",
+    "When ownership changes on an existing task (for example 'I'll do it myself' or assignee correction), use update_task(action_type='edit') with assignee_user_id to reassign.",
+    "If linked shared-assignee tasks exist and one person takes sole ownership, keep only that person's task open and close the other linked assignee tasks.",
     "Interpret deictic second-person address using conversation context: when the speaker addresses another participant (for example 'you' in a shared channel), do not assign to the speaker unless context explicitly indicates self-assignment.",
     "Use person-level notes and ownership patterns for disambiguation when deciding assignees in ambiguous requests.",
     "You may write person notes for other workspace participants when the message contains durable facts about them.",
@@ -724,12 +774,228 @@ async function inferAssigneeFromConversationContext(ctx: ToolContext): Promise<s
   return ctx.actorExternalUserId;
 }
 
+function resolveInternalUserIdByExternalUserId(
+  workspaceUsers: Array<{ userId: string; externalUserId: string }>,
+  externalUserId: string
+): string | null {
+  const matched = workspaceUsers.find((user) => user.externalUserId === externalUserId);
+  return matched?.userId ?? null;
+}
+
+function resolveSubscriptionPageUrl(env: BotEnv): string {
+  const configured = env.SUBSCRIPTION_PAGE_URL?.trim();
+  if (configured) {
+    return configured;
+  }
+  const base = env.THANE_BASE_URL?.trim().replace(/\/$/, "") ?? "https://askthane.com";
+  return `${base}/subscribe.html`;
+}
+
+function formatResetDateForMessage(resetIso: string): string {
+  const reset = new Date(resetIso);
+  if (Number.isNaN(reset.valueOf())) {
+    return resetIso;
+  }
+  return reset.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC"
+  });
+}
+
+function freeTierAiLimitMessage(input: {
+  monthlySpendUsd: number;
+  monthlyCapUsd: number;
+  resetsAtIso: string;
+  subscriptionPageUrl: string;
+}): string {
+  const spend = input.monthlySpendUsd.toFixed(2);
+  const cap = input.monthlyCapUsd.toFixed(2);
+  const resetDate = formatResetDateForMessage(input.resetsAtIso);
+  return (
+    `Thane has reached this workspace's free-tier AI usage limit ($${cap}/month; current usage $${spend}). ` +
+    `It can't track additional tasks until ${resetDate}. ` +
+    `To continue using Thane, upgrade to a paid subscription: ${input.subscriptionPageUrl}`
+  );
+}
+
+async function enforceActorActiveUserLimitForTaskWrites(ctx: ToolContext): Promise<Record<string, unknown> | null> {
+  const aiGate = await evaluateFreeTierAiSpendGateForTaskWrite({
+    env: ctx.env,
+    organizationId: ctx.organizationId,
+    workspaceId: ctx.workspaceId
+  });
+  if (!aiGate.allowed) {
+    return {
+      ok: false,
+      error: "free_tier_ai_spend_limit_reached",
+      message: freeTierAiLimitMessage({
+        monthlySpendUsd: aiGate.monthlySpendUsd,
+        monthlyCapUsd: aiGate.monthlyCapUsd,
+        resetsAtIso: aiGate.resetsAtIso,
+        subscriptionPageUrl: resolveSubscriptionPageUrl(ctx.env)
+      }),
+      resets_at: aiGate.resetsAtIso,
+      monthly_spend_usd: aiGate.monthlySpendUsd,
+      monthly_cap_usd: aiGate.monthlyCapUsd
+    };
+  }
+
+  const actorGate = await evaluateActiveUserGateForTaskWrite({
+    env: ctx.env,
+    organizationId: ctx.organizationId,
+    workspaceId: ctx.workspaceId,
+    externalUserId: ctx.actorExternalUserId
+  });
+  if (actorGate.allowed) {
+    return null;
+  }
+  return {
+    ok: false,
+    error: "free_tier_active_user_limit_reached",
+    message:
+      "This workspace is on the free tier and has reached its active-user limit. This task action was ignored for billing safety."
+  };
+}
+
+async function filterAssigneesByActiveUserPolicy(input: {
+  ctx: ToolContext;
+  assigneeExternalUserIds: string[];
+}): Promise<{
+  allowed: string[];
+  skipped: Array<{ assignee_user_id: string; reason: string }>;
+}> {
+  const allowed: string[] = [];
+  const skipped: Array<{ assignee_user_id: string; reason: string }> = [];
+  for (const assigneeExternalUserId of input.assigneeExternalUserIds) {
+    const gate = await evaluateActiveUserGateForTaskWrite({
+      env: input.ctx.env,
+      organizationId: input.ctx.organizationId,
+      workspaceId: input.ctx.workspaceId,
+      externalUserId: assigneeExternalUserId
+    });
+    if (gate.allowed) {
+      allowed.push(assigneeExternalUserId);
+      continue;
+    }
+    skipped.push({
+      assignee_user_id: assigneeExternalUserId,
+      reason: "free_tier_active_user_limit_reached"
+    });
+  }
+  return { allowed, skipped };
+}
+
+async function trackTaskActivityForUsers(input: {
+  ctx: ToolContext;
+  eventType: string;
+  externalUserIds: string[];
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  const seen = new Set<string>();
+  for (const externalUserId of input.externalUserIds) {
+    const normalized = externalUserId.trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    await recordWorkspaceUserActivity({
+      env: input.ctx.env,
+      organizationId: input.ctx.organizationId,
+      workspaceId: input.ctx.workspaceId,
+      userId: resolveInternalUserIdByExternalUserId(input.ctx.workspaceUsers, normalized),
+      externalUserId: normalized,
+      eventType: input.eventType,
+      sourceConversationSourceId: input.ctx.currentConversationSourceId,
+      sourceMessageId: input.ctx.event.messageId,
+      ...(input.metadata ? { metadata: input.metadata } : {})
+    });
+  }
+}
+
+async function maybeTrackActorConversationActivity(input: {
+  env: BotEnv;
+  organizationId: string;
+  workspaceId: string;
+  userId: string;
+  externalUserId: string;
+  conversationSourceId: string;
+  sourceMessageId: string;
+  interactionMode: "passive_ingest" | "dm_reply" | "proactive_followup";
+}): Promise<void> {
+  const gate = await evaluateActiveUserGateForTaskWrite({
+    env: input.env,
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    externalUserId: input.externalUserId
+  });
+  if (!gate.allowed && !gate.countedUserIsAlreadyActive) {
+    return;
+  }
+  await recordWorkspaceUserActivity({
+    env: input.env,
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    userId: input.userId,
+    externalUserId: input.externalUserId,
+    eventType: `interaction_${input.interactionMode}`,
+    sourceConversationSourceId: input.conversationSourceId,
+    sourceMessageId: input.sourceMessageId,
+    metadata: {
+      source: "agent_runtime"
+    }
+  });
+}
+
 function parseIsoTimestamp(value: string): string | null {
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) {
     return null;
   }
   return date.toISOString();
+}
+
+function tokenizeTitleForSimilarity(value: string): string[] {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2);
+}
+
+function titleTokenJaccard(a: string, b: string): number {
+  const aTokens = new Set(tokenizeTitleForSimilarity(a));
+  const bTokens = new Set(tokenizeTitleForSimilarity(b));
+  if (aTokens.size === 0 || bTokens.size === 0) {
+    return 0;
+  }
+  let intersection = 0;
+  for (const token of aTokens) {
+    if (bTokens.has(token)) {
+      intersection += 1;
+    }
+  }
+  const union = new Set([...aTokens, ...bTokens]).size;
+  return union > 0 ? intersection / union : 0;
+}
+
+function isLikelyDuplicateTaskTitle(a: string, b: string): boolean {
+  const left = a.trim().toLowerCase();
+  const right = b.trim().toLowerCase();
+  if (!left || !right) {
+    return false;
+  }
+  if (left === right) {
+    return true;
+  }
+  if (left.length >= 8 && right.length >= 8 && (left.includes(right) || right.includes(left))) {
+    return true;
+  }
+  return titleTokenJaccard(left, right) >= 0.67;
 }
 
 async function sleepMs(ms: number): Promise<void> {
@@ -798,13 +1064,20 @@ async function recordLlmUsageEvent(input: {
   const promptTokens = Number(usage.prompt_tokens ?? 0);
   const completionTokens = Number(usage.completion_tokens ?? 0);
   const totalTokens = Number(usage.total_tokens ?? promptTokens + completionTokens);
+  const costs = estimateOpenAiUsageCost({
+    env: input.env,
+    model: input.model,
+    promptTokens,
+    completionTokens
+  });
 
   await input.env.DB
     .prepare(
       `INSERT INTO llm_usage_events (
          id, organization_id, workspace_id, provider, model, prompt_tokens, completion_tokens,
-         total_tokens, request_type, source, source_message_id, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         total_tokens, prompt_cost_usd, completion_cost_usd, total_cost_usd, currency, pricing_version,
+         api_endpoint, request_type, source, source_message_id, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       crypto.randomUUID(),
@@ -815,6 +1088,12 @@ async function recordLlmUsageEvent(input: {
       promptTokens,
       completionTokens,
       totalTokens,
+      costs.promptCostUsd,
+      costs.completionCostUsd,
+      costs.totalCostUsd,
+      costs.currency,
+      costs.pricingVersion,
+      "chat_completions",
       input.interactionMode,
       input.conversationSourceId,
       input.sourceMessageId,
@@ -843,6 +1122,7 @@ async function executeTool(
     "write_note",
     "create_task",
     "update_task",
+    "add_task_details",
     "request_permission_waiver",
     "set_notification_cadence",
     "schedule_follow_up"
@@ -1195,6 +1475,11 @@ async function executeTool(
     }
 
     case "create_task": {
+      const actorLimitError = await enforceActorActiveUserLimitForTaskWrites(ctx);
+      if (actorLimitError) {
+        return actorLimitError;
+      }
+
       const title = typeof args.title === "string" ? args.title.trim() : "";
       if (!title) {
         return { ok: false, error: "title_required" };
@@ -1218,11 +1503,80 @@ async function executeTool(
         explicitAssignees.push(single.resolvedExternalUserId);
       }
 
-      const assigneeExternals =
+      const resolvedAssigneeExternals =
         explicitAssignees.length > 0 ? explicitAssignees : [await inferAssigneeFromConversationContext(ctx)];
+      const assigneePolicy = await filterAssigneesByActiveUserPolicy({
+        ctx,
+        assigneeExternalUserIds: resolvedAssigneeExternals
+      });
+      const assigneeExternals = assigneePolicy.allowed;
+      const skippedAssignees = assigneePolicy.skipped;
+
+      if (assigneeExternals.length === 0) {
+        return {
+          ok: false,
+          error: "free_tier_active_user_limit_reached",
+          skipped_assignees: skippedAssignees
+        };
+      }
+
+      const confirmSeparateWhenSimilar = args.confirm_separate_task_when_similar === true;
+      const potentialDuplicates: Array<{
+        assignee_user_id: string;
+        task_id: string;
+        title: string;
+        status: TaskStatus;
+        due_at: string | null;
+      }> = [];
+
+      for (const assigneeExternal of assigneeExternals) {
+        if (!assigneeExternal) {
+          continue;
+        }
+
+        const possibleDuplicates = await ctx.repo.searchTasksWithAcl({
+          organizationId: ctx.organizationId,
+          readableConversationSourceIds: ctx.readableConversationSourceIds,
+          allowUnscoped: true,
+          assigneeId: assigneeExternal,
+          statuses: ["incomplete", "in_progress", "blocked"],
+          query: title,
+          limit: 30
+        });
+        const duplicate = possibleDuplicates.find((candidate) => isLikelyDuplicateTaskTitle(candidate.title, title));
+        if (duplicate) {
+          potentialDuplicates.push({
+            assignee_user_id: assigneeExternal,
+            task_id: duplicate.id,
+            title: duplicate.title,
+            status: duplicate.status,
+            due_at: duplicate.dueAt ?? null
+          });
+        }
+      }
+
+      if (potentialDuplicates.length > 0 && !confirmSeparateWhenSimilar) {
+        return {
+          ok: false,
+          error: "potential_duplicate_tasks",
+          potential_duplicates: potentialDuplicates,
+          guidance:
+            "If this is the same work, update/merge existing task(s). If intentionally separate, call create_task again with confirm_separate_task_when_similar=true."
+        };
+      }
 
       const sharedIntentGroupId = assigneeExternals.length > 1 ? crypto.randomUUID() : null;
       const createdTasks: TaskRecord[] = [];
+      const inputDescription = typeof args.description === "string" ? args.description.trim() : "";
+      const inputUrgency = asUrgency(args.urgency);
+      const inputDifficulty = asDifficulty(args.difficulty);
+      const parsedDueAt =
+        typeof args.due_at === "string" && args.due_at.trim()
+          ? (() => {
+              const parsed = new Date(args.due_at);
+              return Number.isNaN(parsed.valueOf()) ? null : parsed.toISOString();
+            })()
+          : null;
 
       for (let i = 0; i < assigneeExternals.length; i += 1) {
         const assigneeExternal = assigneeExternals[i];
@@ -1246,8 +1600,8 @@ async function executeTool(
             platformUserId: ctx.actorExternalUserId
           },
           createdAt: new Date().toISOString(),
-          urgency: asUrgency(args.urgency),
-          difficulty: asDifficulty(args.difficulty),
+          urgency: inputUrgency,
+          difficulty: inputDifficulty,
           status: "incomplete",
           confidence: 0.7,
           metadata: {
@@ -1259,14 +1613,11 @@ async function executeTool(
           }
         };
 
-        if (typeof args.description === "string" && args.description.trim()) {
-          task.description = args.description.trim();
+        if (inputDescription) {
+          task.description = inputDescription;
         }
-        if (typeof args.due_at === "string" && args.due_at.trim()) {
-          const parsed = new Date(args.due_at);
-          if (!Number.isNaN(parsed.valueOf())) {
-            task.dueAt = parsed.toISOString();
-          }
+        if (parsedDueAt) {
+          task.dueAt = parsedDueAt;
         }
 
         await ctx.repo.save(task);
@@ -1293,18 +1644,35 @@ async function executeTool(
       }
 
       if (createdTasks.length === 0) {
-        return { ok: false, error: "no_assignees_resolved" };
+        return { ok: false, error: "no_assignees_resolved", skipped_assignees: skippedAssignees };
       }
+
+      await trackTaskActivityForUsers({
+        ctx,
+        eventType: "task_create",
+        externalUserIds: [ctx.actorExternalUserId, ...assigneeExternals],
+        metadata: {
+          tool: "create_task",
+          created_task_count: createdTasks.length
+        }
+      });
+
       ctx.taskActionTypes.add("create");
       return {
         ok: true,
         tasks: createdTasks.map((task) => summarizeTask(task)),
         task_ids: createdTasks.map((task) => task.id),
+        ...(skippedAssignees.length > 0 ? { skipped_assignees: skippedAssignees } : {}),
         ...(sharedIntentGroupId ? { shared_intent_group_id: sharedIntentGroupId } : {})
       };
     }
 
     case "update_task": {
+      const actorLimitError = await enforceActorActiveUserLimitForTaskWrites(ctx);
+      if (actorLimitError) {
+        return actorLimitError;
+      }
+
       const taskId = typeof args.task_id === "string" ? args.task_id.trim() : "";
       const actionType = asTaskActionType(args.action_type);
       if (!taskId || !actionType || actionType === "create") {
@@ -1347,6 +1715,9 @@ async function executeTool(
         dueAt?: string | null;
         urgency?: TaskUrgency;
         difficulty?: TaskDifficulty;
+        assigneePlatform?: "slack";
+        assigneeId?: string;
+        assigneeName?: string | null;
         targetTaskId?: string;
         payload: Record<string, unknown>;
         createdAt: string;
@@ -1394,15 +1765,124 @@ async function executeTool(
       if (args.difficulty === "low" || args.difficulty === "medium" || args.difficulty === "high") {
         updateInput.difficulty = args.difficulty;
       }
+      if (typeof args.assignee_user_id === "string" && args.assignee_user_id.trim()) {
+        const resolved = await resolveAssigneeExternalUserId({
+          requested: args.assignee_user_id,
+          ctx,
+          allowWorkspaceLookupFallback: true
+        });
+        const assigneeGate = await evaluateActiveUserGateForTaskWrite({
+          env: ctx.env,
+          organizationId: ctx.organizationId,
+          workspaceId: ctx.workspaceId,
+          externalUserId: resolved.resolvedExternalUserId
+        });
+        if (!assigneeGate.allowed) {
+          return {
+            ok: false,
+            error: "free_tier_active_user_limit_reached",
+            assignee_user_id: resolved.resolvedExternalUserId
+          };
+        }
+        updateInput.assigneePlatform = "slack";
+        updateInput.assigneeId = resolved.resolvedExternalUserId;
+        const matchedUser = ctx.workspaceUsers.find((user) => user.externalUserId === resolved.resolvedExternalUserId);
+        updateInput.assigneeName = matchedUser?.displayName ?? null;
+        updateInput.payload.assignee_resolution = {
+          requested: args.assignee_user_id,
+          resolved_external_user_id: resolved.resolvedExternalUserId,
+          source: resolved.source
+        };
+      }
       if (typeof args.target_task_id === "string") {
         updateInput.targetTaskId = args.target_task_id;
       }
 
       await ctx.repo.performTaskAction(updateInput);
+      await trackTaskActivityForUsers({
+        ctx,
+        eventType: "task_update",
+        externalUserIds: [
+          ctx.actorExternalUserId,
+          ...(updateInput.assigneeId ? [updateInput.assigneeId] : [])
+        ],
+        metadata: {
+          tool: "update_task",
+          action_type: actionType
+        }
+      });
 
       updatedTaskIds.add(taskId);
       ctx.taskActionTypes.add(actionType);
       return { ok: true, task_id: taskId, action_type: actionType };
+    }
+
+    case "add_task_details": {
+      const actorLimitError = await enforceActorActiveUserLimitForTaskWrites(ctx);
+      if (actorLimitError) {
+        return actorLimitError;
+      }
+
+      const taskId = typeof args.task_id === "string" ? args.task_id.trim() : "";
+      const detailsText = typeof args.details_text === "string" ? args.details_text.trim() : "";
+      const replaceExisting = args.replace_existing === true;
+      if (!taskId || !detailsText) {
+        return { ok: false, error: "invalid_add_task_details_input" };
+      }
+
+      const readableTask = await ctx.repo.getTaskByIdWithAcl({
+        organizationId: ctx.organizationId,
+        taskId,
+        readableConversationSourceIds: ctx.readableConversationSourceIds,
+        allowUnscoped: true
+      });
+      if (!readableTask) {
+        return permissionError(toolCall.function.name, "task_not_readable");
+      }
+
+      const currentDescription = readableTask.description?.trim() ?? "";
+      const nextDescription = replaceExisting
+        ? detailsText
+        : currentDescription
+          ? `${currentDescription}\n\n${detailsText}`
+          : detailsText;
+
+      await ctx.repo.performTaskAction({
+        id: crypto.randomUUID(),
+        organizationId: ctx.organizationId,
+        workspaceId: ctx.workspaceId,
+        taskId,
+        actionType: "edit",
+        actorPlatform: "slack",
+        actorId: ctx.actorExternalUserId,
+        sourceConversationSourceId: ctx.currentConversationSourceId,
+        description: nextDescription,
+        payload: {
+          tool: "add_task_details",
+          source_message_id: ctx.event.messageId,
+          source_channel_id: ctx.event.channelId,
+          source_text: ctx.event.text,
+          replace_existing: replaceExisting
+        },
+        createdAt: new Date().toISOString()
+      });
+      await trackTaskActivityForUsers({
+        ctx,
+        eventType: "task_update",
+        externalUserIds: [ctx.actorExternalUserId],
+        metadata: {
+          tool: "add_task_details"
+        }
+      });
+
+      updatedTaskIds.add(taskId);
+      ctx.taskActionTypes.add("edit");
+      return {
+        ok: true,
+        task_id: taskId,
+        description: nextDescription,
+        replace_existing: replaceExisting
+      };
     }
 
     case "request_permission_waiver": {
@@ -1550,6 +2030,14 @@ async function executeTool(
     }
 
     case "schedule_follow_up": {
+      if (ctx.billingPolicy.planTier === "free") {
+        return {
+          ok: false,
+          error: "plan_limit_reached",
+          reason: "schedule_follow_up_requires_paid_tier"
+        };
+      }
+
       const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
       const scheduleAtRaw = typeof args.schedule_at === "string" ? args.schedule_at.trim() : "";
       if (!prompt || !scheduleAtRaw) {
@@ -1590,10 +2078,15 @@ async function executeTool(
   }
 }
 
+export const __testables = {
+  toolDefinitions,
+  executeTool
+};
+
 export async function runConversationalAgentForSlackMessage(input: AgentRuntimeInput): Promise<AgentRunResult> {
   const interactionMode = input.interactionMode ?? "passive_ingest";
   const readOnlyTools = input.readOnlyTools ?? interactionMode === "proactive_followup";
-  const maxTurns = clampEnvNumber(input.env.AGENT_MAX_TOOL_TURNS, 8, 1, 20);
+  const configuredMaxTurns = clampEnvNumber(input.env.AGENT_MAX_TOOL_TURNS, 8, 1, 20);
 
   if ((input.env.DEFAULT_LLM_PROVIDER ?? "openai") !== "openai") {
     return { usedTools: false, createdTaskIds: [], updatedTaskIds: [], taskActionTypes: [], eventTypes: [] };
@@ -1605,6 +2098,12 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
   const repo = new D1TaskRepository(input.env.DB);
   const resolver = new ConversationAccessResolver(input.env.DB);
   const installStore = new SlackInstallStore(input.env.DB);
+  const workspaceBillingPolicy = await resolveWorkspaceBillingPolicy({
+    env: input.env,
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId
+  });
+  const maxTurns = workspaceBillingPolicy.planTier === "free" ? Math.min(configuredMaxTurns, 4) : configuredMaxTurns;
 
   const actorUser = await resolver.ensureSlackUser({
     organizationId: input.organizationId,
@@ -1623,6 +2122,17 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     nowIso: new Date().toISOString()
   });
 
+  await maybeTrackActorConversationActivity({
+    env: input.env,
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    userId: actorUser.userId,
+    externalUserId: input.event.author.platformUserId,
+    conversationSourceId: input.conversationSourceId,
+    sourceMessageId: input.event.messageId,
+    interactionMode
+  });
+
   const readableConversationSourceIds = await resolver.listReadableConversationSourceIds({
     organizationId: input.organizationId,
     userId: actorUser.userId
@@ -1638,6 +2148,42 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
 
   if (!botToken) {
     return { usedTools: false, createdTaskIds: [], updatedTaskIds: [], taskActionTypes: [], eventTypes: [] };
+  }
+
+  const runAiSpendGate = await evaluateFreeTierAiSpendGateForTaskWrite({
+    env: input.env,
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId
+  });
+  if (!runAiSpendGate.allowed) {
+    const message = freeTierAiLimitMessage({
+      monthlySpendUsd: runAiSpendGate.monthlySpendUsd,
+      monthlyCapUsd: runAiSpendGate.monthlyCapUsd,
+      resetsAtIso: runAiSpendGate.resetsAtIso,
+      subscriptionPageUrl: resolveSubscriptionPageUrl(input.env)
+    });
+    try {
+      await postSlackMessage({
+        botToken,
+        channelId: input.event.channelId,
+        text: message,
+        threadTs: input.event.messageId
+      });
+    } catch (error) {
+      console.warn("agent_runtime_free_tier_ai_cap_notice_failed", {
+        organizationId: input.organizationId,
+        workspaceId: input.workspaceId,
+        channelId: input.event.channelId,
+        reason: error instanceof Error ? error.message : String(error)
+      });
+    }
+    return {
+      usedTools: false,
+      createdTaskIds: [],
+      updatedTaskIds: [],
+      taskActionTypes: [],
+      eventTypes: ["free_tier_ai_spend_limit_reached"]
+    };
   }
 
   let recentMessages: Awaited<ReturnType<typeof fetchSlackConversationHistory>> = [];
@@ -1692,13 +2238,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     }
   }
 
-  const searchSeed = input.event.text
-    .replace(/<@[A-Z0-9]+>/g, " ")
-    .replace(/[^a-zA-Z0-9\s]/g, " ")
-    .split(/\s+/)
-    .filter((token) => token.length >= 4)
-    .slice(0, 4)
-    .join(" ");
+  const searchSeed = input.event.text.trim().slice(0, 120);
 
   const visibleTasks = await repo.searchTasksWithAcl({
     organizationId: input.organizationId,
@@ -1879,7 +2419,13 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
           is_enabled: userCadence.isEnabled,
           next_digest_at: userCadence.nextDigestAt ?? null
         }
-      : null
+      : null,
+    billing_policy: {
+      plan_tier: workspaceBillingPolicy.planTier,
+      included_active_users: workspaceBillingPolicy.includedActiveUsers,
+      hard_cap_active_users: workspaceBillingPolicy.hardCapActiveUsers,
+      included_ai_cost_usd: workspaceBillingPolicy.includedAiCostUsd
+    }
   };
 
   const messages: Array<Record<string, unknown>> = [
@@ -1926,11 +2472,16 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     interactionMode,
     readOnlyTools,
     workspaceUsers: workspacePeopleSeed,
+    billingPolicy: workspaceBillingPolicy,
     ...(botUserId ? { botExternalUserId: botUserId } : {})
   };
 
   agent_loop: for (let turn = 0; turn < maxTurns; turn += 1) {
-    const selectedModel = input.env.DEFAULT_LLM_MODEL ?? "gpt-4.1-mini";
+    const selectedModel = resolveModelForWorkspaceTier({
+      env: input.env,
+      planTier: workspaceBillingPolicy.planTier,
+      usage: "agent"
+    });
     const payload = await callChatCompletionWithRetry({
       env: input.env,
       body: {

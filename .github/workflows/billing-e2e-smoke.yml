@@ -1,0 +1,62 @@
+name: Billing E2E Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: "Environment to test"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
+      plan_tier:
+        description: "Plan tier to validate"
+        required: true
+        default: "team"
+        type: choice
+        options:
+          - team
+          - growth
+          - scale
+          - scale_plus
+
+jobs:
+  billing-e2e:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target_env }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Run billing E2E smoke
+        env:
+          BILLING_E2E_ENABLED: "true"
+          BILLING_E2E_PLAN_TIER: ${{ inputs.plan_tier }}
+          BILLING_E2E_STRIPE_SECRET_KEY: ${{ secrets.BILLING_E2E_STRIPE_SECRET_KEY }}
+        run: |
+          if [ -z "$BILLING_E2E_STRIPE_SECRET_KEY" ]; then
+            echo "Missing secret BILLING_E2E_STRIPE_SECRET_KEY in this GitHub environment."
+            exit 1
+          fi
+          if [ "${{ inputs.target_env }}" = "production" ]; then
+            export BILLING_E2E_BASE_URL="https://payments.askthane.com"
+          else
+            export BILLING_E2E_BASE_URL="https://payments-staging.askthane.com"
+          fi
+          pnpm test:billing:e2e

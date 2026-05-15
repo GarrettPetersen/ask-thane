@@ -1,7 +1,7 @@
 import { D1TaskRepository } from "@ask-thane/data";
 import { runProactiveFollowUpForSlackUser } from "./agent-runtime";
 import { ConversationAccessResolver } from "./conversation-access";
-import { openSlackDirectMessage, postSlackMessage } from "./slack-api";
+import { fetchSlackUserProfile, openSlackDirectMessage, postSlackMessage } from "./slack-api";
 import { SlackInstallStore } from "./slack-install-store";
 import type { BotEnv } from "./task-inference";
 
@@ -38,6 +38,29 @@ export async function runScheduledFollowUpJobs(env: BotEnv): Promise<FollowUpRun
       const externalWorkspaceId = externalWorkspaceByWorkspace.get(job.workspaceId);
       if (!externalWorkspaceId) {
         throw new Error("missing_external_workspace_id_for_job_workspace");
+      }
+
+      const profile = await fetchSlackUserProfile({
+        botToken,
+        userId: job.externalUserId
+      });
+      const isUnremindable =
+        !profile ||
+        profile.isStranger === true ||
+        (profile.teamId && profile.teamId !== externalWorkspaceId);
+      if (isUnremindable) {
+        const reason = !profile
+          ? "non_remindable_missing_profile"
+          : profile.isStranger
+            ? "non_remindable_is_stranger"
+            : "non_remindable_foreign_team";
+        await repo.markFollowUpJobFailed({
+          id: job.id,
+          errorText: reason,
+          attemptedAt: nowIso
+        });
+        summary.failed += 1;
+        continue;
       }
 
       const dm = await openSlackDirectMessage({

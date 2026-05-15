@@ -23,9 +23,8 @@
         --brand-dark: #0848a6;
         --accent: #f18701;
         --surface: #fffdf8;
+        --surface-strong: #ffffff;
         --border: #e7decd;
-        --ok: #1d7a42;
-        --bad: #b3261e;
       }
 
       * {
@@ -43,7 +42,7 @@
       }
 
       .container {
-        width: min(1080px, 100% - 2rem);
+        width: min(1120px, 100% - 2rem);
         margin: 0 auto;
       }
 
@@ -56,8 +55,6 @@
         align-items: center;
         text-decoration: none;
         color: inherit;
-        font-weight: 700;
-        letter-spacing: 0.02em;
       }
 
       .brand-mark {
@@ -67,13 +64,6 @@
       }
 
       .hero {
-        display: grid;
-        grid-template-columns: 1.2fr 0.8fr;
-        gap: 18px;
-        margin-top: 12px;
-      }
-
-      .panel {
         border: 1px solid var(--border);
         background: var(--surface);
         border-radius: 18px;
@@ -99,17 +89,47 @@
         letter-spacing: -0.02em;
       }
 
-      p.lead {
+      .lead {
         font-size: 1.1rem;
         line-height: 1.65;
         margin: 0;
         color: var(--muted);
+        max-width: 72ch;
+      }
+
+      .hero-cta {
+        margin-top: 16px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .button {
+        display: inline-block;
+        border: 0;
+        border-radius: 10px;
+        padding: 12px 14px;
+        font: inherit;
+        font-weight: 700;
+        background: var(--brand);
+        color: #fff;
+        text-decoration: none;
+      }
+
+      .button:hover {
+        background: var(--brand-dark);
+      }
+
+      .button.secondary {
+        background: #e8f1ff;
+        color: var(--brand-dark);
       }
 
       .proof {
         margin-top: 18px;
         display: grid;
         gap: 10px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
       }
 
       .proof-item {
@@ -120,96 +140,81 @@
         background: #fff;
       }
 
-      .kicker {
-        margin: 8px 0 0;
+      .section-title {
+        margin: 24px 0 12px;
+        font-size: 1.5rem;
+      }
+
+      .pricing-grid {
+        display: grid;
+        gap: 14px;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: var(--surface-strong);
+        padding: 16px;
+        display: grid;
+        gap: 10px;
+      }
+
+      .card .button {
+        margin-top: 4px;
+      }
+
+      .card.featured {
+        border-color: #9dc0f9;
+        box-shadow: 0 10px 28px rgba(15, 95, 215, 0.12);
+      }
+
+      .tier {
+        margin: 0;
+        font-size: 1.2rem;
+      }
+
+      .price {
+        margin: 0;
+        font-size: 2rem;
+        font-weight: 700;
+      }
+
+      .price span {
+        font-size: 0.95rem;
+        font-weight: 500;
+        color: var(--muted);
+      }
+
+      .meta {
+        margin: 0;
         color: var(--muted);
         font-size: 0.95rem;
       }
 
-      h2 {
-        margin: 0 0 10px;
-        font-size: 1.35rem;
+      ul {
+        margin: 0;
+        padding-left: 18px;
       }
 
-      form {
-        display: grid;
-        gap: 9px;
-      }
-
-      label {
-        display: grid;
-        gap: 5px;
-        font-size: 0.9rem;
+      li {
+        margin: 0 0 7px;
         color: var(--muted);
       }
 
-      input,
-      textarea {
-        width: 100%;
-        border: 1px solid #d4c8b5;
-        border-radius: 10px;
-        background: #fffcf6;
-        padding: 11px 12px;
-        font: inherit;
-        color: var(--ink);
-      }
-
-      textarea {
-        resize: vertical;
-        min-height: 92px;
-      }
-
-      button {
-        border: 0;
-        border-radius: 10px;
-        padding: 12px 14px;
-        font: inherit;
-        font-weight: 700;
-        background: var(--brand);
-        color: #fff;
-        cursor: pointer;
-      }
-
-      button:hover {
-        background: var(--brand-dark);
-      }
-
-      .status {
-        font-size: 0.9rem;
-        min-height: 1.2em;
-      }
-
-      .status.ok {
-        color: var(--ok);
-      }
-
-      .status.bad {
-        color: var(--bad);
-      }
-
-      section.stack {
+      .feature-stack {
         margin-top: 18px;
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 14px;
       }
 
-      .stack h3 {
-        margin: 0 0 6px;
-      }
-
-      .stack p,
-      .stack li {
-        color: var(--muted);
-      }
-
-      .stack ul {
-        margin: 0;
-        padding-left: 18px;
+      .feature-stack h3 {
+        margin: 0 0 8px;
       }
 
       footer {
-        margin: 26px 0 36px;
+        margin: 28px 0 36px;
         font-size: 0.95rem;
         color: var(--muted);
       }
@@ -218,12 +223,19 @@
         color: var(--brand-dark);
       }
 
-      @media (max-width: 920px) {
-        .hero {
-          grid-template-columns: 1fr;
+      @media (max-width: 1020px) {
+        .pricing-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
-        section.stack {
+        .proof,
+        .feature-stack {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .pricing-grid {
           grid-template-columns: 1fr;
         }
       }
@@ -238,132 +250,130 @@
 
     <main class="container">
       <section class="hero">
-        <article class="panel">
-          <span class="pill">Conversational Execution Layer</span>
-          <h1>Stop manually managing tickets nobody wants to maintain.</h1>
-          <p class="lead">
-            Ask Thane listens in Slack, turns natural language asks into structured tasks,
-            follows up automatically, and reports real ownership across teams.
-          </p>
+        <span class="pill">Conversational Execution Layer</span>
+        <h1>Track real work in Slack without forcing your team into ticket bureaucracy.</h1>
+        <p class="lead">
+          Ask Thane captures action items from natural conversation, tracks assignees and urgency,
+          follows up automatically, and gives leadership clear status without manual project-board upkeep.
+        </p>
+        <div class="hero-cta">
+          <a class="button" href="#pricing">Get Started</a>
+          <a class="button secondary" href="/install.html">How Install Works</a>
+        </div>
 
-          <div class="proof">
-            <div class="proof-item">1. Alice asks Bob for website updates in channel.</div>
-            <div class="proof-item">2. Thane creates and tracks the task automatically.</div>
-            <div class="proof-item">3. Thane pings Bob later and updates status from replies.</div>
-          </div>
-          <p class="kicker">No extra tool adoption required. Teams keep talking naturally.</p>
-        </article>
-
-        <aside class="panel" id="waitlist">
-          <h2>Join the Early Access Waitlist</h2>
-          <p class="kicker">Tell us about your team and we'll reach out for pilot onboarding.</p>
-
-          <form id="waitlist-form" novalidate>
-            <label>
-              Work email
-              <input name="email" type="email" required placeholder="you@company.com" />
-            </label>
-            <label>
-              Name
-              <input name="name" type="text" placeholder="Your name" />
-            </label>
-            <label>
-              Company
-              <input name="company" type="text" placeholder="Company name" />
-            </label>
-            <label>
-              What should Thane solve first?
-              <textarea name="notes" placeholder="Optional context"></textarea>
-            </label>
-            <button type="submit">Request Early Access</button>
-            <div class="status" id="waitlist-status" aria-live="polite"></div>
-          </form>
-        </aside>
+        <div class="proof">
+          <div class="proof-item">1. Someone asks for work in channel or DM.</div>
+          <div class="proof-item">2. Thane logs the task with owner, status, urgency, and notes.</div>
+          <div class="proof-item">3. Thane sends reminders and reports progress back in context.</div>
+        </div>
       </section>
 
-      <section class="stack">
-        <article class="panel">
-          <h3>Built For</h3>
+      <h2 class="section-title" id="pricing">Pricing</h2>
+      <section class="pricing-grid" aria-label="Pricing tiers">
+        <article class="card">
+          <h3 class="tier">Free</h3>
+          <p class="price">$0<span>/mo</span></p>
+          <p class="meta">Up to 10 active participants</p>
           <ul>
-            <li>Slack-first startups and product teams</li>
-            <li>Consultancies running shared client channels</li>
-            <li>Leaders who want output visibility without Jira drag</li>
+            <li>Slack task capture and updates</li>
+            <li>Shared task visibility and status queries</li>
+            <li>Daily reminders on working days</li>
+            <li>Monthly AI usage safety limit</li>
+          </ul>
+          <a class="button" href="https://bot.askthane.com/slack/install?plan=free">Install Free</a>
+        </article>
+
+        <article class="card featured">
+          <h3 class="tier">Team</h3>
+          <p class="price">$99<span>/mo</span></p>
+          <p class="meta">25 participants included, then $3/user</p>
+          <ul>
+            <li>Everything in Free</li>
+            <li>Higher-quality reasoning model</li>
+            <li>AI-written daily task digests</li>
+            <li>$20 monthly AI usage credit</li>
+          </ul>
+          <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=team">Choose Team Plan</a>
+        </article>
+
+        <article class="card">
+          <h3 class="tier">Growth</h3>
+          <p class="price">$299<span>/mo</span></p>
+          <p class="meta">100 participants included, then $2/user</p>
+          <ul>
+            <li>Everything in Team</li>
+            <li>Faster multi-workspace operations</li>
+            <li>Expanded AI context handling</li>
+            <li>$120 monthly AI usage credit</li>
+          </ul>
+          <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=growth">Choose Growth Plan</a>
+        </article>
+
+        <article class="card">
+          <h3 class="tier">Scale</h3>
+          <p class="price">$699<span>/mo</span></p>
+          <p class="meta">300 participants included, then $1.25/user</p>
+          <ul>
+            <li>Everything in Growth</li>
+            <li>Higher throughput for large teams</li>
+            <li>Best-model daily update quality</li>
+            <li>$400 monthly AI usage credit</li>
+          </ul>
+          <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=scale">Choose Scale Plan</a>
+        </article>
+
+        <article class="card">
+          <h3 class="tier">Scale Plus</h3>
+          <p class="price">$1499<span>/mo</span></p>
+          <p class="meta">1000 participants included, then $1/user</p>
+          <ul>
+            <li>Everything in Growth</li>
+            <li>Best available model tier</li>
+            <li>High-volume org support posture</li>
+            <li>$1000 monthly AI usage credit</li>
+          </ul>
+          <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=scale_plus">Choose Scale Plus Plan</a>
+        </article>
+      </section>
+
+      <section class="feature-stack">
+        <article class="card">
+          <h3>Core Tracking</h3>
+          <ul>
+            <li>Create, edit, merge, and complete tasks conversationally</li>
+            <li>Assignee, urgency, and detail updates from chat</li>
+            <li>Context-aware notes tied to tasks and people</li>
           </ul>
         </article>
 
-        <article class="panel">
-          <h3>Current Build Status</h3>
+        <article class="card">
+          <h3>Automation</h3>
           <ul>
-            <li>Multi-workspace Slack OAuth installs live</li>
-            <li>Cloudflare Workers + D1 backend online</li>
-            <li>Per-workspace bot credential storage implemented</li>
+            <li>Scheduled reminders and follow-up cycles</li>
+            <li>Digest messages with task prioritization</li>
+            <li>Duplicate and malformed task repair logic</li>
           </ul>
         </article>
 
-        <article class="panel">
-          <h3>Contact</h3>
-          <p>
-            Founder: <a href="mailto:garrett@askthane.com">garrett@askthane.com</a>
-          </p>
-          <p>
-            If you run delivery teams and want pilot access, include team size and
-            current workflow pain in your waitlist note.
-          </p>
+        <article class="card">
+          <h3>Admin + Billing</h3>
+          <ul>
+            <li>Workspace-aware active-user tracking</li>
+            <li>Per-call AI usage telemetry and cost rollups</li>
+            <li>Stripe-based subscriptions and overage readiness</li>
+          </ul>
         </article>
       </section>
     </main>
 
     <footer class="container">
-      Ask Thane is in active development. Data handling and enterprise controls are being
-      hardened before broad rollout.
+      Ask Thane is in active development. Security, controls, and reliability are being hardened for broader rollout.
+      <a href="/install.html">Install</a> |
+      <a href="https://payments.askthane.com/subscribe">Pricing</a> |
+      <a href="/privacy.html">Privacy</a> |
+      <a href="/terms.html">Terms</a> |
+      <a href="/acceptable-use.html">Acceptable Use</a> |
+      <a href="/subprocessors.html">Subprocessors</a>
     </footer>
-
-    <script>
-      (() => {
-        const form = document.getElementById("waitlist-form");
-        const statusEl = document.getElementById("waitlist-status");
-
-        if (!form || !statusEl) {
-          return;
-        }
-
-        form.addEventListener("submit", async (event) => {
-          event.preventDefault();
-          statusEl.className = "status";
-          statusEl.textContent = "Submitting...";
-
-          const formData = new FormData(form);
-          const payload = {
-            email: String(formData.get("email") || "").trim(),
-            name: String(formData.get("name") || "").trim(),
-            company: String(formData.get("company") || "").trim(),
-            notes: String(formData.get("notes") || "").trim()
-          };
-
-          try {
-            const response = await fetch("/api/waitlist", {
-              method: "POST",
-              headers: {
-                "content-type": "application/json"
-              },
-              body: JSON.stringify(payload)
-            });
-
-            const result = await response.json();
-            if (!response.ok || !result.ok) {
-              throw new Error(result.error || "submission_failed");
-            }
-
-            statusEl.className = "status ok";
-            statusEl.textContent = "You're on the list. We'll contact you at that email.";
-            form.reset();
-          } catch (_error) {
-            statusEl.className = "status bad";
-            statusEl.textContent =
-              "Could not submit right now. Email garrett@askthane.com and we will add you manually.";
-          }
-        });
-      })();
-    </script>
   </body>
 </html>
