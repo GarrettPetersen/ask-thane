@@ -155,6 +155,7 @@ pnpm dev:landing
 - The repo includes a full automated test suite across workers and shared packages, including agent tool-call behavior, workflow logic, Slack payload normalization, and route-level worker behavior.
 - Tests are deterministic and run with mocks/stubs where appropriate (for example no live OpenAI calls and no production D1 writes during unit tests).
 - Billing scaffolding paths are covered in tests, including tool-level free-tier active-user gating and OpenAI usage cost estimation logic.
+- Push/PR CI (`.github/workflows/ci.yml`) also runs `pnpm test`.
 
 ## Pricing Defaults
 - Free: 10 active participants max (hard cap), no AI credit.

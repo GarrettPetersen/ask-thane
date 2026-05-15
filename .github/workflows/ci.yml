@@ -26,8 +26,11 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile=false
 
+      - name: Build
+        run: pnpm build:all
+
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Build
-        run: pnpm build:all
+      - name: Test
+        run: pnpm test
