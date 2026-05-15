@@ -2,6 +2,13 @@ name = "ask-thane-bot"
 main = "src/index.ts"
 compatibility_date = "2026-05-08"
 
+[alias]
+"@ask-thane/ai" = "../../packages/ai/src/index.ts"
+"@ask-thane/data" = "../../packages/data/src/index.ts"
+"@ask-thane/domain" = "../../packages/domain/src/index.ts"
+"@ask-thane/integrations" = "../../packages/integrations/src/index.ts"
+"@ask-thane/workflows" = "../../packages/workflows/src/index.ts"
+
 [triggers]
 crons = ["*/15 * * * *"]
 

@@ -2,6 +2,10 @@ name = "ask-thane-api"
 main = "src/index.ts"
 compatibility_date = "2026-05-08"
 
+[alias]
+"@ask-thane/data" = "../../packages/data/src/index.ts"
+"@ask-thane/domain" = "../../packages/domain/src/index.ts"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "ask-thane"
