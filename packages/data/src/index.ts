@@ -20,6 +20,11 @@ export interface TaskRepository {
   save(task: TaskRecord): Promise<void>;
   saveMany(tasks: TaskRecord[]): Promise<void>;
   listOpenByAssignee(workspaceId: string, assigneeId: string): Promise<TaskRecord[]>;
+  listOpenByAssigneeInOrganization(
+    organizationId: string,
+    workspaceId: string,
+    assigneeId: string
+  ): Promise<TaskRecord[]>;
 }
 
 export interface IngestEventInput {
@@ -384,6 +389,23 @@ export class D1TaskRepository implements TaskRepository {
     );
     const result = await query.bind(workspaceId, assigneeId).all<Record<string, unknown>>();
 
+    return (result.results ?? []).map((row) => toTaskRecord(row));
+  }
+
+  async listOpenByAssigneeInOrganization(
+    organizationId: string,
+    workspaceId: string,
+    assigneeId: string
+  ): Promise<TaskRecord[]> {
+    const query = this.db.prepare(
+      `SELECT * FROM tasks
+       WHERE organization_id = ?
+         AND workspace_id = ?
+         AND assignee_id = ?
+         AND status IN ('incomplete', 'in_progress', 'blocked')
+       ORDER BY created_at DESC`
+    );
+    const result = await query.bind(organizationId, workspaceId, assigneeId).all<Record<string, unknown>>();
     return (result.results ?? []).map((row) => toTaskRecord(row));
   }
 

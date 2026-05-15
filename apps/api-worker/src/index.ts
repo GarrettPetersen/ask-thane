@@ -21,6 +21,14 @@ function isAuthorizedRequest(request: Request, env: Env): boolean {
   return providedToken.length > 0 && providedToken === expectedToken;
 }
 
+function readAuthorizedOrganizationId(request: Request): string | null {
+  const organizationId = request.headers.get("x-organization-id")?.trim();
+  if (!organizationId) {
+    return null;
+  }
+  return organizationId;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -43,9 +51,16 @@ export default {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
 
+    const authorizedOrganizationId =
+      url.pathname.startsWith("/v1/tasks/") ? readAuthorizedOrganizationId(request) : null;
+    if (url.pathname.startsWith("/v1/tasks/") && !authorizedOrganizationId) {
+      return Response.json({ error: "missing organization scope" }, { status: 403 });
+    }
+
     if (url.pathname === "/v1/tasks/open") {
       const workspaceId = url.searchParams.get("workspace_id") || "";
       const assigneeId = url.searchParams.get("assignee_id") || "";
+      const organizationId = url.searchParams.get("organization_id")?.trim();
 
       if (!workspaceId || !assigneeId) {
         return Response.json(
@@ -54,8 +69,16 @@ export default {
         );
       }
 
+      if (organizationId && organizationId !== authorizedOrganizationId) {
+        return Response.json({ error: "organization scope mismatch" }, { status: 403 });
+      }
+
       const repo = new D1TaskRepository(env.DB);
-      const tasks = await repo.listOpenByAssignee(workspaceId, assigneeId);
+      const tasks = await repo.listOpenByAssigneeInOrganization(
+        authorizedOrganizationId!,
+        workspaceId,
+        assigneeId
+      );
       return Response.json({ tasks });
     }
 
@@ -75,9 +98,13 @@ export default {
         );
       }
 
+      if (organizationId !== authorizedOrganizationId) {
+        return Response.json({ error: "organization scope mismatch" }, { status: 403 });
+      }
+
       const repo = new D1TaskRepository(env.DB);
       const tasks = await repo.listOpenByAssigneeWithAcl({
-        organizationId,
+        organizationId: authorizedOrganizationId!,
         assigneeId,
         readableConversationSourceIds,
         allowUnscoped

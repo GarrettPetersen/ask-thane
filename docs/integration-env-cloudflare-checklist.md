@@ -126,12 +126,14 @@ npx wrangler secret put SLACK_BOT_TOKEN
 npx wrangler secret put OPENAI_API_KEY
 npx wrangler secret put ANTHROPIC_API_KEY
 npx wrangler secret put ADMIN_TRIGGER_TOKEN
+npx wrangler secret put INTERNAL_API_BEARER_TOKEN
 ```
 
 Set non-secret vars in `apps/bot-worker/wrangler.toml`:
 - [ ] `DEFAULT_LLM_PROVIDER`
 - [ ] `DEFAULT_LLM_MODEL`
 - [ ] `DEFAULT_ORGANIZATION_ID` (optional legacy fallback)
+- [ ] `TASKS_API_BASE_URL` (api-worker URL for internal task reads)
 
 Verify endpoint:
 - [ ] `GET /health` returns 200 on bot Worker URL
@@ -149,10 +151,12 @@ Verify endpoint:
 ```bash
 cd apps/api-worker
 npx wrangler deploy
+npx wrangler secret put INTERNAL_API_BEARER_TOKEN
 ```
 
 Checklist:
 - [ ] Staging API worker binds to `ask-thane-staging`; production API worker binds to `ask-thane`
+- [ ] `INTERNAL_API_BEARER_TOKEN` matches the bot worker token for the same environment
 - [ ] `GET /health` returns 200
 - [ ] `GET /v1/tasks/open-visible?...` returns JSON
 

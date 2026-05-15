@@ -202,6 +202,11 @@ pnpm dev:landing
   - `production` with `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
 - Add required reviewers on the `production` environment for approval gating.
 
+## Internal API Security
+- `/v1/tasks/open` and `/v1/tasks/open-visible` are internal-only API routes and require `Authorization: Bearer <INTERNAL_API_BEARER_TOKEN>`.
+- Task API requests must also include `x-organization-id`, and server-side enforcement rejects mismatched `organization_id` scope.
+- Bot-to-API calls should use `TASKS_API_BASE_URL` and the shared `INTERNAL_API_BEARER_TOKEN` secret for the same environment.
+
 ## Post-Launch Ops Checks
 - Keep production deploy gate requirements enabled: passing `pnpm test` and successful staging run for the same commit SHA.
 - Verify Stripe webhook processing after billing changes (`checkout.session.completed` -> plan tier + external account mapping).

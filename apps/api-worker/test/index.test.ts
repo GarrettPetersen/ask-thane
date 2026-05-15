@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 
-const listOpenByAssignee = vi.fn();
+const listOpenByAssigneeInOrganization = vi.fn();
 const listOpenByAssigneeWithAcl = vi.fn();
 
 vi.mock("@ask-thane/data", () => ({
   D1TaskRepository: class {
-    listOpenByAssignee = listOpenByAssignee;
+    listOpenByAssigneeInOrganization = listOpenByAssigneeInOrganization;
     listOpenByAssigneeWithAcl = listOpenByAssigneeWithAcl;
   }
 }));
@@ -18,7 +18,8 @@ describe("@ask-thane/api-worker", () => {
   } as never;
 
   const authHeaders = {
-    Authorization: "Bearer test-internal-token"
+    Authorization: "Bearer test-internal-token",
+    "x-organization-id": "org_0"
   };
 
   beforeEach(() => {
@@ -48,10 +49,23 @@ describe("@ask-thane/api-worker", () => {
     await expect(res.json()).resolves.toEqual({ error: "unauthorized" });
   });
 
-  it("returns open tasks", async () => {
-    listOpenByAssignee.mockResolvedValueOnce([{ id: "task_1" }]);
+  it("rejects task requests without authenticated org scope header", async () => {
     const res = await worker.fetch(
       new Request("https://api.local/v1/tasks/open?workspace_id=ws_1&assignee_id=U1", {
+        headers: {
+          Authorization: "Bearer test-internal-token"
+        }
+      }),
+      env
+    );
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual({ error: "missing organization scope" });
+  });
+
+  it("returns open tasks", async () => {
+    listOpenByAssigneeInOrganization.mockResolvedValueOnce([{ id: "task_1" }]);
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/tasks/open?organization_id=org_0&workspace_id=ws_1&assignee_id=U1", {
         headers: authHeaders
       }),
       env
@@ -60,7 +74,18 @@ describe("@ask-thane/api-worker", () => {
     await expect(res.json()).resolves.toEqual({
       tasks: [{ id: "task_1" }]
     });
-    expect(listOpenByAssignee).toHaveBeenCalledWith("ws_1", "U1");
+    expect(listOpenByAssigneeInOrganization).toHaveBeenCalledWith("org_0", "ws_1", "U1");
+  });
+
+  it("rejects org mismatch for open task requests", async () => {
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/tasks/open?organization_id=org_other&workspace_id=ws_1&assignee_id=U1", {
+        headers: authHeaders
+      }),
+      env
+    );
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual({ error: "organization scope mismatch" });
   });
 
   it("returns ACL-visible open tasks", async () => {
@@ -82,5 +107,17 @@ describe("@ask-thane/api-worker", () => {
       readableConversationSourceIds: ["conv_1", "conv_2"],
       allowUnscoped: true
     });
+  });
+
+  it("rejects org mismatch for open-visible requests", async () => {
+    const res = await worker.fetch(
+      new Request(
+        "https://api.local/v1/tasks/open-visible?organization_id=org_other&assignee_id=U1&readable_conversation_source_ids=conv_1",
+        { headers: authHeaders }
+      ),
+      env
+    );
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual({ error: "organization scope mismatch" });
   });
 });
