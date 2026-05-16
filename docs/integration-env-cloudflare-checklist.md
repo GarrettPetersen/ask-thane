@@ -44,6 +44,7 @@ Fill these values:
 - [ ] `SLACK_BOT_SCOPES` (optional override; defaults exist in worker config)
 - [ ] `STRIPE_SECRET_KEY` (optional currently)
 - [ ] `STRIPE_WEBHOOK_SECRET` (optional currently)
+- [ ] `BILLING_LINK_SIGNING_SECRET` (required for signed workspace billing links; same value on bot + payments workers per environment)
 - [ ] `BILLING_E2E_STRIPE_SECRET_KEY` (GitHub environment secret for `.github/workflows/billing-e2e-smoke.yml`; use restricted key)
 - [ ] `STRIPE_PRICE_TEAM_MONTHLY` (required for hosted checkout)
 - [ ] `STRIPE_PRICE_GROWTH_MONTHLY` (required for hosted checkout)
@@ -127,6 +128,7 @@ npx wrangler secret put OPENAI_API_KEY
 npx wrangler secret put ANTHROPIC_API_KEY
 npx wrangler secret put ADMIN_TRIGGER_TOKEN
 npx wrangler secret put INTERNAL_API_BEARER_TOKEN
+npx wrangler secret put BILLING_LINK_SIGNING_SECRET
 ```
 
 Set non-secret vars in `apps/bot-worker/wrangler.toml`:
@@ -172,14 +174,20 @@ Set Stripe secret(s):
 ```bash
 npx wrangler secret put STRIPE_WEBHOOK_SECRET
 npx wrangler secret put STRIPE_SECRET_KEY
+npx wrangler secret put BILLING_LINK_SIGNING_SECRET
 ```
 
 Checklist:
 - [ ] `GET /health` returns 200
 - [ ] `POST /webhooks/stripe` endpoint exists
 - [ ] `GET /subscribe` renders hosted pricing page
-- [ ] `POST /api/checkout/session` creates Stripe Checkout sessions for configured plans
+- [ ] `POST /api/checkout/session` creates Stripe Checkout sessions for configured plans (requires verified `billing_token`)
+- [ ] `POST /api/billing/portal-session` creates Stripe Billing Portal sessions for the linked Stripe customer
 - [ ] Run `BILLING_E2E_ENABLED=true pnpm test:billing:e2e` against staging (creates and then expires checkout sessions; no completed charge flow)
+
+Billing behavior expectations:
+- [ ] Upgrades are immediate with Stripe proration and unchanged billing-cycle anchor.
+- [ ] Downgrades/cancellations are configured to take effect at period end.
 
 ## 7) Slack app configuration
 In Slack app settings:

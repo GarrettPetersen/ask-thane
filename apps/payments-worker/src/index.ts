@@ -2,6 +2,8 @@ interface Env {
   DB?: D1Database;
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
+  BILLING_LINK_SIGNING_SECRET?: string;
+  BILLING_PORTAL_RETURN_URL?: string;
   THANE_BASE_URL?: string;
   STRIPE_PRICE_TEAM_MONTHLY?: string;
   STRIPE_PRICE_GROWTH_MONTHLY?: string;
@@ -30,6 +32,14 @@ interface StripeEventPayload {
   data?: {
     object?: Record<string, unknown>;
   };
+}
+
+interface BillingLinkPayload {
+  organizationId: string;
+  workspaceId: string;
+  exp: number;
+  iat?: number;
+  planTier?: PlanTier;
 }
 
 function parseStripeSignatureHeader(value: string): { timestamp: number; signatures: string[] } | null {
@@ -229,10 +239,171 @@ function planCatalog(env: Env): PlanConfig[] {
   ];
 }
 
-function renderSubscribePage(env: Env, requestUrl: URL): string {
+function planTierForStripePriceId(env: Env, priceId: string | null): PlanTier | null {
+  if (!priceId) {
+    return null;
+  }
+  for (const plan of planCatalog(env)) {
+    if (plan.priceEnvValue?.trim() && plan.priceEnvValue.trim() === priceId) {
+      return plan.planTier;
+    }
+  }
+  return null;
+}
+
+function base64UrlToBytes(value: string): Uint8Array | null {
+  if (typeof atob !== "function") {
+    return null;
+  }
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+  try {
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+function bytesToBase64Url(bytes: Uint8Array): string {
+  if (typeof btoa !== "function") {
+    throw new Error("btoa_unavailable");
+  }
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  const base64 = btoa(binary);
+  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function hmacSha256Base64Url(secret: string, message: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return bytesToBase64Url(new Uint8Array(signature));
+}
+
+async function verifyBillingLinkToken(token: string, secret: string): Promise<BillingLinkPayload | null> {
+  const [payloadPart, signaturePart] = token.split(".", 2);
+  if (!payloadPart || !signaturePart) {
+    return null;
+  }
+
+  const expectedSignature = await hmacSha256Base64Url(secret, payloadPart);
+  if (!timingSafeEqualHex(signaturePart, expectedSignature)) {
+    return null;
+  }
+
+  const payloadBytes = base64UrlToBytes(payloadPart);
+  if (!payloadBytes) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(payloadBytes));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return null;
+  }
+  const payload = parsed as Record<string, unknown>;
+  const organizationId = asSafeIdentifier(payload.organizationId);
+  const workspaceId = asSafeIdentifier(payload.workspaceId);
+  const exp = typeof payload.exp === "number" && Number.isFinite(payload.exp) ? Math.floor(payload.exp) : 0;
+  const planTier = normalizePlanTier(payload.planTier);
+  if (!organizationId || !workspaceId || !exp) {
+    return null;
+  }
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (exp <= nowSeconds) {
+    return null;
+  }
+
+  const result: BillingLinkPayload = {
+    organizationId,
+    workspaceId,
+    exp
+  };
+  if (planTier) {
+    result.planTier = planTier;
+  }
+  if (typeof payload.iat === "number" && Number.isFinite(payload.iat)) {
+    result.iat = Math.floor(payload.iat);
+  }
+  return result;
+}
+
+async function resolveVerifiedBillingContext(input: {
+  env: Env;
+  tokenRaw: unknown;
+}): Promise<BillingLinkPayload | null> {
+  const token = asNonEmptyString(input.tokenRaw);
+  const secret = input.env.BILLING_LINK_SIGNING_SECRET?.trim();
+  if (!token || !secret) {
+    return null;
+  }
+  return verifyBillingLinkToken(token, secret);
+}
+
+function allowedRedirectOrigins(input: { env: Env; requestUrl: URL }): Set<string> {
+  const origins = new Set<string>();
+  origins.add(input.requestUrl.origin);
+  const base = input.env.THANE_BASE_URL?.trim();
+  if (base) {
+    try {
+      origins.add(new URL(base).origin);
+    } catch {
+      // ignore invalid THANE_BASE_URL
+    }
+  }
+  origins.add("https://askthane.com");
+  origins.add("https://payments.askthane.com");
+  origins.add("https://payments-staging.askthane.com");
+  return origins;
+}
+
+function sanitizeRedirectUrl(input: {
+  raw: unknown;
+  fallback: string;
+  allowedOrigins: Set<string>;
+}): string {
+  const candidate = asUrlOrNull(input.raw);
+  if (!candidate) {
+    return input.fallback;
+  }
+  try {
+    const parsed = new URL(candidate);
+    if (input.allowedOrigins.has(parsed.origin)) {
+      return parsed.toString();
+    }
+  } catch {
+    return input.fallback;
+  }
+  return input.fallback;
+}
+
+async function renderSubscribePage(env: Env, requestUrl: URL): Promise<string> {
   const plans = planCatalog(env);
-  const requestedPlanTier = normalizePlanTier(requestUrl.searchParams.get("plan_tier"));
+  const verifiedContext = await resolveVerifiedBillingContext({
+    env,
+    tokenRaw: requestUrl.searchParams.get("billing_token")
+  });
+  const requestedPlanTier = verifiedContext?.planTier ?? null;
   const autoStart = requestUrl.searchParams.get("autostart") === "1";
+  const hasBillingContext = Boolean(verifiedContext);
+  const cardsDisabled = hasBillingContext ? "" : " disabled";
   const cards = plans
     .map(
       (plan) => `
@@ -244,15 +415,17 @@ function renderSubscribePage(env: Env, requestUrl: URL): string {
             <li>$${plan.perUserOverageUsd}/user overage</li>
             <li>$${plan.includedAiCreditUsd} included monthly AI credit</li>
           </ul>
-          <button data-plan="${plan.planTier}">Start ${plan.label}</button>
+          <button data-plan="${plan.planTier}"${cardsDisabled}>Start ${plan.label}</button>
         </article>`
     )
     .join("");
 
   const defaultBase = (env.THANE_BASE_URL?.trim().replace(/\/$/, "") ?? "https://askthane.com").replace(/"/g, "");
   const currentOrigin = requestUrl.origin.replace(/"/g, "");
-  const organizationId = requestUrl.searchParams.get("organization_id") ?? "";
-  const workspaceId = requestUrl.searchParams.get("workspace_id") ?? "";
+  const billingToken = asNonEmptyString(requestUrl.searchParams.get("billing_token")) ?? "";
+  const contextNotice = hasBillingContext
+    ? "Plan changes will apply to this workspace subscription."
+    : "Missing or invalid billing link. Open this page from a Thane-generated workspace billing link.";
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -282,25 +455,32 @@ function renderSubscribePage(env: Env, requestUrl: URL): string {
     <main>
       <h1>Choose a Thane plan</h1>
       <p>Plans include base seats plus usage-based overages for active users and AI spend.</p>
+      <p>${contextNotice}</p>
       <div class="grid">${cards}</div>
+      <button id="manageSubscriptionButton"${cardsDisabled} style="margin-top:1rem;max-width:360px;">Manage subscription</button>
       <div id="status" class="status" aria-live="polite"></div>
     </main>
     <script>
       (() => {
         const statusEl = document.getElementById("status");
-        const orgId = ${JSON.stringify(organizationId)};
-        const workspaceId = ${JSON.stringify(workspaceId)};
+        const manageButton = document.getElementById("manageSubscriptionButton");
+        const billingToken = ${JSON.stringify(billingToken)};
+        const hasBillingContext = ${JSON.stringify(hasBillingContext)};
         const requestedPlan = ${JSON.stringify(requestedPlanTier)};
         const autoStart = ${JSON.stringify(autoStart)};
         const successUrl = "${defaultBase}/billing/success?session_id={CHECKOUT_SESSION_ID}";
         const cancelUrl = "${currentOrigin}/subscribe?canceled=1";
+        const returnUrl = "${currentOrigin}/subscribe";
         const setStatus = (text, isError) => {
           if (!statusEl) return;
           statusEl.textContent = text;
           statusEl.className = isError ? "status error" : "status";
         };
+        if (!hasBillingContext) {
+          setStatus("Billing link is missing or expired. Please open a new billing link from Thane in Slack.", true);
+        }
         const startCheckout = async (plan) => {
-          if (!plan) return;
+          if (!plan || !hasBillingContext) return;
           setStatus("Redirecting to secure checkout...", false);
           try {
             const response = await fetch("/api/checkout/session", {
@@ -310,8 +490,7 @@ function renderSubscribePage(env: Env, requestUrl: URL): string {
                 plan_tier: plan,
                 success_url: successUrl,
                 cancel_url: cancelUrl,
-                organization_id: orgId || undefined,
-                workspace_id: workspaceId || undefined
+                billing_token: billingToken
               })
             });
             const result = await response.json();
@@ -324,14 +503,41 @@ function renderSubscribePage(env: Env, requestUrl: URL): string {
           }
         };
 
+        const startPortal = async () => {
+          if (!hasBillingContext) return;
+          setStatus("Opening billing portal...", false);
+          try {
+            const response = await fetch("/api/billing/portal-session", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                billing_token: billingToken,
+                return_url: returnUrl
+              })
+            });
+            const result = await response.json();
+            if (!response.ok || !result.ok || !result.portal_url) {
+              throw new Error(result.error || "portal_session_failed");
+            }
+            window.location.href = result.portal_url;
+          } catch (_error) {
+            setStatus("Could not open the billing portal right now. Please contact support.", true);
+          }
+        };
+
         for (const button of document.querySelectorAll("button[data-plan]")) {
           button.addEventListener("click", async () => {
             const plan = button.getAttribute("data-plan");
             await startCheckout(plan);
           });
         }
+        if (manageButton) {
+          manageButton.addEventListener("click", async () => {
+            await startPortal();
+          });
+        }
 
-        if (autoStart && requestedPlan) {
+        if (hasBillingContext && autoStart && requestedPlan) {
           startCheckout(requestedPlan);
         }
       })();
@@ -360,19 +566,36 @@ async function createStripeCheckoutSession(input: {
     return json({ ok: false, error: "invalid_plan_tier" }, 400);
   }
 
+  const billingContext = await resolveVerifiedBillingContext({
+    env: input.env,
+    tokenRaw: payload.billing_token
+  });
+  if (!billingContext) {
+    return json({ ok: false, error: "invalid_billing_token" }, 401);
+  }
+
   const plan = planCatalog(input.env).find((entry) => entry.planTier === planTier);
   if (!plan?.priceEnvValue?.trim()) {
     return json({ ok: false, error: "plan_not_configured", plan_tier: planTier }, 503);
   }
 
-  const origin = new URL(input.request.url).origin;
+  const requestUrl = new URL(input.request.url);
+  const origin = requestUrl.origin;
+  const allowedOrigins = allowedRedirectOrigins({ env: input.env, requestUrl });
   const fallbackBase = input.env.THANE_BASE_URL?.trim().replace(/\/$/, "") ?? "https://askthane.com";
-  const successUrl =
-    asUrlOrNull(payload.success_url) ?? `${fallbackBase}/billing/success?session_id={CHECKOUT_SESSION_ID}`;
-  const cancelUrl = asUrlOrNull(payload.cancel_url) ?? `${origin}/subscribe?canceled=1`;
+  const successUrl = sanitizeRedirectUrl({
+    raw: payload.success_url,
+    fallback: `${fallbackBase}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+    allowedOrigins
+  });
+  const cancelUrl = sanitizeRedirectUrl({
+    raw: payload.cancel_url,
+    fallback: `${origin}/subscribe?canceled=1`,
+    allowedOrigins
+  });
   const email = typeof payload.email === "string" && payload.email.trim() ? payload.email.trim() : null;
-  const organizationId = asSafeIdentifier(payload.organization_id);
-  const workspaceId = asSafeIdentifier(payload.workspace_id);
+  const organizationId = billingContext.organizationId;
+  const workspaceId = billingContext.workspaceId;
 
   const params = new URLSearchParams();
   params.set("mode", "subscription");
@@ -382,17 +605,12 @@ async function createStripeCheckoutSession(input: {
   params.set("line_items[0][quantity]", "1");
   params.set("allow_promotion_codes", "true");
   params.set("subscription_data[metadata][plan_tier]", plan.planTier);
-  if (organizationId) {
-    params.set("subscription_data[metadata][organization_id]", organizationId);
-    params.set("metadata[organization_id]", organizationId);
-  }
-  if (workspaceId) {
-    params.set("subscription_data[metadata][workspace_id]", workspaceId);
-    params.set("metadata[workspace_id]", workspaceId);
-  }
-  if (organizationId && workspaceId) {
-    params.set("client_reference_id", `${organizationId}:${workspaceId}`);
-  }
+  params.set("metadata[plan_tier]", plan.planTier);
+  params.set("subscription_data[metadata][organization_id]", organizationId);
+  params.set("metadata[organization_id]", organizationId);
+  params.set("subscription_data[metadata][workspace_id]", workspaceId);
+  params.set("metadata[workspace_id]", workspaceId);
+  params.set("client_reference_id", `${organizationId}:${workspaceId}`);
   if (email) {
     params.set("customer_email", email);
   }
@@ -467,6 +685,86 @@ async function upsertStripeExternalAccount(input: {
     .run();
 }
 
+async function findStripeExternalAccount(input: {
+  env: Env;
+  externalAccountType: "customer" | "subscription";
+  externalAccountId: string;
+}): Promise<{ organizationId: string; workspaceId?: string } | null> {
+  if (!input.env.DB) {
+    return null;
+  }
+  const row = await input.env.DB
+    .prepare(
+      `SELECT organization_id, metadata_json
+       FROM organization_external_accounts
+       WHERE provider = 'stripe'
+         AND external_account_type = ?
+         AND external_account_id = ?
+       LIMIT 1`
+    )
+    .bind(input.externalAccountType, input.externalAccountId)
+    .first<Record<string, unknown>>();
+  const organizationId = asSafeIdentifier(row?.organization_id);
+  if (!organizationId) {
+    return null;
+  }
+  let workspaceId: string | undefined;
+  if (typeof row?.metadata_json === "string") {
+    try {
+      const metadata = JSON.parse(row.metadata_json) as Record<string, unknown>;
+      const parsedWorkspaceId = asSafeIdentifier(metadata.workspace_id);
+      if (parsedWorkspaceId) {
+        workspaceId = parsedWorkspaceId;
+      }
+    } catch {
+      // ignore metadata parse failure
+    }
+  }
+  return workspaceId ? { organizationId, workspaceId } : { organizationId };
+}
+
+async function findStripeCustomerId(input: {
+  env: Env;
+  organizationId: string;
+  workspaceId: string;
+}): Promise<string | null> {
+  if (!input.env.DB) {
+    return null;
+  }
+  const rows = await input.env.DB
+    .prepare(
+      `SELECT external_account_id, metadata_json
+       FROM organization_external_accounts
+       WHERE provider = 'stripe'
+         AND organization_id = ?
+         AND external_account_type = 'customer'
+       ORDER BY updated_at DESC
+       LIMIT 20`
+    )
+    .bind(input.organizationId)
+    .all<Record<string, unknown>>();
+
+  for (const row of rows.results ?? []) {
+    const externalAccountId = asNonEmptyString(row.external_account_id);
+    if (!externalAccountId) {
+      continue;
+    }
+    if (typeof row.metadata_json !== "string") {
+      return externalAccountId;
+    }
+    try {
+      const metadata = JSON.parse(row.metadata_json) as Record<string, unknown>;
+      const workspaceId = asSafeIdentifier(metadata.workspace_id);
+      if (!workspaceId || workspaceId === input.workspaceId) {
+        return externalAccountId;
+      }
+    } catch {
+      return externalAccountId;
+    }
+  }
+  return null;
+}
+
 async function applyStripeEntitlementFromCheckoutSession(input: {
   env: Env;
   session: Record<string, unknown>;
@@ -479,18 +777,45 @@ async function applyStripeEntitlementFromCheckoutSession(input: {
       string,
       unknown
     >;
-  const organizationId = asSafeIdentifier(metadataRaw.organization_id);
-  const workspaceId = asSafeIdentifier(metadataRaw.workspace_id);
+  const metadataOrganizationId = asSafeIdentifier(metadataRaw.organization_id);
+  const metadataWorkspaceId = asSafeIdentifier(metadataRaw.workspace_id);
   const planTier = normalizePlanTier(metadataRaw.plan_tier);
-  if (!organizationId || !workspaceId || !planTier) {
-    return { linked: false, reason: "missing_workspace_or_plan_metadata" };
-  }
 
   const nowIso = new Date().toISOString();
   const customerId = asNonEmptyString(input.session.customer);
   const customerEmail = asNonEmptyString(input.session.customer_email);
   const subscriptionId = asNonEmptyString(input.session.subscription);
   const checkoutSessionId = asNonEmptyString(input.session.id);
+  let organizationId = metadataOrganizationId;
+  let workspaceId = metadataWorkspaceId;
+
+  if ((!organizationId || !workspaceId) && customerId) {
+    const linkedFromCustomer = await findStripeExternalAccount({
+      env: input.env,
+      externalAccountType: "customer",
+      externalAccountId: customerId
+    });
+    if (linkedFromCustomer?.organizationId) {
+      organizationId = linkedFromCustomer.organizationId;
+      workspaceId = workspaceId ?? linkedFromCustomer.workspaceId ?? null;
+    }
+  }
+
+  if ((!organizationId || !workspaceId) && subscriptionId) {
+    const linkedFromSubscription = await findStripeExternalAccount({
+      env: input.env,
+      externalAccountType: "subscription",
+      externalAccountId: subscriptionId
+    });
+    if (linkedFromSubscription?.organizationId) {
+      organizationId = organizationId ?? linkedFromSubscription.organizationId;
+      workspaceId = workspaceId ?? linkedFromSubscription.workspaceId ?? null;
+    }
+  }
+
+  if (!organizationId || !workspaceId || !planTier) {
+    return { linked: false, reason: "missing_workspace_or_plan_metadata" };
+  }
 
   await input.env.DB
     .prepare(
@@ -545,6 +870,162 @@ async function applyStripeEntitlementFromCheckoutSession(input: {
   return { linked: true };
 }
 
+async function updateWorkspacePlanTier(input: {
+  env: Env;
+  organizationId: string;
+  workspaceId: string;
+  planTier: string;
+}): Promise<void> {
+  if (!input.env.DB) {
+    return;
+  }
+  const nowIso = new Date().toISOString();
+  await input.env.DB
+    .prepare(
+      `UPDATE organizations
+       SET plan_tier = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .bind(input.planTier, nowIso, input.organizationId)
+    .run();
+  await input.env.DB
+    .prepare(
+      `UPDATE workspaces
+       SET plan_tier = ?, updated_at = ?
+       WHERE organization_id = ?
+         AND id = ?`
+    )
+    .bind(input.planTier, nowIso, input.organizationId, input.workspaceId)
+    .run();
+}
+
+async function applyStripeSubscriptionLifecycleEvent(input: {
+  env: Env;
+  subscription: Record<string, unknown>;
+  deleted: boolean;
+}): Promise<{ linked: boolean; reason?: string }> {
+  if (!input.env.DB) {
+    return { linked: false, reason: "missing_db_binding" };
+  }
+  const subscriptionId = asNonEmptyString(input.subscription.id);
+  const customerId = asNonEmptyString(input.subscription.customer);
+  const status = asNonEmptyString(input.subscription.status);
+  const cancelAtPeriodEnd = Boolean(input.subscription.cancel_at_period_end);
+  const items = (input.subscription.items && typeof input.subscription.items === "object"
+    ? (input.subscription.items as { data?: Array<Record<string, unknown>> }).data
+    : []) ?? [];
+  const firstItem = items.length > 0 ? items[0] : undefined;
+  const firstPrice = firstItem && typeof firstItem.price === "object" ? (firstItem.price as Record<string, unknown>) : null;
+  const priceId = firstPrice ? asNonEmptyString(firstPrice.id) : null;
+  const planTier = planTierForStripePriceId(input.env, priceId);
+
+  let linked = subscriptionId
+    ? await findStripeExternalAccount({
+        env: input.env,
+        externalAccountType: "subscription",
+        externalAccountId: subscriptionId
+      })
+    : null;
+  if (!linked && customerId) {
+    linked = await findStripeExternalAccount({
+      env: input.env,
+      externalAccountType: "customer",
+      externalAccountId: customerId
+    });
+  }
+  if (!linked?.organizationId || !linked.workspaceId) {
+    return { linked: false, reason: "missing_linked_workspace" };
+  }
+
+  if (input.deleted || status === "canceled") {
+    await updateWorkspacePlanTier({
+      env: input.env,
+      organizationId: linked.organizationId,
+      workspaceId: linked.workspaceId,
+      planTier: "free"
+    });
+    return { linked: true };
+  }
+
+  if (cancelAtPeriodEnd && status === "active") {
+    // Preserve current entitlement until the period actually ends.
+    return { linked: true };
+  }
+
+  if (!planTier) {
+    return { linked: false, reason: "unknown_subscription_plan_price" };
+  }
+
+  await updateWorkspacePlanTier({
+    env: input.env,
+    organizationId: linked.organizationId,
+    workspaceId: linked.workspaceId,
+    planTier: planTierForOrganization(planTier)
+  });
+  return { linked: true };
+}
+
+async function createBillingPortalSession(input: { env: Env; request: Request }): Promise<Response> {
+  if (!input.env.STRIPE_SECRET_KEY) {
+    return json({ ok: false, error: "missing_stripe_secret_key" }, 500);
+  }
+  let payload: Record<string, unknown>;
+  try {
+    payload = (await input.request.json()) as Record<string, unknown>;
+  } catch {
+    return json({ ok: false, error: "invalid_json" }, 400);
+  }
+  const billingContext = await resolveVerifiedBillingContext({
+    env: input.env,
+    tokenRaw: payload.billing_token
+  });
+  if (!billingContext) {
+    return json({ ok: false, error: "invalid_billing_token" }, 401);
+  }
+  const customerId = await findStripeCustomerId({
+    env: input.env,
+    organizationId: billingContext.organizationId,
+    workspaceId: billingContext.workspaceId
+  });
+  if (!customerId) {
+    return json({ ok: false, error: "stripe_customer_not_found" }, 404);
+  }
+
+  const requestUrl = new URL(input.request.url);
+  const allowedOrigins = allowedRedirectOrigins({ env: input.env, requestUrl });
+  const returnUrl = sanitizeRedirectUrl({
+    raw: payload.return_url,
+    fallback:
+      input.env.BILLING_PORTAL_RETURN_URL?.trim() ??
+      `${requestUrl.origin}/subscribe?billing_updated=1`,
+    allowedOrigins
+  });
+
+  const params = new URLSearchParams();
+  params.set("customer", customerId);
+  params.set("return_url", returnUrl);
+  const response = await fetch("https://api.stripe.com/v1/billing_portal/sessions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.env.STRIPE_SECRET_KEY}`,
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: params
+  });
+  const result = (await response.json()) as { id?: string; url?: string; error?: { message?: string } };
+  if (!response.ok || !result.url || !result.id) {
+    return json(
+      {
+        ok: false,
+        error: "stripe_portal_session_failed",
+        stripe_error: result.error?.message ?? "unknown"
+      },
+      502
+    );
+  }
+  return json({ ok: true, portal_url: result.url, session_id: result.id });
+}
+
 async function handleStripeWebhook(input: { env: Env; request: Request }): Promise<Response> {
   const rawBody = await input.request.text();
   const signatureHeader = input.request.headers.get("stripe-signature");
@@ -581,6 +1062,28 @@ async function handleStripeWebhook(input: { env: Env; request: Request }): Promi
     return json({ ok: true, received: true, event_type: event.type, entitlement });
   }
 
+  if (event.type === "customer.subscription.updated") {
+    const subscription =
+      (event.data?.object && typeof event.data.object === "object" ? event.data.object : {}) as Record<string, unknown>;
+    const entitlement = await applyStripeSubscriptionLifecycleEvent({
+      env: input.env,
+      subscription,
+      deleted: false
+    });
+    return json({ ok: true, received: true, event_type: event.type, entitlement });
+  }
+
+  if (event.type === "customer.subscription.deleted") {
+    const subscription =
+      (event.data?.object && typeof event.data.object === "object" ? event.data.object : {}) as Record<string, unknown>;
+    const entitlement = await applyStripeSubscriptionLifecycleEvent({
+      env: input.env,
+      subscription,
+      deleted: true
+    });
+    return json({ ok: true, received: true, event_type: event.type, entitlement });
+  }
+
   return json({ ok: true, received: true, event_type: event.type ?? "unknown" }, 200);
 }
 
@@ -589,6 +1092,10 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/api/checkout/session" && request.method === "OPTIONS") {
+      return json({ ok: true }, 204);
+    }
+
+    if (url.pathname === "/api/billing/portal-session" && request.method === "OPTIONS") {
       return json({ ok: true }, 204);
     }
 
@@ -607,11 +1114,15 @@ export default {
     }
 
     if (url.pathname === "/subscribe" && request.method === "GET") {
-      return html(renderSubscribePage(env, url), 200);
+      return html(await renderSubscribePage(env, url), 200);
     }
 
     if (url.pathname === "/api/checkout/session" && request.method === "POST") {
       return createStripeCheckoutSession({ env, request });
+    }
+
+    if (url.pathname === "/api/billing/portal-session" && request.method === "POST") {
+      return createBillingPortalSession({ env, request });
     }
 
     if (url.pathname === "/webhooks/stripe" && request.method === "POST") {

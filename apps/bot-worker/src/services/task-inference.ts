@@ -7,6 +7,7 @@ export interface BotEnv {
   DB: D1Database;
   TASKS_API_BASE_URL?: string;
   INTERNAL_API_BEARER_TOKEN?: string;
+  BILLING_LINK_SIGNING_SECRET?: string;
   BUILD_ENV?: string;
   BUILD_GIT_SHA?: string;
   BUILD_DEPLOYED_AT?: string;

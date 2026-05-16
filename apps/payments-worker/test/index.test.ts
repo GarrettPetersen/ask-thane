@@ -17,6 +17,42 @@ async function signStripeWebhookPayload(input: { secret: string; payload: string
   return `t=${input.timestamp},v1=${hex}`;
 }
 
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function signBillingToken(input: {
+  secret: string;
+  organizationId: string;
+  workspaceId: string;
+  expiresInSeconds?: number;
+  planTier?: "team" | "growth" | "scale" | "scale_plus";
+}): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    exp: now + (input.expiresInSeconds ?? 900),
+    iat: now,
+    ...(input.planTier ? { planTier: input.planTier } : {})
+  };
+  const payloadEncoded = bytesToBase64Url(new TextEncoder().encode(JSON.stringify(payload)));
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(input.secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payloadEncoded));
+  const signatureEncoded = bytesToBase64Url(new Uint8Array(signature));
+  return `${payloadEncoded}.${signatureEncoded}`;
+}
+
 describe("@ask-thane/payments-worker", () => {
   it("serves health", async () => {
     const res = await worker.fetch(new Request("https://pay.local/health"), {});
@@ -105,7 +141,15 @@ describe("@ask-thane/payments-worker", () => {
   });
 
   it("serves subscribe page", async () => {
-    const res = await worker.fetch(new Request("https://pay.local/subscribe"), {});
+    const billingToken = await signBillingToken({
+      secret: "billing_secret",
+      organizationId: "org_1",
+      workspaceId: "ws_1",
+      planTier: "team"
+    });
+    const res = await worker.fetch(new Request(`https://pay.local/subscribe?billing_token=${billingToken}`), {
+      BILLING_LINK_SIGNING_SECRET: "billing_secret"
+    });
     expect(res.status).toBe(200);
     await expect(res.text()).resolves.toContain("Choose a Thane plan");
   });
@@ -127,6 +171,11 @@ describe("@ask-thane/payments-worker", () => {
   });
 
   it("creates checkout session via Stripe API", async () => {
+    const billingToken = await signBillingToken({
+      secret: "billing_secret",
+      organizationId: "org_test",
+      workspaceId: "ws_test"
+    });
     const originalFetch = globalThis.fetch;
     let stripeBody = "";
     globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -157,12 +206,12 @@ describe("@ask-thane/payments-worker", () => {
           body: JSON.stringify({
             plan_tier: "team",
             email: "owner@example.com",
-            organization_id: "org_test",
-            workspace_id: "ws_test"
+            billing_token: billingToken
           })
         }),
         {
           STRIPE_SECRET_KEY: "sk_test_123",
+          BILLING_LINK_SIGNING_SECRET: "billing_secret",
           STRIPE_PRICE_TEAM_MONTHLY: "price_team_123",
           THANE_BASE_URL: "https://askthane.com"
         }
@@ -245,6 +294,177 @@ describe("@ask-thane/payments-worker", () => {
     expect(operations.some((op) => op.sql.includes("UPDATE organizations"))).toBe(true);
     expect(operations.some((op) => op.sql.includes("UPDATE workspaces"))).toBe(true);
     expect(operations.some((op) => op.sql.includes("INSERT INTO organization_external_accounts"))).toBe(true);
+  });
+
+  it("rejects checkout when billing token is invalid", async () => {
+    const res = await worker.fetch(
+      new Request("https://pay.local/api/checkout/session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ plan_tier: "team", billing_token: "bad.token" })
+      }),
+      {
+        STRIPE_SECRET_KEY: "sk_test_123",
+        BILLING_LINK_SIGNING_SECRET: "billing_secret",
+        STRIPE_PRICE_TEAM_MONTHLY: "price_team_123"
+      }
+    );
+    expect(res.status).toBe(401);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: "invalid_billing_token"
+    });
+  });
+
+  it("creates Stripe billing portal session", async () => {
+    const billingToken = await signBillingToken({
+      secret: "billing_secret",
+      organizationId: "org_1",
+      workspaceId: "ws_1"
+    });
+    const db = {
+      prepare(sql: string) {
+        return {
+          bind(...args: unknown[]) {
+            return {
+              all: async () => {
+                if (sql.includes("external_account_type = 'customer'") && args[0] === "org_1") {
+                  return {
+                    results: [
+                      {
+                        external_account_id: "cus_123",
+                        metadata_json: JSON.stringify({ workspace_id: "ws_1" })
+                      }
+                    ]
+                  };
+                }
+                return { results: [] };
+              }
+            };
+          }
+        };
+      }
+    };
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("api.stripe.com/v1/billing_portal/sessions")) {
+        return new Response(JSON.stringify({ id: "bps_123", url: "https://billing.stripe.com/p/session_123" }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      throw new Error(`unexpected_fetch:${url}`);
+    };
+
+    try {
+      const res = await worker.fetch(
+        new Request("https://pay.local/api/billing/portal-session", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ billing_token: billingToken, return_url: "https://askthane.com/billing/manage" })
+        }),
+        {
+          STRIPE_SECRET_KEY: "sk_test_123",
+          BILLING_LINK_SIGNING_SECRET: "billing_secret",
+          DB: db as unknown as D1Database
+        }
+      );
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toMatchObject({
+        ok: true,
+        portal_url: "https://billing.stripe.com/p/session_123",
+        session_id: "bps_123"
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("applies period-end lifecycle semantics for subscription webhooks", async () => {
+    const operations: Array<{ sql: string; bind: unknown[] }> = [];
+    const db = {
+      prepare(sql: string) {
+        return {
+          bind(...args: unknown[]) {
+            return {
+              first: async () => {
+                if (sql.includes("external_account_type = ?") && args[0] === "subscription" && args[1] === "sub_1") {
+                  return {
+                    organization_id: "org_1",
+                    metadata_json: JSON.stringify({ workspace_id: "ws_1" })
+                  };
+                }
+                return null;
+              },
+              run: async () => {
+                operations.push({ sql, bind: args });
+                return {};
+              }
+            };
+          }
+        };
+      }
+    };
+
+    const secret = "whsec_test_123";
+    const updatedPayload = JSON.stringify({
+      id: "evt_updated",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_1",
+          customer: "cus_1",
+          status: "active",
+          cancel_at_period_end: true,
+          items: { data: [{ price: { id: "price_team_123" } }] }
+        }
+      }
+    });
+    const updatedSig = await signStripeWebhookPayload({
+      secret,
+      payload: updatedPayload,
+      timestamp: Math.floor(Date.now() / 1000)
+    });
+    const updatedRes = await worker.fetch(
+      new Request("https://pay.local/webhooks/stripe", {
+        method: "POST",
+        body: updatedPayload,
+        headers: { "content-type": "application/json", "stripe-signature": updatedSig }
+      }),
+      { STRIPE_WEBHOOK_SECRET: secret, STRIPE_PRICE_TEAM_MONTHLY: "price_team_123", DB: db as unknown as D1Database }
+    );
+    expect(updatedRes.status).toBe(200);
+    expect(operations.some((op) => op.sql.includes("UPDATE workspaces"))).toBe(false);
+
+    const deletedPayload = JSON.stringify({
+      id: "evt_deleted",
+      type: "customer.subscription.deleted",
+      data: {
+        object: {
+          id: "sub_1",
+          customer: "cus_1",
+          status: "canceled",
+          cancel_at_period_end: false,
+          items: { data: [{ price: { id: "price_team_123" } }] }
+        }
+      }
+    });
+    const deletedSig = await signStripeWebhookPayload({
+      secret,
+      payload: deletedPayload,
+      timestamp: Math.floor(Date.now() / 1000)
+    });
+    const deletedRes = await worker.fetch(
+      new Request("https://pay.local/webhooks/stripe", {
+        method: "POST",
+        body: deletedPayload,
+        headers: { "content-type": "application/json", "stripe-signature": deletedSig }
+      }),
+      { STRIPE_WEBHOOK_SECRET: secret, STRIPE_PRICE_TEAM_MONTHLY: "price_team_123", DB: db as unknown as D1Database }
+    );
+    expect(deletedRes.status).toBe(200);
+    expect(operations.some((op) => op.sql.includes("UPDATE workspaces"))).toBe(true);
   });
 
   it("returns 404 for unknown route", async () => {

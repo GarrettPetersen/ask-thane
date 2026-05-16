@@ -185,8 +185,11 @@ pnpm dev:landing
   - plus a `organization_external_accounts` mapping row for Slack identity.
 - New installs default to free tier.
 - Paid upgrade flow:
-  - checkout session carries `organization_id`, `workspace_id`, and `plan_tier` metadata,
-  - Stripe webhook `checkout.session.completed` updates `organizations.plan_tier` and `workspaces.plan_tier`,
+  - bot-generated billing links carry a short-lived signed `billing_token` (HMAC + expiry) instead of raw org/workspace query IDs,
+  - checkout and billing-portal APIs require a valid `billing_token` and derive tenant scope from that verified payload,
+  - checkout session metadata carries `organization_id`, `workspace_id`, and `plan_tier` for webhook reconciliation,
+  - Stripe webhook `checkout.session.completed` activates initial entitlements, and `customer.subscription.updated` / `customer.subscription.deleted` keep plan state in sync,
+  - upgrades apply immediately via Stripe proration (billing cycle anchor unchanged), while downgrade/cancel remains effective at period end,
   - Stripe customer/subscription IDs are mapped into `organization_external_accounts` with provider `stripe`.
 
 ## Deploy Flow
@@ -206,6 +209,10 @@ pnpm dev:landing
 - `/v1/tasks/open` and `/v1/tasks/open-visible` are internal-only API routes and require `Authorization: Bearer <INTERNAL_API_BEARER_TOKEN>`.
 - Task API requests must also include `x-organization-id`, and server-side enforcement rejects mismatched `organization_id` scope.
 - Bot-to-API calls should use `TASKS_API_BASE_URL` and the shared `INTERNAL_API_BEARER_TOKEN` secret for the same environment.
+
+## Billing Secrets
+- Set `BILLING_LINK_SIGNING_SECRET` as a secret in both `bot-worker` and `payments-worker` for each environment.
+- Set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` in `payments-worker`, and configure Stripe Billing Portal in your Stripe account.
 
 ## Post-Launch Ops Checks
 - Keep production deploy gate requirements enabled: passing `pnpm test` and successful staging run for the same commit SHA.

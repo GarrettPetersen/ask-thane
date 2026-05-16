@@ -1,4 +1,5 @@
 import { OrgRegistry } from "../services/org-registry";
+import { createSignedBillingSubscribeUrl } from "../services/billing-link-token";
 import { SlackInstallStore } from "../services/slack-install-store";
 import type { BotEnv } from "../services/task-inference";
 
@@ -238,29 +239,18 @@ function resolveRedirectUri(request: Request, env: BotEnv): string {
   return `${new URL(request.url).origin}/slack/oauth/callback`;
 }
 
-function resolveSubscriptionPageUrl(env: BotEnv): string {
-  const configured = env.SUBSCRIPTION_PAGE_URL?.trim();
-  if (configured) {
-    return configured;
-  }
-  return "https://payments.askthane.com/subscribe";
-}
-
-function workspaceBillingSubscribeUrl(input: {
+async function workspaceBillingSubscribeUrl(input: {
   env: BotEnv;
   organizationId: string;
   workspaceId: string;
   selectedTier?: "team" | "growth" | "scale" | "scale_plus";
-}): string {
-  const base = resolveSubscriptionPageUrl(input.env);
-  const url = new URL(base);
-  url.searchParams.set("organization_id", input.organizationId);
-  url.searchParams.set("workspace_id", input.workspaceId);
-  if (input.selectedTier) {
-    url.searchParams.set("plan_tier", input.selectedTier);
-    url.searchParams.set("autostart", "1");
-  }
-  return url.toString();
+}): Promise<string> {
+  return createSignedBillingSubscribeUrl({
+    env: input.env,
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    ...(input.selectedTier ? { selectedTier: input.selectedTier } : {})
+  });
 }
 
 function normalizeSelectedTier(value: string | null): "team" | "growth" | "scale" | "scale_plus" | null {
@@ -554,7 +544,7 @@ export async function handleSlackOAuthCallback(request: Request, env: BotEnv): P
   const missingScopes = getMissingRecommendedScopes(payload.scope);
   const installPlan = statePayload.installPlan ?? "free";
   const selectedTier = installPlan === "paid" ? statePayload.selectedTier ?? "team" : undefined;
-  const billingSubscribeUrl = workspaceBillingSubscribeUrl({
+  const billingSubscribeUrl = await workspaceBillingSubscribeUrl({
     env,
     organizationId: workspaceRef.organizationId,
     workspaceId: workspaceRef.workspaceId,

@@ -18,6 +18,7 @@ import {
   type WorkspaceBillingPolicy
 } from "./billing-policy";
 import { ConversationAccessResolver } from "./conversation-access";
+import { createSignedBillingSubscribeUrl } from "./billing-link-token";
 import { computeNextDigestAt, defaultCadenceSpec, normalizeCadenceSpec, normalizeTimezone } from "./notification-cadence";
 import { estimateOpenAiUsageCost } from "./openai-pricing";
 import { fetchSlackConversationHistory, postSlackMessage, type SlackHistoryMessage } from "./slack-api";
@@ -782,15 +783,6 @@ function resolveInternalUserIdByExternalUserId(
   return matched?.userId ?? null;
 }
 
-function resolveSubscriptionPageUrl(env: BotEnv): string {
-  const configured = env.SUBSCRIPTION_PAGE_URL?.trim();
-  if (configured) {
-    return configured;
-  }
-  const base = env.THANE_BASE_URL?.trim().replace(/\/$/, "") ?? "https://askthane.com";
-  return `${base}/subscribe.html`;
-}
-
 function formatResetDateForMessage(resetIso: string): string {
   const reset = new Date(resetIso);
   if (Number.isNaN(reset.valueOf())) {
@@ -834,7 +826,11 @@ async function enforceActorActiveUserLimitForTaskWrites(ctx: ToolContext): Promi
         monthlySpendUsd: aiGate.monthlySpendUsd,
         monthlyCapUsd: aiGate.monthlyCapUsd,
         resetsAtIso: aiGate.resetsAtIso,
-        subscriptionPageUrl: resolveSubscriptionPageUrl(ctx.env)
+        subscriptionPageUrl: await createSignedBillingSubscribeUrl({
+          env: ctx.env,
+          organizationId: ctx.organizationId,
+          workspaceId: ctx.workspaceId
+        })
       }),
       resets_at: aiGate.resetsAtIso,
       monthly_spend_usd: aiGate.monthlySpendUsd,
@@ -2160,7 +2156,11 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
       monthlySpendUsd: runAiSpendGate.monthlySpendUsd,
       monthlyCapUsd: runAiSpendGate.monthlyCapUsd,
       resetsAtIso: runAiSpendGate.resetsAtIso,
-      subscriptionPageUrl: resolveSubscriptionPageUrl(input.env)
+      subscriptionPageUrl: await createSignedBillingSubscribeUrl({
+        env: input.env,
+        organizationId: input.organizationId,
+        workspaceId: input.workspaceId
+      })
     });
     try {
       await postSlackMessage({
