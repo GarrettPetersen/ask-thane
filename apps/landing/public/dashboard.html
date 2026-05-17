@@ -7,15 +7,20 @@
     <meta name="description" content="Live public dashboard for Ask Thane operational metrics and growth trends." />
     <style>
       :root {
-        --bg: #f7f3ea;
-        --ink: #131313;
-        --muted: #666;
+        --bg: #f5f2ea;
+        --ink: #141414;
+        --muted: #605a53;
         --surface: #fffdf8;
-        --border: #e7decd;
+        --surface-strong: #ffffff;
+        --border: #e6ddd0;
+        --border-soft: #f0e9dd;
         --brand: #0f5fd7;
         --brand-dark: #0848a6;
-        --ok: #146c2e;
-        --task: #b45309;
+        --brand-soft: #e7f0ff;
+        --shadow: 0 14px 32px rgba(40, 22, 6, 0.08);
+        --radius-lg: 20px;
+        --radius-md: 14px;
+        --radius-sm: 10px;
       }
 
       * {
@@ -27,8 +32,8 @@
         font-family: "Avenir Next", "Segoe UI", sans-serif;
         color: var(--ink);
         background:
-          radial-gradient(1000px 400px at 100% -10%, #ffe8c8 0%, transparent 65%),
-          radial-gradient(700px 420px at -10% 0%, #deecff 0%, transparent 60%),
+          radial-gradient(1000px 460px at 100% -10%, #ffe8c9 0%, transparent 66%),
+          radial-gradient(760px 440px at -10% 0%, #dbe9ff 0%, transparent 62%),
           var(--bg);
       }
 
@@ -38,7 +43,11 @@
       }
 
       header {
-        padding: 24px 0 12px;
+        padding: 24px 0 14px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
       }
 
       .brand-mark {
@@ -46,16 +55,51 @@
         height: auto;
       }
 
+      .top-links {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .top-link {
+        text-decoration: none;
+        color: var(--brand-dark);
+        border: 1px solid #d7e6ff;
+        background: #edf4ff;
+        padding: 8px 12px;
+        border-radius: 999px;
+        font-size: 0.9rem;
+        font-weight: 700;
+      }
+
       .hero {
-        background: var(--surface);
+        background:
+          linear-gradient(120deg, rgba(255, 255, 255, 0.96), rgba(255, 250, 240, 0.95)),
+          var(--surface);
         border: 1px solid var(--border);
-        border-radius: 18px;
-        padding: 20px;
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow);
+        padding: 24px;
       }
 
       h1 {
-        margin: 0;
+        margin: 10px 0 0;
         font-size: clamp(1.8rem, 4vw, 2.8rem);
+        letter-spacing: -0.02em;
+      }
+
+      .eyebrow {
+        display: inline-block;
+        margin: 0;
+        font-size: 0.76rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--brand-dark);
+        background: var(--brand-soft);
+        border: 1px solid #cfe0ff;
+        border-radius: 999px;
+        padding: 6px 10px;
       }
 
       .muted {
@@ -63,7 +107,7 @@
       }
 
       .toolbar {
-        margin-top: 14px;
+        margin-top: 16px;
         display: flex;
         gap: 10px;
         align-items: center;
@@ -73,8 +117,8 @@
       select,
       button {
         font: inherit;
-        border: 1px solid #d5cab6;
-        border-radius: 10px;
+        border: 1px solid #d6c9b4;
+        border-radius: var(--radius-sm);
         padding: 8px 12px;
         background: #fff;
       }
@@ -92,17 +136,18 @@
       }
 
       .kpis {
-        margin-top: 16px;
+        margin-top: 18px;
         display: grid;
         grid-template-columns: repeat(5, minmax(0, 1fr));
         gap: 10px;
       }
 
       .kpi {
-        background: #fff;
+        background: var(--surface-strong);
         border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 12px;
+        border-radius: var(--radius-md);
+        box-shadow: 0 8px 20px rgba(40, 22, 6, 0.05);
+        padding: 13px;
       }
 
       .kpi-label {
@@ -113,27 +158,29 @@
 
       .kpi-value {
         margin: 6px 0 0;
-        font-size: 1.5rem;
+        font-size: 1.6rem;
         font-weight: 700;
+        letter-spacing: -0.01em;
       }
 
-      .grid {
-        margin: 14px 0 28px;
+      .growth-grid {
+        margin: 14px 0 20px;
         display: grid;
-        grid-template-columns: 2fr 1fr;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 12px;
       }
 
       .panel {
-        background: #fff;
+        background: var(--surface-strong);
         border: 1px solid var(--border);
-        border-radius: 14px;
+        border-radius: var(--radius-md);
+        box-shadow: 0 8px 20px rgba(40, 22, 6, 0.05);
         padding: 14px;
       }
 
       .panel h2 {
         margin: 0 0 8px;
-        font-size: 1.15rem;
+        font-size: 1.12rem;
       }
 
       .legend {
@@ -159,10 +206,25 @@
 
       svg.chart {
         width: 100%;
-        height: 300px;
-        border: 1px solid #efe6d8;
-        border-radius: 10px;
-        background: #fff;
+        height: 232px;
+        border: 1px solid var(--border-soft);
+        border-radius: var(--radius-sm);
+        background: linear-gradient(180deg, #fff, #fffcf6);
+      }
+
+      .panel-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .panel-stat {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.88rem;
+        font-weight: 600;
       }
 
       .table {
@@ -173,9 +235,18 @@
       .table td,
       .table th {
         padding: 8px 6px;
-        border-bottom: 1px solid #efe6d8;
+        border-bottom: 1px solid var(--border-soft);
         text-align: left;
         font-size: 0.92rem;
+      }
+
+      .table th {
+        color: #4f4942;
+        font-weight: 700;
+      }
+
+      .table tbody tr:nth-child(even) {
+        background: #fffcf7;
       }
 
       .status {
@@ -184,11 +255,27 @@
       }
 
       @media (max-width: 1020px) {
+        header {
+          flex-direction: column;
+          align-items: flex-start;
+        }
+
         .kpis {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
-        .grid {
+        .growth-grid {
           grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .kpis {
+          grid-template-columns: 1fr;
+        }
+
+        .panel-head {
+          flex-direction: column;
+          align-items: flex-start;
         }
       }
     </style>
@@ -196,10 +283,15 @@
   <body>
     <header class="container">
       <a href="/"><img class="brand-mark" src="/brand/ask-thane-gray-logo-with-text.svg" alt="Ask Thane" /></a>
+      <nav class="top-links" aria-label="Dashboard links">
+        <a class="top-link" href="/">Home</a>
+        <a class="top-link" href="/install.html">Install</a>
+      </nav>
     </header>
 
     <main class="container">
       <section class="hero">
+        <p class="eyebrow">Public Metrics</p>
         <h1>Live Ask Thane Dashboard</h1>
         <p class="muted">Public operational and growth metrics pulled directly from production data.</p>
         <div class="toolbar">
@@ -223,35 +315,59 @@
         <article class="kpi"><p class="kpi-label">Slack Installs</p><p class="kpi-value" id="kpiInstalls">-</p></article>
       </section>
 
-      <section class="grid">
+      <section class="growth-grid">
         <article class="panel">
-          <h2>Cumulative Growth</h2>
-          <div class="legend">
-            <span class="legend-item"><span class="dot" style="background:#0f5fd7"></span>Organizations</span>
-            <span class="legend-item"><span class="dot" style="background:#5b8def"></span>Workspaces</span>
-            <span class="legend-item"><span class="dot" style="background:#0a8f6a"></span>Users</span>
-            <span class="legend-item"><span class="dot" style="background:#b45309"></span>Tasks</span>
-            <span class="legend-item"><span class="dot" style="background:#7c3aed"></span>Installs</span>
+          <div class="panel-head">
+            <h2>Cumulative Organizations</h2>
+            <p class="panel-stat" id="orgTrend">-</p>
           </div>
-          <svg class="chart" id="growthChart" viewBox="0 0 920 300" preserveAspectRatio="none"></svg>
+          <svg class="chart" id="chartOrganizations" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
         </article>
-
         <article class="panel">
-          <h2>Recent Daily Adds</h2>
-          <table class="table" aria-label="Recent daily counts">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Orgs</th>
-                <th>WS</th>
-                <th>Users</th>
-                <th>Tasks</th>
-                <th>Installs</th>
-              </tr>
-            </thead>
-            <tbody id="recentRows"></tbody>
-          </table>
+          <div class="panel-head">
+            <h2>Cumulative Workspaces</h2>
+            <p class="panel-stat" id="workspaceTrend">-</p>
+          </div>
+          <svg class="chart" id="chartWorkspaces" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
         </article>
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Cumulative Users</h2>
+            <p class="panel-stat" id="userTrend">-</p>
+          </div>
+          <svg class="chart" id="chartUsers" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
+        </article>
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Cumulative Tasks</h2>
+            <p class="panel-stat" id="taskTrend">-</p>
+          </div>
+          <svg class="chart" id="chartTasks" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
+        </article>
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Cumulative Slack Installs</h2>
+            <p class="panel-stat" id="installTrend">-</p>
+          </div>
+          <svg class="chart" id="chartInstalls" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
+        </article>
+      </section>
+
+      <section class="panel" style="margin: 0 0 30px;">
+        <h2>Recent Daily Adds</h2>
+        <table class="table" aria-label="Recent daily counts">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Orgs</th>
+              <th>WS</th>
+              <th>Users</th>
+              <th>Tasks</th>
+              <th>Installs</th>
+            </tr>
+          </thead>
+          <tbody id="recentRows"></tbody>
+        </table>
       </section>
     </main>
 
@@ -307,39 +423,31 @@
           tbody.innerHTML = rows.join("");
         }
 
-        function renderGrowthChart(data) {
-          const chart = document.getElementById("growthChart");
+        function renderSingleSeriesChart(input) {
+          const chart = document.getElementById(input.chartId);
           if (!chart) return;
           const width = 920;
-          const height = 300;
+          const height = 232;
           const padding = { top: 14, right: 14, bottom: 24, left: 40 };
-          const seriesDefs = [
-            { key: "organizations", values: data.series.organizations.cumulative },
-            { key: "workspaces", values: data.series.workspaces.cumulative },
-            { key: "users", values: data.series.users.cumulative },
-            { key: "tasks", values: data.series.tasks.cumulative },
-            { key: "installs", values: data.series.installs.cumulative }
-          ];
-          const count = data.series.dates.length;
+          const values = input.values;
+          const count = input.dates.length;
           const xMax = Math.max(1, count - 1);
           let yMax = 1;
-          for (const series of seriesDefs) {
-            for (const value of series.values) {
-              yMax = Math.max(yMax, value || 0);
-            }
+          for (const value of values) {
+            yMax = Math.max(yMax, value || 0);
           }
 
-          const lines = [];
-          for (const series of seriesDefs) {
-            const points = series.values.map((value, idx) => {
-              const x = padding.left + (idx / xMax) * (width - padding.left - padding.right);
-              const y = padding.top + (1 - (value || 0) / yMax) * (height - padding.top - padding.bottom);
-              return `${x.toFixed(2)},${y.toFixed(2)}`;
-            });
-            lines.push(
-              `<polyline fill="none" stroke="${colors[series.key]}" stroke-width="2.2" points="${points.join(" ")}"></polyline>`
-            );
-          }
+          const points = values.map((value, idx) => {
+            const x = padding.left + (idx / xMax) * (width - padding.left - padding.right);
+            const y = padding.top + (1 - (value || 0) / yMax) * (height - padding.top - padding.bottom);
+            return `${x.toFixed(2)},${y.toFixed(2)}`;
+          });
+          const areaPoints = points.concat(
+            `${(width - padding.right).toFixed(2)},${(height - padding.bottom).toFixed(2)}`,
+            `${padding.left.toFixed(2)},${(height - padding.bottom).toFixed(2)}`
+          );
+          const lastPoint = points[points.length - 1] ?? `${padding.left},${height - padding.bottom}`;
+          const [lastX, lastY] = lastPoint.split(",");
 
           const grid = [];
           for (let i = 0; i <= 4; i += 1) {
@@ -349,11 +457,22 @@
 
           chart.innerHTML = `
             <g>${grid.join("")}</g>
-            <g>${lines.join("")}</g>
-            <text x="${padding.left}" y="${height - 6}" font-size="11" fill="#666">${formatDate(data.series.dates[0])}</text>
-            <text x="${width - padding.right}" y="${height - 6}" text-anchor="end" font-size="11" fill="#666">${formatDate(data.series.dates[data.series.dates.length - 1])}</text>
+            <g><polygon fill="${input.color}" opacity="0.11" points="${areaPoints.join(" ")}"></polygon></g>
+            <g><polyline fill="none" stroke="${input.color}" stroke-width="2.5" points="${points.join(" ")}"></polyline></g>
+            <g><circle cx="${lastX}" cy="${lastY}" r="3.8" fill="${input.color}"></circle></g>
+            <text x="${padding.left}" y="${height - 6}" font-size="11" fill="#666">${formatDate(input.dates[0])}</text>
+            <text x="${width - padding.right}" y="${height - 6}" text-anchor="end" font-size="11" fill="#666">${formatDate(input.dates[input.dates.length - 1])}</text>
             <text x="${padding.left}" y="${padding.top + 10}" font-size="11" fill="#666">Top: ${formatNumber(yMax)}</text>
           `;
+
+          const startValue = values[0] || 0;
+          const endValue = values[values.length - 1] || 0;
+          const delta = endValue - startValue;
+          const trendEl = document.getElementById(input.trendId);
+          if (trendEl) {
+            const trendPrefix = delta >= 0 ? "+" : "";
+            trendEl.textContent = `${trendPrefix}${formatNumber(delta)} over window`;
+          }
         }
 
         async function load() {
@@ -373,7 +492,41 @@
               "updatedAt",
               `Updated ${new Date(data.generatedAt).toLocaleString("en-US", { timeZoneName: "short" })}`
             );
-            renderGrowthChart(data);
+            renderSingleSeriesChart({
+              chartId: "chartOrganizations",
+              trendId: "orgTrend",
+              color: colors.organizations,
+              dates: data.series.dates,
+              values: data.series.organizations.cumulative
+            });
+            renderSingleSeriesChart({
+              chartId: "chartWorkspaces",
+              trendId: "workspaceTrend",
+              color: colors.workspaces,
+              dates: data.series.dates,
+              values: data.series.workspaces.cumulative
+            });
+            renderSingleSeriesChart({
+              chartId: "chartUsers",
+              trendId: "userTrend",
+              color: colors.users,
+              dates: data.series.dates,
+              values: data.series.users.cumulative
+            });
+            renderSingleSeriesChart({
+              chartId: "chartTasks",
+              trendId: "taskTrend",
+              color: colors.tasks,
+              dates: data.series.dates,
+              values: data.series.tasks.cumulative
+            });
+            renderSingleSeriesChart({
+              chartId: "chartInstalls",
+              trendId: "installTrend",
+              color: colors.installs,
+              dates: data.series.dates,
+              values: data.series.installs.cumulative
+            });
             renderRecentRows(data);
             setStatus(`Showing ${data.range.days} days from ${data.range.startDate} to ${data.range.endDate}.`, false);
           } catch (_error) {
