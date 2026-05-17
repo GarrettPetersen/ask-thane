@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ask Thane | Live Dashboard</title>
+    <meta name="description" content="Live public dashboard for Ask Thane operational metrics and growth trends." />
+    <style>
+      :root {
+        --bg: #f7f3ea;
+        --ink: #131313;
+        --muted: #666;
+        --surface: #fffdf8;
+        --border: #e7decd;
+        --brand: #0f5fd7;
+        --brand-dark: #0848a6;
+        --ok: #146c2e;
+        --task: #b45309;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Avenir Next", "Segoe UI", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(1000px 400px at 100% -10%, #ffe8c8 0%, transparent 65%),
+          radial-gradient(700px 420px at -10% 0%, #deecff 0%, transparent 60%),
+          var(--bg);
+      }
+
+      .container {
+        width: min(1120px, 100% - 2rem);
+        margin: 0 auto;
+      }
+
+      header {
+        padding: 24px 0 12px;
+      }
+
+      .brand-mark {
+        width: 170px;
+        height: auto;
+      }
+
+      .hero {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 20px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(1.8rem, 4vw, 2.8rem);
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .toolbar {
+        margin-top: 14px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      select,
+      button {
+        font: inherit;
+        border: 1px solid #d5cab6;
+        border-radius: 10px;
+        padding: 8px 12px;
+        background: #fff;
+      }
+
+      button {
+        background: var(--brand);
+        color: #fff;
+        border-color: var(--brand);
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: var(--brand-dark);
+      }
+
+      .kpis {
+        margin-top: 16px;
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .kpi {
+        background: #fff;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 12px;
+      }
+
+      .kpi-label {
+        font-size: 0.85rem;
+        color: var(--muted);
+        margin: 0;
+      }
+
+      .kpi-value {
+        margin: 6px 0 0;
+        font-size: 1.5rem;
+        font-weight: 700;
+      }
+
+      .grid {
+        margin: 14px 0 28px;
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 12px;
+      }
+
+      .panel {
+        background: #fff;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 14px;
+      }
+
+      .panel h2 {
+        margin: 0 0 8px;
+        font-size: 1.15rem;
+      }
+
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+
+      .legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.86rem;
+        color: var(--muted);
+      }
+
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+      }
+
+      svg.chart {
+        width: 100%;
+        height: 300px;
+        border: 1px solid #efe6d8;
+        border-radius: 10px;
+        background: #fff;
+      }
+
+      .table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .table td,
+      .table th {
+        padding: 8px 6px;
+        border-bottom: 1px solid #efe6d8;
+        text-align: left;
+        font-size: 0.92rem;
+      }
+
+      .status {
+        min-height: 1.2rem;
+        margin: 8px 0 0;
+      }
+
+      @media (max-width: 1020px) {
+        .kpis {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="container">
+      <a href="/"><img class="brand-mark" src="/brand/ask-thane-gray-logo-with-text.svg" alt="Ask Thane" /></a>
+    </header>
+
+    <main class="container">
+      <section class="hero">
+        <h1>Live Ask Thane Dashboard</h1>
+        <p class="muted">Public operational and growth metrics pulled directly from production data.</p>
+        <div class="toolbar">
+          <label for="windowDays">Time window</label>
+          <select id="windowDays">
+            <option value="90">Last 90 days</option>
+            <option value="180" selected>Last 180 days</option>
+            <option value="365">Last 365 days</option>
+          </select>
+          <button id="refreshButton" type="button">Refresh</button>
+          <span class="muted" id="updatedAt">Loading...</span>
+        </div>
+        <p class="status muted" id="status"></p>
+      </section>
+
+      <section class="kpis" aria-label="Topline metrics">
+        <article class="kpi"><p class="kpi-label">Organizations</p><p class="kpi-value" id="kpiOrgs">-</p></article>
+        <article class="kpi"><p class="kpi-label">Workspaces</p><p class="kpi-value" id="kpiWorkspaces">-</p></article>
+        <article class="kpi"><p class="kpi-label">Users</p><p class="kpi-value" id="kpiUsers">-</p></article>
+        <article class="kpi"><p class="kpi-label">Tasks</p><p class="kpi-value" id="kpiTasks">-</p></article>
+        <article class="kpi"><p class="kpi-label">Slack Installs</p><p class="kpi-value" id="kpiInstalls">-</p></article>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <h2>Cumulative Growth</h2>
+          <div class="legend">
+            <span class="legend-item"><span class="dot" style="background:#0f5fd7"></span>Organizations</span>
+            <span class="legend-item"><span class="dot" style="background:#5b8def"></span>Workspaces</span>
+            <span class="legend-item"><span class="dot" style="background:#0a8f6a"></span>Users</span>
+            <span class="legend-item"><span class="dot" style="background:#b45309"></span>Tasks</span>
+            <span class="legend-item"><span class="dot" style="background:#7c3aed"></span>Installs</span>
+          </div>
+          <svg class="chart" id="growthChart" viewBox="0 0 920 300" preserveAspectRatio="none"></svg>
+        </article>
+
+        <article class="panel">
+          <h2>Recent Daily Adds</h2>
+          <table class="table" aria-label="Recent daily counts">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Orgs</th>
+                <th>WS</th>
+                <th>Users</th>
+                <th>Tasks</th>
+                <th>Installs</th>
+              </tr>
+            </thead>
+            <tbody id="recentRows"></tbody>
+          </table>
+        </article>
+      </section>
+    </main>
+
+    <script>
+      (() => {
+        const colors = {
+          organizations: "#0f5fd7",
+          workspaces: "#5b8def",
+          users: "#0a8f6a",
+          tasks: "#b45309",
+          installs: "#7c3aed"
+        };
+
+        function setStatus(text, isError) {
+          const el = document.getElementById("status");
+          if (!el) return;
+          el.textContent = text;
+          el.style.color = isError ? "#b42318" : "#666";
+        }
+
+        function formatNumber(value) {
+          return new Intl.NumberFormat().format(value || 0);
+        }
+
+        function formatDate(value) {
+          const date = new Date(`${value}T00:00:00.000Z`);
+          return date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+        }
+
+        function setText(id, value) {
+          const el = document.getElementById(id);
+          if (el) el.textContent = value;
+        }
+
+        function renderRecentRows(data) {
+          const tbody = document.getElementById("recentRows");
+          if (!tbody) return;
+          const dates = data.series.dates;
+          const start = Math.max(0, dates.length - 10);
+          const rows = [];
+          for (let i = dates.length - 1; i >= start; i -= 1) {
+            rows.push(`
+              <tr>
+                <td>${formatDate(dates[i])}</td>
+                <td>${data.series.organizations.dailyNew[i]}</td>
+                <td>${data.series.workspaces.dailyNew[i]}</td>
+                <td>${data.series.users.dailyNew[i]}</td>
+                <td>${data.series.tasks.dailyNew[i]}</td>
+                <td>${data.series.installs.dailyNew[i]}</td>
+              </tr>
+            `);
+          }
+          tbody.innerHTML = rows.join("");
+        }
+
+        function renderGrowthChart(data) {
+          const chart = document.getElementById("growthChart");
+          if (!chart) return;
+          const width = 920;
+          const height = 300;
+          const padding = { top: 14, right: 14, bottom: 24, left: 40 };
+          const seriesDefs = [
+            { key: "organizations", values: data.series.organizations.cumulative },
+            { key: "workspaces", values: data.series.workspaces.cumulative },
+            { key: "users", values: data.series.users.cumulative },
+            { key: "tasks", values: data.series.tasks.cumulative },
+            { key: "installs", values: data.series.installs.cumulative }
+          ];
+          const count = data.series.dates.length;
+          const xMax = Math.max(1, count - 1);
+          let yMax = 1;
+          for (const series of seriesDefs) {
+            for (const value of series.values) {
+              yMax = Math.max(yMax, value || 0);
+            }
+          }
+
+          const lines = [];
+          for (const series of seriesDefs) {
+            const points = series.values.map((value, idx) => {
+              const x = padding.left + (idx / xMax) * (width - padding.left - padding.right);
+              const y = padding.top + (1 - (value || 0) / yMax) * (height - padding.top - padding.bottom);
+              return `${x.toFixed(2)},${y.toFixed(2)}`;
+            });
+            lines.push(
+              `<polyline fill="none" stroke="${colors[series.key]}" stroke-width="2.2" points="${points.join(" ")}"></polyline>`
+            );
+          }
+
+          const grid = [];
+          for (let i = 0; i <= 4; i += 1) {
+            const y = padding.top + (i / 4) * (height - padding.top - padding.bottom);
+            grid.push(`<line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" stroke="#efe6d8" />`);
+          }
+
+          chart.innerHTML = `
+            <g>${grid.join("")}</g>
+            <g>${lines.join("")}</g>
+            <text x="${padding.left}" y="${height - 6}" font-size="11" fill="#666">${formatDate(data.series.dates[0])}</text>
+            <text x="${width - padding.right}" y="${height - 6}" text-anchor="end" font-size="11" fill="#666">${formatDate(data.series.dates[data.series.dates.length - 1])}</text>
+            <text x="${padding.left}" y="${padding.top + 10}" font-size="11" fill="#666">Top: ${formatNumber(yMax)}</text>
+          `;
+        }
+
+        async function load() {
+          const days = Number((document.getElementById("windowDays") || {}).value || 180);
+          setStatus("Loading metrics...", false);
+          try {
+            const res = await fetch(`/api/public-metrics?days=${days}`, { method: "GET" });
+            const data = await res.json();
+            if (!res.ok || !data.ok) throw new Error(data.error || "metrics_failed");
+
+            setText("kpiOrgs", formatNumber(data.summary.organizations));
+            setText("kpiWorkspaces", formatNumber(data.summary.workspaces));
+            setText("kpiUsers", formatNumber(data.summary.users));
+            setText("kpiTasks", formatNumber(data.summary.tasks));
+            setText("kpiInstalls", formatNumber(data.summary.installs));
+            setText(
+              "updatedAt",
+              `Updated ${new Date(data.generatedAt).toLocaleString("en-US", { timeZoneName: "short" })}`
+            );
+            renderGrowthChart(data);
+            renderRecentRows(data);
+            setStatus(`Showing ${data.range.days} days from ${data.range.startDate} to ${data.range.endDate}.`, false);
+          } catch (_error) {
+            setStatus("Could not load dashboard metrics right now.", true);
+          }
+        }
+
+        const refreshButton = document.getElementById("refreshButton");
+        if (refreshButton) refreshButton.addEventListener("click", load);
+        const windowSelect = document.getElementById("windowDays");
+        if (windowSelect) windowSelect.addEventListener("change", load);
+        load();
+      })();
+    </script>
+  </body>
+</html>

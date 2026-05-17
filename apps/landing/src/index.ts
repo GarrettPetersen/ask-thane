@@ -13,6 +13,16 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+function jsonWithCache(body: unknown, cacheControl: string, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": cacheControl
+    }
+  });
+}
+
 function normalizeField(value: unknown, maxLen: number): string | null {
   if (typeof value !== "string") {
     return null;
@@ -26,6 +36,158 @@ function normalizeField(value: unknown, maxLen: number): string | null {
 
 function isValidEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function normalizeDaysParam(raw: string | null): number {
+  const parsed = Number.parseInt(raw ?? "", 10);
+  if (!Number.isFinite(parsed)) {
+    return 180;
+  }
+  return Math.max(30, Math.min(365, parsed));
+}
+
+function isoDate(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+function isoMidnight(daysAgo: number): string {
+  const now = new Date();
+  const utcDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - daysAgo));
+  return `${isoDate(utcDate)}T00:00:00.000Z`;
+}
+
+function buildDateRange(startIsoDate: string, endIsoDate: string): string[] {
+  const result: string[] = [];
+  const start = new Date(`${startIsoDate}T00:00:00.000Z`);
+  const end = new Date(`${endIsoDate}T00:00:00.000Z`);
+  for (let current = start; current <= end; current = new Date(current.valueOf() + 24 * 60 * 60 * 1000)) {
+    result.push(isoDate(current));
+  }
+  return result;
+}
+
+async function fetchNewAndCumulativeSeries(input: {
+  env: Env;
+  table: "organizations" | "workspaces" | "users" | "tasks" | "slack_workspace_installs";
+  dateColumn: "created_at" | "installed_at";
+  sinceIso: string;
+  dates: string[];
+}): Promise<{ dailyNew: number[]; cumulative: number[] }> {
+  const baselineRow = await input.env.DB
+    .prepare(`SELECT COUNT(*) AS count_before FROM ${input.table} WHERE ${input.dateColumn} < ?`)
+    .bind(input.sinceIso)
+    .first<{ count_before?: number }>();
+  const groupedRows = await input.env.DB
+    .prepare(
+      `SELECT substr(${input.dateColumn}, 1, 10) AS day, COUNT(*) AS new_count
+       FROM ${input.table}
+       WHERE ${input.dateColumn} >= ?
+       GROUP BY substr(${input.dateColumn}, 1, 10)
+       ORDER BY day ASC`
+    )
+    .bind(input.sinceIso)
+    .all<{ day?: string; new_count?: number }>();
+
+  const byDate = new Map<string, number>();
+  for (const row of groupedRows.results ?? []) {
+    if (!row.day) {
+      continue;
+    }
+    byDate.set(row.day, Number(row.new_count ?? 0));
+  }
+  const dailyNew = input.dates.map((date) => byDate.get(date) ?? 0);
+  const cumulative: number[] = [];
+  let running = Number(baselineRow?.count_before ?? 0);
+  for (const value of dailyNew) {
+    running += value;
+    cumulative.push(running);
+  }
+  return { dailyNew, cumulative };
+}
+
+async function handlePublicMetrics(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const days = normalizeDaysParam(url.searchParams.get("days"));
+  const sinceIso = isoMidnight(days - 1);
+  const startDate = sinceIso.slice(0, 10);
+  const endDate = isoDate(new Date());
+  const dates = buildDateRange(startDate, endDate);
+
+  const [topline, organizationsSeries, workspacesSeries, usersSeries, tasksSeries, installsSeries] = await Promise.all([
+    env.DB
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM organizations) AS organizations,
+           (SELECT COUNT(*) FROM workspaces) AS workspaces,
+           (SELECT COUNT(*) FROM users) AS users,
+           (SELECT COUNT(*) FROM tasks) AS tasks,
+           (SELECT COUNT(*) FROM slack_workspace_installs) AS installs`
+      )
+      .first<Record<string, unknown>>(),
+    fetchNewAndCumulativeSeries({
+      env,
+      table: "organizations",
+      dateColumn: "created_at",
+      sinceIso,
+      dates
+    }),
+    fetchNewAndCumulativeSeries({
+      env,
+      table: "workspaces",
+      dateColumn: "created_at",
+      sinceIso,
+      dates
+    }),
+    fetchNewAndCumulativeSeries({
+      env,
+      table: "users",
+      dateColumn: "created_at",
+      sinceIso,
+      dates
+    }),
+    fetchNewAndCumulativeSeries({
+      env,
+      table: "tasks",
+      dateColumn: "created_at",
+      sinceIso,
+      dates
+    }),
+    fetchNewAndCumulativeSeries({
+      env,
+      table: "slack_workspace_installs",
+      dateColumn: "installed_at",
+      sinceIso,
+      dates
+    })
+  ]);
+
+  return jsonWithCache(
+    {
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      range: {
+        days,
+        startDate,
+        endDate
+      },
+      summary: {
+        organizations: Number(topline?.organizations ?? 0),
+        workspaces: Number(topline?.workspaces ?? 0),
+        users: Number(topline?.users ?? 0),
+        tasks: Number(topline?.tasks ?? 0),
+        installs: Number(topline?.installs ?? 0)
+      },
+      series: {
+        dates,
+        organizations: organizationsSeries,
+        workspaces: workspacesSeries,
+        users: usersSeries,
+        tasks: tasksSeries,
+        installs: installsSeries
+      }
+    },
+    "public, max-age=60"
+  );
 }
 
 async function handleWaitlistSignup(request: Request, env: Env): Promise<Response> {
@@ -84,8 +246,19 @@ export default {
       return json({ ok: true, service: "ask-thane-landing" }, 200);
     }
 
+    if (url.pathname === "/api/public-metrics" && request.method === "GET") {
+      return handlePublicMetrics(request, env);
+    }
+
     if (url.pathname === "/api/waitlist" && request.method === "POST") {
       return handleWaitlistSignup(request, env);
+    }
+
+    if (url.pathname === "/dashboard") {
+      const assetUrl = new URL(request.url);
+      assetUrl.pathname = "/dashboard.html";
+      const assetRequest = new Request(assetUrl.toString(), request);
+      return env.ASSETS.fetch(assetRequest);
     }
 
     return env.ASSETS.fetch(request);
