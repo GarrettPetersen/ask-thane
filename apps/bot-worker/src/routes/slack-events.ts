@@ -48,6 +48,26 @@ async function resolveSlackInstall(input: {
   return { botToken: input.env.SLACK_BOT_TOKEN ?? null };
 }
 
+function resolveBotUserIdFromPayload(payload: SlackEnvelope): string | null {
+  const eventUser =
+    (payload.event && typeof payload.event.user === "string" ? payload.event.user : null) ?? null;
+  const authorizations = (payload as { authorizations?: Array<Record<string, unknown>> }).authorizations;
+  if (Array.isArray(authorizations) && authorizations.length > 0) {
+    const fromAuth = authorizations[0]?.user_id;
+    if (typeof fromAuth === "string" && fromAuth.trim()) {
+      return fromAuth.trim();
+    }
+  }
+  const fromAuthedUsers = (payload as { authed_users?: unknown }).authed_users;
+  if (Array.isArray(fromAuthedUsers) && typeof fromAuthedUsers[0] === "string" && fromAuthedUsers[0].trim()) {
+    return fromAuthedUsers[0].trim();
+  }
+  if (eventUser && eventUser.startsWith("U")) {
+    return eventUser;
+  }
+  return null;
+}
+
 function isSlackAuthError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("invalid_auth") || message.includes("not_authed");
@@ -123,7 +143,7 @@ async function shouldRespondToMessage(input: {
     env: input.env,
     externalWorkspaceId: input.externalWorkspaceId
   });
-  const botUserId = install.botUserId;
+  const botUserId = install.botUserId ?? resolveBotUserIdFromPayload(input.payload);
   const botMentioned = Boolean(botUserId && input.text.includes(`<@${botUserId}>`));
   if (botMentioned) {
     return true;
