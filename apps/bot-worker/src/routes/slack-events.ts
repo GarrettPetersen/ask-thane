@@ -226,7 +226,16 @@ async function processSlackEventsPayload(payload: SlackEnvelope & { type?: strin
       );
     }
   }
+  const canonicalMessageEventId =
+    typeof payload.event?.channel === "string" &&
+    payload.event.channel.trim().length > 0 &&
+    typeof payload.event?.ts === "string" &&
+    payload.event.ts.trim().length > 0 &&
+    (payload.event?.type === "app_mention" || payload.event?.type === "message")
+      ? `slack_message:${payload.event.channel.trim()}:${payload.event.ts.trim()}`
+      : null;
   const providerEventId =
+    canonicalMessageEventId ??
     payload.event_id ??
     `${payload.event?.type ?? "unknown"}:${payload.event?.channel ?? "unknown"}:${payload.event?.ts ?? payload.event_time ?? "unknown"}`;
   const slackEventTs =
