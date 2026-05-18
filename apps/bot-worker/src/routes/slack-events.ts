@@ -178,6 +178,34 @@ async function processSlackEventsPayload(payload: SlackEnvelope & { type?: strin
   const organizationId = workspaceRef.organizationId;
 
   const ingestRepo = new D1TaskRepository(env.DB);
+  const potentialDuplicateMessageId =
+    typeof payload.event?.ts === "string" && payload.event.ts.trim().length > 0 ? payload.event.ts.trim() : null;
+  const potentialDuplicateChannelId =
+    typeof payload.event?.channel === "string" && payload.event.channel.trim().length > 0 ? payload.event.channel.trim() : null;
+  if (potentialDuplicateMessageId && potentialDuplicateChannelId) {
+    const existingByMessage = await env.DB
+      .prepare(
+        `SELECT provider_event_id
+         FROM ingest_events
+         WHERE organization_id = ?
+           AND provider = 'slack'
+           AND channel_id = ?
+           AND provider_message_id = ?
+         LIMIT 1`
+      )
+      .bind(organizationId, potentialDuplicateChannelId, potentialDuplicateMessageId)
+      .first<Record<string, unknown>>();
+    if (existingByMessage?.provider_event_id) {
+      return Response.json(
+        {
+          ok: true,
+          deduped: true,
+          reason: "duplicate_message_event"
+        },
+        { status: 200 }
+      );
+    }
+  }
   const providerEventId =
     payload.event_id ??
     `${payload.event?.type ?? "unknown"}:${payload.event?.channel ?? "unknown"}:${payload.event?.ts ?? payload.event_time ?? "unknown"}`;
