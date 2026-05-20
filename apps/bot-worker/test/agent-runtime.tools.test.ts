@@ -10,6 +10,14 @@ vi.mock("../src/services/slack-api", () => ({
       text: "sample context",
       reactions: [{ name: "eyes", users: ["U0B2T03RPD0"] }]
     }
+  ]),
+  fetchSlackThreadReplies: vi.fn(async () => [
+    {
+      user: "U0B2QTLPABY",
+      ts: "1710000001.000001",
+      thread_ts: "1710000000.000001",
+      text: "thread context"
+    }
   ])
 }));
 
@@ -258,6 +266,7 @@ describe("agent runtime tool definitions", () => {
       "get_notes",
       "write_note",
       "get_conversation_context",
+      "search_conversation_messages",
       "search_readable_conversations",
       "get_task_timeline",
       "search_workspace_people",
@@ -364,6 +373,38 @@ describe("agent runtime tool execution", () => {
     const messages = (run.result as Record<string, unknown>).messages;
     expect(Array.isArray(messages)).toBe(true);
     expect(messages).toHaveLength(1);
+  });
+
+  it("get_conversation_context can include thread replies", async () => {
+    const run = await runTool("get_conversation_context", {
+      conversation_source_id: "conv_1",
+      thread_ts: "1710000000.000001",
+      limit: 10
+    });
+    expect(run.result).toMatchObject({ ok: true, conversation_source_id: "conv_1", thread_ts: "1710000000.000001" });
+    const messages = (run.result as Record<string, unknown>).messages as Array<Record<string, unknown>>;
+    expect(messages).toHaveLength(2);
+    expect(messages[1]?.thread_ts).toBe("1710000000.000001");
+  });
+
+  it("search_conversation_messages returns grep-style matches with context", async () => {
+    const run = await runTool("search_conversation_messages", {
+      query: "thread",
+      conversation_source_id: "conv_1",
+      thread_ts: "1710000000.000001",
+      context_window: 1
+    });
+    expect(run.result).toMatchObject({
+      ok: true,
+      conversation_source_id: "conv_1",
+      query: "thread",
+      thread_ts: "1710000000.000001"
+    });
+    const matches = (run.result as Record<string, unknown>).matches as Array<Record<string, unknown>>;
+    expect(matches).toHaveLength(1);
+    const firstContext = matches[0]?.context as Array<Record<string, unknown>>;
+    expect(firstContext).toHaveLength(2);
+    expect((matches[0]?.match as Record<string, unknown>).text).toBe("thread context");
   });
 
   it("search_readable_conversations works", async () => {

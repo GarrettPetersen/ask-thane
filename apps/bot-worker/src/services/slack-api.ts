@@ -152,6 +152,67 @@ export async function fetchSlackConversationHistory(input: {
   return messages;
 }
 
+export async function fetchSlackThreadReplies(input: {
+  botToken: string;
+  channelId: string;
+  threadTs: string;
+  oldestTs?: string;
+  latestTs?: string;
+  limit?: number;
+  maxPages?: number;
+}): Promise<SlackHistoryMessage[]> {
+  const messages: SlackHistoryMessage[] = [];
+  let cursor: string | null = null;
+  const maxPages = Math.min(Math.max(input.maxPages ?? 3, 1), 20);
+  const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
+  let pages = 0;
+
+  do {
+    const params = new URLSearchParams({
+      channel: input.channelId,
+      ts: input.threadTs,
+      limit: String(limit),
+      inclusive: "false"
+    });
+    if (input.oldestTs) {
+      params.set("oldest", input.oldestTs);
+    }
+    if (input.latestTs) {
+      params.set("latest", input.latestTs);
+    }
+    if (cursor) {
+      params.set("cursor", cursor);
+    }
+
+    const response = await fetch(`https://slack.com/api/conversations.replies?${params.toString()}`, {
+      headers: {
+        Authorization: `Bearer ${input.botToken}`
+      }
+    });
+    if (!response.ok) {
+      throw new Error(`slack_thread_replies_http_error:${response.status}`);
+    }
+
+    const payload = (await response.json()) as SlackHistoryResponse;
+    if (!payload.ok) {
+      throw new Error(`slack_thread_replies_error:${payload.error ?? "unknown"}`);
+    }
+
+    for (const message of payload.messages ?? []) {
+      messages.push(message);
+    }
+
+    pages += 1;
+    cursor = payload.response_metadata?.next_cursor?.trim() || null;
+    if (pages >= maxPages) {
+      break;
+    }
+  } while (cursor);
+
+  messages.sort((a, b) => Number(a.ts ?? "0") - Number(b.ts ?? "0"));
+  return messages;
+}
+
 export async function openSlackDirectMessage(input: {
   botToken: string;
   userId: string;

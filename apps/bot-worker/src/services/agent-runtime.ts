@@ -21,7 +21,12 @@ import { ConversationAccessResolver } from "./conversation-access";
 import { createSignedBillingSubscribeUrl } from "./billing-link-token";
 import { computeNextDigestAt, defaultCadenceSpec, normalizeCadenceSpec, normalizeTimezone } from "./notification-cadence";
 import { estimateOpenAiUsageCost } from "./openai-pricing";
-import { fetchSlackConversationHistory, postSlackMessage, type SlackHistoryMessage } from "./slack-api";
+import {
+  fetchSlackConversationHistory,
+  fetchSlackThreadReplies,
+  postSlackMessage,
+  type SlackHistoryMessage
+} from "./slack-api";
 import { SlackInstallStore } from "./slack-install-store";
 import type { BotEnv } from "./task-inference";
 
@@ -106,6 +111,48 @@ function clampLimit(limit: unknown, fallback: number, max: number): number {
     return fallback;
   }
   return Math.min(Math.max(Math.floor(limit), 1), max);
+}
+
+function clampNonNegative(limit: unknown, fallback: number, max: number): number {
+  if (typeof limit !== "number" || !Number.isFinite(limit)) {
+    return fallback;
+  }
+  return Math.min(Math.max(Math.floor(limit), 0), max);
+}
+
+function mergeSlackMessages(
+  ...messageSets: Array<SlackHistoryMessage[] | null | undefined>
+): SlackHistoryMessage[] {
+  const byTs = new Map<string, SlackHistoryMessage>();
+  let fallbackCounter = 0;
+  for (const set of messageSets) {
+    if (!set) {
+      continue;
+    }
+    for (const message of set) {
+      const ts = message.ts?.trim();
+      if (ts) {
+        byTs.set(ts, message);
+      } else {
+        fallbackCounter += 1;
+        byTs.set(`fallback:${fallbackCounter}:${message.user ?? "unknown"}:${message.text ?? ""}`, message);
+      }
+    }
+  }
+  return Array.from(byTs.values()).sort((a, b) => Number(a.ts ?? "0") - Number(b.ts ?? "0"));
+}
+
+function toContextMessage(message: SlackHistoryMessage): Record<string, unknown> {
+  return {
+    ts: message.ts ?? null,
+    thread_ts: message.thread_ts ?? null,
+    user: message.user ?? null,
+    text: message.text ?? null,
+    reactions: (message.reactions ?? []).map((reaction) => ({
+      name: reaction.name ?? null,
+      users: reaction.users ?? []
+    }))
+  };
 }
 
 function asTaskStatusList(raw: unknown): TaskStatus[] | undefined {
@@ -273,7 +320,29 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
           additionalProperties: false,
           properties: {
             conversation_source_id: { type: "string" },
-            limit: { type: "number" }
+            limit: { type: "number" },
+            thread_ts: { type: "string" }
+          }
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "search_conversation_messages",
+        description:
+          "Search readable conversation history by text and return matching messages plus surrounding context lines.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          required: ["query"],
+          properties: {
+            query: { type: "string" },
+            conversation_source_id: { type: "string" },
+            thread_ts: { type: "string" },
+            limit: { type: "number" },
+            context_window: { type: "number" },
+            max_pages: { type: "number" }
           }
         }
       }
@@ -547,7 +616,7 @@ function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"
     "You are Thane, an autonomous conversational task-tracking agent.",
     "You may call tools multiple times to read context, search tasks, read/write notes, and mutate task state.",
     "Only use data accessible by tool outputs; never assume hidden context.",
-    "When task relevance or implied intent is ambiguous, use read tools first (search_tasks, get_notes, search_workspace_people, search_readable_conversations, get_conversation_context) to ground your decision.",
+    "When task relevance or implied intent is ambiguous, use read tools first (search_tasks, get_notes, search_workspace_people, search_readable_conversations, get_conversation_context, search_conversation_messages) to ground your decision.",
     "Treat reactions, mentions, and historical notes as signals, not certainty.",
     "Infer the organization's operating context (business domain, team norms, channel purpose) from notes, participant patterns, prior tasks, and recent conversation context before deciding what is task-worthy.",
     "Track tasks that are relevant to this organization's context; avoid tracking personal errands/chatter that are clearly out-of-scope for the org.",
@@ -581,6 +650,7 @@ function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"
     "When ownership changes on an existing task (for example 'I'll do it myself' or assignee correction), use update_task(action_type='edit') with assignee_user_id to reassign.",
     "If linked shared-assignee tasks exist and one person takes sole ownership, keep only that person's task open and close the other linked assignee tasks.",
     "Interpret deictic second-person address using conversation context: when the speaker addresses another participant (for example 'you' in a shared channel), do not assign to the speaker unless context explicitly indicates self-assignment.",
+    "When users reference prior messages with phrases like 'those', 'that list', or 'who did each of those', resolve the referent by reading recent conversation or searching message history before replying.",
     "Use person-level notes and ownership patterns for disambiguation when deciding assignees in ambiguous requests.",
     "You may write person notes for other workspace participants when the message contains durable facts about them.",
     "For names and nicknames, resolve candidates with workspace people search and context instead of rigid phrase rules.",
@@ -1359,6 +1429,7 @@ async function executeTool(
         return permissionError(toolCall.function.name, "cross_workspace_not_allowed");
       }
 
+      const requestedThreadTs = typeof args.thread_ts === "string" ? args.thread_ts.trim() : "";
       let messages: Awaited<ReturnType<typeof fetchSlackConversationHistory>> = [];
       try {
         messages = await fetchSlackConversationHistory({
@@ -1367,6 +1438,28 @@ async function executeTool(
           limit: clampLimit(args.limit, 30, readLimitMax),
           maxPages: 2
         });
+        if (requestedThreadTs) {
+          try {
+            const threadMessages = await fetchSlackThreadReplies({
+              botToken: ctx.botToken,
+              channelId: source.providerConversationId,
+              threadTs: requestedThreadTs,
+              limit: clampLimit(args.limit, 30, readLimitMax),
+              maxPages: 2
+            });
+            messages = mergeSlackMessages(messages, threadMessages);
+          } catch (threadError) {
+            return {
+              ok: true,
+              conversation_source_id: source.id,
+              thread_ts: requestedThreadTs,
+              thread_fetch_warning: threadError instanceof Error ? threadError.message : String(threadError),
+              messages: messages
+                .slice(-clampLimit(args.limit, 30, readLimitMax))
+                .map(toContextMessage)
+            };
+          }
+        }
       } catch (error) {
         return {
           ok: false,
@@ -1378,17 +1471,101 @@ async function executeTool(
       return {
         ok: true,
         conversation_source_id: source.id,
+        ...(requestedThreadTs ? { thread_ts: requestedThreadTs } : {}),
         messages: messages
           .slice(-clampLimit(args.limit, 30, readLimitMax))
-          .map((message) => ({
-            user: message.user ?? null,
-            ts: message.ts ?? null,
-            text: message.text ?? null,
-            reactions: (message.reactions ?? []).map((reaction) => ({
-              name: reaction.name ?? null,
-              users: reaction.users ?? []
-            }))
-          }))
+          .map(toContextMessage)
+      };
+    }
+
+    case "search_conversation_messages": {
+      const query = typeof args.query === "string" ? args.query.trim().toLowerCase() : "";
+      if (!query) {
+        return { ok: false, error: "query_required" };
+      }
+
+      const requestedSourceId =
+        typeof args.conversation_source_id === "string" && args.conversation_source_id.trim()
+          ? args.conversation_source_id.trim()
+          : ctx.currentConversationSourceId;
+      if (!ctx.readableConversationSourceIds.includes(requestedSourceId)) {
+        return permissionError(toolCall.function.name, "conversation_not_readable");
+      }
+
+      const source = await ctx.resolver.getConversationSourceById({
+        organizationId: ctx.organizationId,
+        conversationSourceId: requestedSourceId
+      });
+      if (!source) {
+        return { ok: false, error: "conversation_source_not_found" };
+      }
+      if (source.workspaceId !== ctx.workspaceId) {
+        return permissionError(toolCall.function.name, "cross_workspace_not_allowed");
+      }
+
+      const searchMaxPages = clampEnvNumber(ctx.env.AGENT_MESSAGE_SEARCH_MAX_PAGES, 6, 1, 20);
+      const contextWindow = clampNonNegative(args.context_window, 2, 10);
+      const matchLimit = clampLimit(args.limit, 8, 50);
+      const requestedThreadTs = typeof args.thread_ts === "string" ? args.thread_ts.trim() : "";
+
+      let messages: SlackHistoryMessage[] = [];
+      try {
+        const channelMessages = await fetchSlackConversationHistory({
+          botToken: ctx.botToken,
+          channelId: source.providerConversationId,
+          limit: clampLimit(args.limit, 120, readLimitMax),
+          maxPages: clampLimit(args.max_pages, Math.min(4, searchMaxPages), searchMaxPages)
+        });
+        messages = channelMessages;
+        if (requestedThreadTs) {
+          try {
+            const threadMessages = await fetchSlackThreadReplies({
+              botToken: ctx.botToken,
+              channelId: source.providerConversationId,
+              threadTs: requestedThreadTs,
+              limit: clampLimit(args.limit, 120, readLimitMax),
+              maxPages: clampLimit(args.max_pages, Math.min(4, searchMaxPages), searchMaxPages)
+            });
+            messages = mergeSlackMessages(channelMessages, threadMessages);
+          } catch {
+            // Keep channel messages if thread reads are unavailable for this token/scope.
+          }
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          error: "conversation_history_search_failed",
+          reason: error instanceof Error ? error.message : String(error)
+        };
+      }
+
+      const matchingIndexes: number[] = [];
+      for (let index = 0; index < messages.length; index += 1) {
+        const text = messages[index]?.text?.toLowerCase() ?? "";
+        if (!text || !text.includes(query)) {
+          continue;
+        }
+        matchingIndexes.push(index);
+        if (matchingIndexes.length >= matchLimit) {
+          break;
+        }
+      }
+
+      return {
+        ok: true,
+        conversation_source_id: source.id,
+        query,
+        ...(requestedThreadTs ? { thread_ts: requestedThreadTs } : {}),
+        total_messages_scanned: messages.length,
+        matches: matchingIndexes.map((index) => {
+          const start = Math.max(0, index - contextWindow);
+          const end = Math.min(messages.length, index + contextWindow + 1);
+          return {
+            index,
+            match: toContextMessage(messages[index] as SlackHistoryMessage),
+            context: messages.slice(start, end).map(toContextMessage)
+          };
+        })
       };
     }
 
@@ -2186,14 +2363,42 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     };
   }
 
-  let recentMessages: Awaited<ReturnType<typeof fetchSlackConversationHistory>> = [];
+  const recentHistoryLimit = clampEnvNumber(input.env.AGENT_RECENT_HISTORY_LIMIT, 40, 10, 200);
+  const recentHistoryMaxPages = clampEnvNumber(input.env.AGENT_RECENT_HISTORY_MAX_PAGES, 2, 1, 10);
+  const recentContextWindow = clampEnvNumber(input.env.AGENT_RECENT_CONTEXT_WINDOW, 30, 10, 120);
+  const threadContextWindow = clampEnvNumber(input.env.AGENT_THREAD_CONTEXT_WINDOW, 20, 5, 120);
+  const currentThreadTs = input.event.threadTs?.trim() ? input.event.threadTs.trim() : null;
+
+  let recentMessages: SlackHistoryMessage[] = [];
+  let recentThreadMessages: SlackHistoryMessage[] = [];
   try {
-    recentMessages = await fetchSlackConversationHistory({
+    const channelMessages = await fetchSlackConversationHistory({
       botToken,
       channelId: input.event.channelId,
-      limit: 40,
-      maxPages: 2
+      limit: recentHistoryLimit,
+      maxPages: recentHistoryMaxPages
     });
+    recentMessages = channelMessages;
+    if (currentThreadTs) {
+      try {
+        recentThreadMessages = await fetchSlackThreadReplies({
+          botToken,
+          channelId: input.event.channelId,
+          threadTs: currentThreadTs,
+          limit: Math.min(recentHistoryLimit, threadContextWindow),
+          maxPages: recentHistoryMaxPages
+        });
+      } catch (threadError) {
+        console.warn("agent_runtime_thread_fetch_failed", {
+          organizationId: input.organizationId,
+          workspaceId: input.workspaceId,
+          channelId: input.event.channelId,
+          threadTs: currentThreadTs,
+          reason: threadError instanceof Error ? threadError.message : String(threadError)
+        });
+      }
+    }
+    recentMessages = mergeSlackMessages(recentMessages, recentThreadMessages);
   } catch (error) {
     const envFallbackToken = input.env.SLACK_BOT_TOKEN ?? null;
     if (
@@ -2203,12 +2408,33 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
       isSlackAuthError(error)
     ) {
       try {
-        recentMessages = await fetchSlackConversationHistory({
+        const channelMessages = await fetchSlackConversationHistory({
           botToken: envFallbackToken,
           channelId: input.event.channelId,
-          limit: 40,
-          maxPages: 2
+          limit: recentHistoryLimit,
+          maxPages: recentHistoryMaxPages
         });
+        recentMessages = channelMessages;
+        if (currentThreadTs) {
+          try {
+            recentThreadMessages = await fetchSlackThreadReplies({
+              botToken: envFallbackToken,
+              channelId: input.event.channelId,
+              threadTs: currentThreadTs,
+              limit: Math.min(recentHistoryLimit, threadContextWindow),
+              maxPages: recentHistoryMaxPages
+            });
+          } catch (threadFallbackError) {
+            console.warn("agent_runtime_thread_fetch_failed", {
+              organizationId: input.organizationId,
+              workspaceId: input.workspaceId,
+              channelId: input.event.channelId,
+              threadTs: currentThreadTs,
+              reason: threadFallbackError instanceof Error ? threadFallbackError.message : String(threadFallbackError)
+            });
+          }
+        }
+        recentMessages = mergeSlackMessages(recentMessages, recentThreadMessages);
         botToken = envFallbackToken;
       } catch (fallbackError) {
         console.warn("agent_runtime_history_fetch_failed", {
@@ -2367,6 +2593,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     current_event: {
       channel_id: input.event.channelId,
       message_id: input.event.messageId,
+      thread_ts: currentThreadTs,
       occurred_at: input.event.occurredAt,
       text: input.event.text
     },
@@ -2377,15 +2604,12 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
       kind: source.conversationKind,
       is_public: source.isPublic
     })),
-    recent_channel_messages: recentMessages.slice(-30).map((message) => ({
-      ts: message.ts ?? null,
-      user: message.user ?? null,
-      text: message.text ?? null,
-      reactions: (message.reactions ?? []).map((reaction) => ({
-        name: reaction.name ?? null,
-        users: reaction.users ?? []
-      }))
-    })),
+    recent_channel_messages: recentMessages.slice(-recentContextWindow).map(toContextMessage),
+    ...(currentThreadTs
+      ? {
+          recent_thread_messages: recentThreadMessages.slice(-threadContextWindow).map(toContextMessage)
+        }
+      : {}),
     assignee_candidates: {
       recent_speakers: recentSpeakerCandidates,
       active_channel_members: activeConversationMembers.filter((id) => id !== input.event.author.platformUserId)

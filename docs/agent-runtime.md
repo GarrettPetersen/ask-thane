@@ -29,6 +29,7 @@ Current tool set:
 - `get_notes`
 - `write_note`
 - `get_conversation_context`
+- `search_conversation_messages`
 - `search_readable_conversations`
 - `get_task_timeline`
 - `search_workspace_people`
@@ -52,6 +53,7 @@ All tool reads/writes are constrained by actor scope:
 Initial context bundle includes:
 - Current message
 - Recent channel history
+- Recent thread history when applicable
 - Readable conversation list
 - ACL-visible task seed search
 - Notes at org/workspace/conversation/user/person scopes

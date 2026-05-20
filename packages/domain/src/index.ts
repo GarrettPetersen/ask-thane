@@ -44,6 +44,7 @@ export interface MessageEvent {
   workspaceId: string;
   channelId: string;
   messageId: string;
+  threadTs?: string;
   text: string;
   author: UserRef;
   occurredAt: string;

@@ -55,6 +55,7 @@ export function normalizeSlackEvent(input: SlackEnvelope): MessageEvent | null {
     workspaceId: input.team_id,
     channelId: input.event.channel,
     messageId: input.event.ts,
+    ...(input.event.thread_ts?.trim() ? { threadTs: input.event.thread_ts.trim() } : {}),
     text: input.event.text,
     author: slackUser(input.event.user),
     occurredAt: new Date(Number(input.event.ts.split(".")[0]) * 1000).toISOString()
