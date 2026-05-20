@@ -50,13 +50,15 @@ interface ChatCompletionToolCall {
   };
 }
 
+interface ChatCompletionMessage {
+  role?: string;
+  content?: string | null;
+  tool_calls?: ChatCompletionToolCall[];
+}
+
 interface ChatCompletionResponse {
   choices?: Array<{
-    message?: {
-      role?: string;
-      content?: string | null;
-      tool_calls?: ChatCompletionToolCall[];
-    };
+    message?: ChatCompletionMessage;
   }>;
   error?: {
     message?: string;
@@ -602,6 +604,110 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
   }
 
   return tools;
+}
+
+function finalizeReplyToolDefinition() {
+  return {
+    type: "function",
+    function: {
+      name: "finalize_user_reply",
+      description:
+        "Finalize the exact user-facing reply text. Use this as the last step after reasoning/tool usage so only this message is sent to the user.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["reply_text"],
+        properties: {
+          reply_text: { type: "string" }
+        }
+      }
+    }
+  } as const;
+}
+
+function extractReplyTextFromAssistantMessage(message: ChatCompletionMessage | undefined): string | null {
+  if (!message) {
+    return null;
+  }
+
+  const toolCalls = message.tool_calls ?? [];
+  for (const toolCall of toolCalls) {
+    if (toolCall.function.name !== "finalize_user_reply") {
+      continue;
+    }
+    try {
+      const args = JSON.parse(toolCall.function.arguments || "{}") as Record<string, unknown>;
+      const replyText = typeof args.reply_text === "string" ? args.reply_text.trim() : "";
+      if (replyText) {
+        return replyText;
+      }
+    } catch {
+      // Ignore malformed tool arguments and continue searching for a usable reply.
+    }
+  }
+
+  const content = typeof message.content === "string" ? message.content.trim() : "";
+  if (content) {
+    return content;
+  }
+  return null;
+}
+
+async function recoverMissingReplyText(input: {
+  env: BotEnv;
+  model: string;
+  organizationId: string;
+  workspaceId: string;
+  conversationSourceId: string;
+  sourceMessageId: string;
+  interactionMode: "dm_reply" | "proactive_followup";
+  messages: Array<Record<string, unknown>>;
+}): Promise<string | null> {
+  const recoveryAttempts = clampEnvNumber(input.env.AGENT_DM_REPLY_RECOVERY_ATTEMPTS, 2, 1, 4);
+  const recoveryInstruction =
+    "Recovery mode: provide a direct helpful answer now. Call finalize_user_reply with reply_text. Do not ask the user to rephrase.";
+
+  for (let attempt = 1; attempt <= recoveryAttempts; attempt += 1) {
+    const payload = await callChatCompletionWithRetry({
+      env: input.env,
+      body: {
+        model: input.model,
+        temperature: 0,
+        parallel_tool_calls: false,
+        tools: [finalizeReplyToolDefinition()],
+        tool_choice: {
+          type: "function",
+          function: { name: "finalize_user_reply" }
+        },
+        messages: [
+          ...input.messages,
+          {
+            role: "user",
+            content: `${recoveryInstruction} Attempt ${attempt} of ${recoveryAttempts}.`
+          }
+        ]
+      }
+    });
+
+    await recordLlmUsageEvent({
+      env: input.env,
+      organizationId: input.organizationId,
+      workspaceId: input.workspaceId,
+      conversationSourceId: input.conversationSourceId,
+      sourceMessageId: input.sourceMessageId,
+      model: input.model,
+      interactionMode: input.interactionMode,
+      payload
+    });
+
+    const assistantMessage = payload.choices?.[0]?.message;
+    const recoveredText = extractReplyTextFromAssistantMessage(assistantMessage);
+    if (recoveredText) {
+      return recoveredText;
+    }
+  }
+
+  return null;
 }
 
 function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"): string {
@@ -2253,7 +2359,8 @@ async function executeTool(
 
 export const __testables = {
   toolDefinitions,
-  executeTool
+  executeTool,
+  extractReplyTextFromAssistantMessage
 };
 
 export async function runConversationalAgentForSlackMessage(input: AgentRuntimeInput): Promise<AgentRunResult> {
@@ -2700,12 +2807,13 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     ...(botUserId ? { botExternalUserId: botUserId } : {})
   };
 
+  const selectedModel = resolveModelForWorkspaceTier({
+    env: input.env,
+    planTier: workspaceBillingPolicy.planTier,
+    usage: "agent"
+  });
+
   agent_loop: for (let turn = 0; turn < maxTurns; turn += 1) {
-    const selectedModel = resolveModelForWorkspaceTier({
-      env: input.env,
-      planTier: workspaceBillingPolicy.planTier,
-      usage: "agent"
-    });
     const payload = await callChatCompletionWithRetry({
       env: input.env,
       body: {
@@ -2782,6 +2890,37 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
       if (finalReplyRef.finalized && (interactionMode === "dm_reply" || interactionMode === "proactive_followup")) {
         break agent_loop;
       }
+    }
+  }
+
+  if (!finalReplyRef.text && !replyText && (interactionMode === "dm_reply" || interactionMode === "proactive_followup")) {
+    eventTypes.add("reply_recovery_attempted");
+    try {
+      const recovered = await recoverMissingReplyText({
+        env: input.env,
+        model: selectedModel,
+        organizationId: input.organizationId,
+        workspaceId: input.workspaceId,
+        conversationSourceId: input.conversationSourceId,
+        sourceMessageId: input.event.messageId,
+        interactionMode,
+        messages
+      });
+      if (recovered) {
+        replyText = recovered;
+        eventTypes.add("reply_recovery_succeeded");
+      } else {
+        eventTypes.add("reply_recovery_failed");
+      }
+    } catch (error) {
+      console.warn("agent_runtime_reply_recovery_failed", {
+        organizationId: input.organizationId,
+        workspaceId: input.workspaceId,
+        channelId: input.event.channelId,
+        messageId: input.event.messageId,
+        reason: error instanceof Error ? error.message : String(error)
+      });
+      eventTypes.add("reply_recovery_failed");
     }
   }
 

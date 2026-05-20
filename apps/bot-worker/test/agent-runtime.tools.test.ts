@@ -731,3 +731,47 @@ describe("agent runtime tool execution", () => {
     expect(run.repo.save).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("agent runtime reply extraction", () => {
+  it("extracts reply text from finalize_user_reply tool call", () => {
+    const message = {
+      tool_calls: [
+        {
+          id: "call_1",
+          type: "function",
+          function: {
+            name: "finalize_user_reply",
+            arguments: JSON.stringify({ reply_text: "Answer from tool." })
+          }
+        }
+      ]
+    };
+    const reply = __testables.extractReplyTextFromAssistantMessage(message);
+    expect(reply).toBe("Answer from tool.");
+  });
+
+  it("falls back to assistant content when no finalize tool call exists", () => {
+    const message = {
+      content: "Direct content answer."
+    };
+    const reply = __testables.extractReplyTextFromAssistantMessage(message);
+    expect(reply).toBe("Direct content answer.");
+  });
+
+  it("returns null when no usable reply is present", () => {
+    const message = {
+      tool_calls: [
+        {
+          id: "call_1",
+          type: "function",
+          function: {
+            name: "finalize_user_reply",
+            arguments: "{ invalid json"
+          }
+        }
+      ]
+    };
+    const reply = __testables.extractReplyTextFromAssistantMessage(message);
+    expect(reply).toBeNull();
+  });
+});

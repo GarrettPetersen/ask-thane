@@ -107,6 +107,7 @@ Polling path also links identities for authors, mentions, and reactors.
 - In Slack `dm` conversations, runtime switches to conversational reply mode.
 - The model can answer task questions, update tasks through tools, and change reminder cadence through cadence tools.
 - Bot replies are posted back into the DM thread.
+- If a DM/proactive run ends without a finalized reply, runtime performs recovery attempts that force `finalize_user_reply` before using the generic fallback message.
 
 ## Proactive follow-up mode
 - Scheduled jobs can trigger proactive DM follow-ups.
