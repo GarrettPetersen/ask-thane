@@ -4,10 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Thane | Choose Your Product</title>
-    <meta
-      name="description"
-      content="Choose Thane Chat for terminal-native team chat or Ask Thane for task follow-up from team conversation."
-    />
+    <meta name="description" content="Choose Thane Chat or Ask Thane." />
     <meta name="theme-color" content="#f7f3ea" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="icon" type="image/svg+xml" href="/brand/ask-thane-gray-logo.svg" media="(prefers-color-scheme: light)" />
@@ -37,90 +34,46 @@
         color: var(--ink);
         font-family: "Avenir Next", "Segoe UI", sans-serif;
         background:
-          linear-gradient(135deg, rgba(248, 240, 226, 0.88), rgba(228, 237, 250, 0.72)),
+          linear-gradient(135deg, rgba(248, 240, 226, 0.9), rgba(228, 237, 250, 0.72)),
           var(--bg);
       }
 
       .shell {
-        width: min(1100px, 100% - 2rem);
+        width: min(980px, 100% - 2rem);
         min-height: 100vh;
         margin: 0 auto;
-        padding: 24px 0 34px;
-        display: flex;
-        flex-direction: column;
+        padding: 24px 0 28px;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        gap: 18px;
       }
 
       header {
         display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 18px;
+        justify-content: center;
       }
 
       .brand {
         display: inline-flex;
-        align-items: center;
       }
 
       .brand-mark {
-        width: 168px;
+        width: 156px;
         max-width: 100%;
         height: auto;
       }
 
-      nav {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-
-      nav a {
-        color: var(--muted);
-        font-size: 0.95rem;
-        font-weight: 700;
-        text-decoration: none;
-      }
-
-      nav a:hover {
-        color: var(--brand-dark);
-      }
-
       main {
-        flex: 1;
         display: grid;
         align-content: center;
-        gap: 24px;
-        padding: 36px 0 24px;
-      }
-
-      .intro {
-        display: grid;
-        gap: 10px;
-        max-width: 760px;
-      }
-
-      .eyebrow {
-        color: var(--brand-dark);
-        font-size: 0.8rem;
-        font-weight: 800;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
+        gap: 18px;
       }
 
       h1 {
         margin: 0;
-        max-width: 760px;
-        font-size: clamp(2.4rem, 7vw, 5.3rem);
-        line-height: 0.98;
-      }
-
-      .lead {
-        margin: 0;
-        max-width: 68ch;
-        color: var(--muted);
-        font-size: 1.1rem;
-        line-height: 1.65;
+        font-size: clamp(1.9rem, 5vw, 3.6rem);
+        line-height: 1;
+        text-align: center;
       }
 
       .product-grid {
@@ -130,16 +83,16 @@
       }
 
       .product-choice {
-        min-height: 310px;
+        min-height: 320px;
         border: 1px solid var(--border);
         border-radius: 8px;
         background: var(--surface);
         color: inherit;
         text-decoration: none;
-        padding: 20px;
+        padding: 22px;
         display: grid;
-        grid-template-rows: auto auto 1fr auto;
-        gap: 14px;
+        align-content: space-between;
+        gap: 18px;
         box-shadow: 0 18px 48px var(--shadow);
         transition:
           transform 160ms ease,
@@ -153,9 +106,14 @@
         box-shadow: 0 24px 62px rgba(15, 95, 215, 0.18);
       }
 
+      .product-choice:focus-visible {
+        outline: 3px solid #9dc0f9;
+        outline-offset: 4px;
+      }
+
       .product-choice.chat {
         background:
-          linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(246, 250, 255, 0.96)),
+          linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(246, 250, 255, 0.96)),
           var(--surface);
       }
 
@@ -165,108 +123,67 @@
           var(--surface);
       }
 
-      .label {
-        width: fit-content;
-        border: 1px solid #d7e6ff;
-        border-radius: 999px;
-        background: #eef5ff;
-        color: var(--brand-dark);
-        padding: 5px 9px;
-        font-size: 0.78rem;
-        font-weight: 800;
+      .product-logo {
+        width: 132px;
+        max-width: 100%;
+        height: auto;
       }
 
-      .ask .label {
-        border-color: #f4d1bb;
-        background: #fff0e6;
-        color: #994514;
+      .chat .product-logo {
+        width: 112px;
       }
 
       h2 {
         margin: 0;
-        font-size: clamp(1.7rem, 3vw, 2.4rem);
-        line-height: 1.05;
+        font-size: clamp(2rem, 4vw, 3rem);
+        line-height: 1;
       }
 
-      .product-choice p {
-        margin: 0;
+      p {
+        margin: 10px 0 0;
+        max-width: 28ch;
         color: var(--muted);
-        line-height: 1.6;
-      }
-
-      .terminal {
-        border: 1px solid #1f2937;
-        border-radius: 8px;
-        background: #111827;
-        color: #e5e7eb;
-        padding: 12px;
-        font-family: "SFMono-Regular", Consolas, monospace;
-        font-size: 0.9rem;
+        font-size: 1rem;
         line-height: 1.5;
-        overflow-x: auto;
-      }
-
-      .prompt {
-        color: #93c5fd;
-      }
-
-      .status {
-        border: 1px solid #f0d5bf;
-        border-radius: 8px;
-        background: #fff8ef;
-        padding: 12px;
-        display: grid;
-        gap: 7px;
-        color: var(--muted);
-        font-size: 0.95rem;
-      }
-
-      .status strong {
-        color: var(--ink);
       }
 
       .cta-row {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 10px;
-        font-weight: 800;
+        gap: 12px;
         color: var(--brand-dark);
+        font-weight: 800;
       }
 
       .ask .cta-row {
         color: #994514;
       }
 
-      .shared-note {
-        border-top: 1px solid var(--border);
-        padding-top: 14px;
-        color: var(--muted);
-        line-height: 1.6;
-      }
-
-      .shared-note a {
-        color: var(--brand-dark);
-        font-weight: 700;
-      }
-
       footer {
+        display: flex;
+        justify-content: center;
+        gap: 12px;
+        flex-wrap: wrap;
         color: var(--muted);
-        font-size: 0.95rem;
+        font-size: 0.92rem;
       }
 
       footer a {
         color: var(--brand-dark);
       }
 
-      @media (max-width: 820px) {
-        header {
-          align-items: flex-start;
-          flex-direction: column;
+      @media (max-width: 760px) {
+        .shell {
+          width: min(520px, 100% - 1.5rem);
         }
 
         .product-grid {
           grid-template-columns: 1fr;
+        }
+
+        .product-choice {
+          min-height: 240px;
         }
       }
     </style>
@@ -277,74 +194,43 @@
         <a class="brand" href="/">
           <img class="brand-mark" src="/brand/ask-thane-gray-logo-with-text.svg" alt="Thane" />
         </a>
-        <nav aria-label="Main navigation">
-          <a href="/chat">Thane Chat</a>
-          <a href="/ask-thane">Ask Thane</a>
-          <a href="/install.html">Install</a>
-          <a href="/dashboard">Dashboard</a>
-        </nav>
       </header>
 
       <main>
-        <section class="intro" aria-labelledby="page-title">
-          <div class="eyebrow">Choose Your Thane Product</div>
-          <h1 id="page-title">Two tools for team communication.</h1>
-          <p class="lead">
-            Start with terminal-native chat, add task follow-up to the conversations you already have, or use both
-            with shared identity by verified email.
-          </p>
-        </section>
+        <h1>Choose a product.</h1>
 
         <section class="product-grid" aria-label="Product choices">
           <a class="product-choice chat" href="/chat">
-            <span class="label">Thane Chat</span>
-            <h2>Team chat built for the terminal.</h2>
-            <p>
-              Workspaces, channels, DMs, threads, mentions, unread summaries, and command-line access for humans
-              and agents.
-            </p>
-            <div class="terminal" aria-label="Thane Chat terminal preview">
-              <div><span class="prompt">$</span> thane chat engineering</div>
-              <div>#engineering alex: can you review the billing flow?</div>
-              <div><span class="prompt">$</span> thane see-recent --json</div>
+            <img class="product-logo" src="/brand/thane-chat-gray-logo-with-text.svg" alt="Thane Chat" />
+            <div>
+              <h2>Thane Chat</h2>
+              <p>Team chat built for the terminal.</p>
             </div>
             <div class="cta-row">
-              <span>Open Thane Chat</span>
+              <span>Open product page</span>
               <span aria-hidden="true">-&gt;</span>
             </div>
           </a>
 
           <a class="product-choice ask" href="/ask-thane">
-            <span class="label">Ask Thane</span>
-            <h2>The follow-up agent for team conversations.</h2>
-            <p>
-              Capture tasks, remind the right people, summarize progress, and route pings across Slack and
-              Thane Chat.
-            </p>
-            <div class="status" aria-label="Ask Thane task preview">
-              <div><strong>Daily digest</strong></div>
-              <div>3 tasks need owner replies</div>
-              <div>2 follow-ups are scheduled for this afternoon</div>
-              <div>1 overdue item was escalated</div>
+            <img class="product-logo" src="/brand/ask-thane-gray-logo-with-text.svg" alt="Ask Thane" />
+            <div>
+              <h2>Ask Thane</h2>
+              <p>Follow-up for team conversations.</p>
             </div>
             <div class="cta-row">
-              <span>Open Ask Thane</span>
+              <span>Open product page</span>
               <span aria-hidden="true">-&gt;</span>
             </div>
           </a>
         </section>
-
-        <div class="shared-note">
-          Both products work on their own. When connected, the same person can use Slack and Thane Chat through a
-          shared email-based identity. <a href="/install.html">Go straight to install</a>.
-        </div>
       </main>
 
       <footer>
-        <a href="/privacy.html">Privacy</a> |
-        <a href="/terms.html">Terms</a> |
-        <a href="/acceptable-use.html">Acceptable Use</a> |
-        <a href="/subprocessors.html">Subprocessors</a>
+        <a href="/install.html">Install</a>
+        <a href="/dashboard">Dashboard</a>
+        <a href="/privacy.html">Privacy</a>
+        <a href="/terms.html">Terms</a>
       </footer>
     </div>
   </body>
