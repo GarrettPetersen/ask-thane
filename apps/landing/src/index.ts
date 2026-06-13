@@ -342,6 +342,20 @@ export default {
       return env.ASSETS.fetch(assetRequest);
     }
 
+    if (url.pathname === "/chat") {
+      const assetUrl = new URL(request.url);
+      assetUrl.pathname = "/chat.html";
+      const assetRequest = new Request(assetUrl.toString(), request);
+      return env.ASSETS.fetch(assetRequest);
+    }
+
+    if (url.pathname === "/ask-thane") {
+      const assetUrl = new URL(request.url);
+      assetUrl.pathname = "/ask-thane.html";
+      const assetRequest = new Request(assetUrl.toString(), request);
+      return env.ASSETS.fetch(assetRequest);
+    }
+
     return env.ASSETS.fetch(request);
   }
 };

@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Thane Chat | Terminal-Native Team Chat</title>
+    <meta
+      name="description"
+      content="Thane Chat is terminal-native team chat with workspaces, channels, DMs, threads, mentions, and scriptable commands."
+    />
+    <meta name="theme-color" content="#f7f3ea" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/svg+xml" href="/brand/ask-thane-gray-logo.svg" media="(prefers-color-scheme: light)" />
+    <link rel="icon" type="image/svg+xml" href="/brand/ask-thane-white-logo.svg" media="(prefers-color-scheme: dark)" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <style>
+      :root {
+        --bg: #f7f3ea;
+        --ink: #141414;
+        --muted: #5f5b54;
+        --brand: #0f5fd7;
+        --brand-dark: #0848a6;
+        --surface: #fffdf8;
+        --border: #e5dccb;
+        --shadow: rgba(28, 40, 62, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        font-family: "Avenir Next", "Segoe UI", sans-serif;
+        background:
+          linear-gradient(135deg, rgba(248, 240, 226, 0.9), rgba(228, 237, 250, 0.76)),
+          var(--bg);
+      }
+
+      .container {
+        width: min(1120px, 100% - 2rem);
+        margin: 0 auto;
+      }
+
+      header {
+        padding: 24px 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+      }
+
+      .brand {
+        display: inline-flex;
+      }
+
+      .brand-mark {
+        width: 168px;
+        max-width: 100%;
+        height: auto;
+      }
+
+      .switcher {
+        display: inline-grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: #fff;
+        padding: 4px;
+      }
+
+      .switcher a {
+        border-radius: 999px;
+        padding: 8px 12px;
+        color: var(--muted);
+        font-size: 0.92rem;
+        font-weight: 800;
+        text-align: center;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+
+      .switcher a.active {
+        background: #e8f1ff;
+        color: var(--brand-dark);
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(360px, 0.9fr);
+        gap: 24px;
+        align-items: center;
+        padding: 34px 0 26px;
+      }
+
+      .eyebrow {
+        color: var(--brand-dark);
+        font-size: 0.8rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 12px 0 12px;
+        font-size: clamp(2.4rem, 6vw, 5rem);
+        line-height: 0.98;
+      }
+
+      .lead {
+        margin: 0;
+        max-width: 62ch;
+        color: var(--muted);
+        font-size: 1.08rem;
+        line-height: 1.65;
+      }
+
+      .actions {
+        margin-top: 18px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .button {
+        display: inline-block;
+        border-radius: 8px;
+        padding: 12px 14px;
+        background: var(--brand);
+        color: #fff;
+        font-weight: 800;
+        text-decoration: none;
+      }
+
+      .button.secondary {
+        background: #e8f1ff;
+        color: var(--brand-dark);
+      }
+
+      .terminal {
+        border: 1px solid #1f2937;
+        border-radius: 8px;
+        background: #111827;
+        color: #e5e7eb;
+        box-shadow: 0 22px 60px var(--shadow);
+        padding: 16px;
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 0.92rem;
+        line-height: 1.55;
+        overflow-x: auto;
+      }
+
+      .prompt {
+        color: #93c5fd;
+      }
+
+      .ok {
+        color: #86efac;
+      }
+
+      .dim {
+        color: #9ca3af;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin: 22px 0;
+      }
+
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #fff;
+        padding: 16px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .card.featured {
+        border-color: #9dc0f9;
+        box-shadow: 0 16px 42px rgba(15, 95, 215, 0.12);
+      }
+
+      h2,
+      h3 {
+        margin: 0;
+      }
+
+      .meta {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .price {
+        margin: 0;
+        font-size: 2rem;
+        font-weight: 800;
+      }
+
+      .price span {
+        color: var(--muted);
+        font-size: 0.95rem;
+        font-weight: 500;
+      }
+
+      ul {
+        margin: 0;
+        padding-left: 18px;
+      }
+
+      li {
+        margin-bottom: 7px;
+        color: var(--muted);
+      }
+
+      .section-title {
+        margin: 28px 0 12px;
+        font-size: 1.45rem;
+      }
+
+      footer {
+        margin: 28px 0 36px;
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      footer a {
+        color: var(--brand-dark);
+      }
+
+      @media (max-width: 900px) {
+        header,
+        .hero {
+          align-items: flex-start;
+          grid-template-columns: 1fr;
+        }
+
+        header {
+          flex-direction: column;
+        }
+
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="container">
+      <a class="brand" href="/">
+        <img class="brand-mark" src="/brand/ask-thane-gray-logo-with-text.svg" alt="Thane" />
+      </a>
+      <nav class="switcher" aria-label="Product switcher">
+        <a class="active" href="/chat">Thane Chat</a>
+        <a href="/ask-thane">Ask Thane</a>
+      </nav>
+    </header>
+
+    <main class="container">
+      <section class="hero">
+        <div>
+          <div class="eyebrow">Thane Chat</div>
+          <h1>Team chat built for the terminal.</h1>
+          <p class="lead">
+            Thane Chat gives teams workspaces, public and private channels, DMs, threads, mentions, unread
+            summaries, and a complete command surface that people and agents can both use.
+          </p>
+          <div class="actions">
+            <a class="button" href="/install.html#thane-chat">Install the CLI</a>
+            <a class="button secondary" href="/ask-thane">Switch to Ask Thane</a>
+          </div>
+        </div>
+
+        <div class="terminal" aria-label="Thane Chat terminal preview">
+          <div><span class="prompt">$</span> thane chat engineering</div>
+          <div><span class="ok">#engineering</span> alex: can someone review the release note?</div>
+          <div>you: pushing the final copy pass now</div>
+          <div><span class="dim">thread</span> mia: +1, ship it after tests</div>
+          <br />
+          <div><span class="prompt">$</span> thane see-recent --json</div>
+          <div>{"mentions":1,"unread_channels":["engineering"]}</div>
+        </div>
+      </section>
+
+      <h2 class="section-title">What It Includes</h2>
+      <section class="grid" aria-label="Thane Chat features">
+        <article class="card">
+          <h3>Chat Workspaces</h3>
+          <p class="meta">Channels, private channels, DMs, threads, mentions, reactions, and readable history.</p>
+        </article>
+        <article class="card">
+          <h3>Agent-Friendly Commands</h3>
+          <p class="meta">Everything available in the interactive CLI also has a command and JSON output path.</p>
+        </article>
+        <article class="card">
+          <h3>Ask Thane Ready</h3>
+          <p class="meta">Connect Ask Thane at no extra Thane Chat cost when your team wants task follow-up.</p>
+        </article>
+      </section>
+
+      <h2 class="section-title">Pricing</h2>
+      <section class="grid" aria-label="Thane Chat pricing">
+        <article class="card">
+          <h3>Free</h3>
+          <p class="price">$0<span>/mo</span></p>
+          <ul>
+            <li>10 workspace members</li>
+            <li>3 private channels</li>
+            <li>Public channels, DMs, threads, mentions</li>
+            <li>Scriptable commands and JSON output</li>
+          </ul>
+          <a class="button" href="/install.html#thane-chat">Install Thane Chat</a>
+        </article>
+        <article class="card featured">
+          <h3>Team</h3>
+          <p class="price">$8<span>/member/mo</span></p>
+          <ul>
+            <li>Unlimited workspace members</li>
+            <li>Unlimited private channels</li>
+            <li>Long-lived hosted history</li>
+            <li>Workspace billing and admin controls</li>
+          </ul>
+          <a class="button" href="https://payments.askthane.com/subscribe?plan_tier=cli_team">Choose Team</a>
+        </article>
+      </section>
+    </main>
+
+    <footer class="container">
+      <a href="/">Products</a> |
+      <a href="/install.html">Install</a> |
+      <a href="/dashboard">Dashboard</a> |
+      <a href="/privacy.html">Privacy</a> |
+      <a href="/terms.html">Terms</a>
+    </footer>
+  </body>
+</html>

@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ask Thane | Task Follow-Up for Team Conversations</title>
+    <meta
+      name="description"
+      content="Ask Thane captures tasks from team conversations, follows up on the right cadence, and reports progress across Slack and Thane Chat."
+    />
+    <meta name="theme-color" content="#f7f3ea" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/svg+xml" href="/brand/ask-thane-gray-logo.svg" media="(prefers-color-scheme: light)" />
+    <link rel="icon" type="image/svg+xml" href="/brand/ask-thane-white-logo.svg" media="(prefers-color-scheme: dark)" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <style>
+      :root {
+        --bg: #f7f3ea;
+        --ink: #141414;
+        --muted: #5f5b54;
+        --brand: #0f5fd7;
+        --brand-dark: #0848a6;
+        --accent: #c95d2e;
+        --surface: #fffdf8;
+        --border: #e5dccb;
+        --shadow: rgba(28, 40, 62, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        font-family: "Avenir Next", "Segoe UI", sans-serif;
+        background:
+          linear-gradient(135deg, rgba(248, 240, 226, 0.9), rgba(255, 242, 229, 0.78)),
+          var(--bg);
+      }
+
+      .container {
+        width: min(1120px, 100% - 2rem);
+        margin: 0 auto;
+      }
+
+      header {
+        padding: 24px 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+      }
+
+      .brand {
+        display: inline-flex;
+      }
+
+      .brand-mark {
+        width: 168px;
+        max-width: 100%;
+        height: auto;
+      }
+
+      .switcher {
+        display: inline-grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: #fff;
+        padding: 4px;
+      }
+
+      .switcher a {
+        border-radius: 999px;
+        padding: 8px 12px;
+        color: var(--muted);
+        font-size: 0.92rem;
+        font-weight: 800;
+        text-align: center;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+
+      .switcher a.active {
+        background: #fff0e6;
+        color: #994514;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(360px, 0.9fr);
+        gap: 24px;
+        align-items: center;
+        padding: 34px 0 26px;
+      }
+
+      .eyebrow {
+        color: #994514;
+        font-size: 0.8rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 12px 0 12px;
+        font-size: clamp(2.4rem, 6vw, 5rem);
+        line-height: 0.98;
+      }
+
+      .lead {
+        margin: 0;
+        max-width: 62ch;
+        color: var(--muted);
+        font-size: 1.08rem;
+        line-height: 1.65;
+      }
+
+      .actions {
+        margin-top: 18px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .button {
+        display: inline-block;
+        border-radius: 8px;
+        padding: 12px 14px;
+        background: var(--accent);
+        color: #fff;
+        font-weight: 800;
+        text-decoration: none;
+      }
+
+      .button.secondary {
+        background: #fff0e6;
+        color: #994514;
+      }
+
+      .digest {
+        border: 1px solid #f0d5bf;
+        border-radius: 8px;
+        background: #fffaf3;
+        box-shadow: 0 22px 60px var(--shadow);
+        padding: 16px;
+        display: grid;
+        gap: 12px;
+      }
+
+      .digest-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      .digest h2 {
+        margin: 0;
+      }
+
+      .task-row {
+        border: 1px solid #f1ddc9;
+        border-radius: 8px;
+        background: #fff;
+        padding: 11px;
+        display: grid;
+        gap: 4px;
+      }
+
+      .task-row strong {
+        color: var(--ink);
+      }
+
+      .task-row span {
+        color: var(--muted);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin: 22px 0;
+      }
+
+      .pricing-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+        margin: 22px 0;
+      }
+
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #fff;
+        padding: 16px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .card.featured {
+        border-color: #f4c7a8;
+        box-shadow: 0 16px 42px rgba(201, 93, 46, 0.12);
+      }
+
+      h2,
+      h3 {
+        margin: 0;
+      }
+
+      .meta {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .price {
+        margin: 0;
+        font-size: 2rem;
+        font-weight: 800;
+      }
+
+      .price span {
+        color: var(--muted);
+        font-size: 0.95rem;
+        font-weight: 500;
+      }
+
+      ul {
+        margin: 0;
+        padding-left: 18px;
+      }
+
+      li {
+        margin-bottom: 7px;
+        color: var(--muted);
+      }
+
+      .section-title {
+        margin: 28px 0 12px;
+        font-size: 1.45rem;
+      }
+
+      footer {
+        margin: 28px 0 36px;
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      footer a {
+        color: var(--brand-dark);
+      }
+
+      @media (max-width: 980px) {
+        .pricing-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 900px) {
+        header,
+        .hero {
+          align-items: flex-start;
+          grid-template-columns: 1fr;
+        }
+
+        header {
+          flex-direction: column;
+        }
+
+        .grid,
+        .pricing-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="container">
+      <a class="brand" href="/">
+        <img class="brand-mark" src="/brand/ask-thane-gray-logo-with-text.svg" alt="Thane" />
+      </a>
+      <nav class="switcher" aria-label="Product switcher">
+        <a href="/chat">Thane Chat</a>
+        <a class="active" href="/ask-thane">Ask Thane</a>
+      </nav>
+    </header>
+
+    <main class="container">
+      <section class="hero">
+        <div>
+          <div class="eyebrow">Ask Thane</div>
+          <h1>Follow-up for the work your team already discusses.</h1>
+          <p class="lead">
+            Ask Thane captures tasks from conversation, follows up on the right cadence, routes pings to each
+            person's preferred place, and reports progress without asking the team to maintain another board.
+          </p>
+          <div class="actions">
+            <a class="button" href="https://bot.askthane.com/slack/install?plan=free">Install for Slack</a>
+            <a class="button secondary" href="/chat">Switch to Thane Chat</a>
+          </div>
+        </div>
+
+        <div class="digest" aria-label="Ask Thane digest preview">
+          <div class="digest-header">
+            <span>Ask Thane Digest</span>
+            <span>Today</span>
+          </div>
+          <h2>3 things need attention</h2>
+          <div class="task-row">
+            <strong>Billing copy review</strong>
+            <span>Waiting on Garrett. Follow-up scheduled for 2:00 PM.</span>
+          </div>
+          <div class="task-row">
+            <strong>CLI install check</strong>
+            <span>Assigned to Maya. Marked likely done, needs confirmation.</span>
+          </div>
+          <div class="task-row">
+            <strong>Migration import test</strong>
+            <span>Overdue by 1 day. Pinging in preferred location.</span>
+          </div>
+        </div>
+      </section>
+
+      <h2 class="section-title">What It Does</h2>
+      <section class="grid" aria-label="Ask Thane features">
+        <article class="card">
+          <h3>Task Capture</h3>
+          <p class="meta">Turns natural conversation into task state without asking everyone to file tickets.</p>
+        </article>
+        <article class="card">
+          <h3>Follow-Up Cadence</h3>
+          <p class="meta">Reminds people on the schedule that fits the task and the team's working rhythm.</p>
+        </article>
+        <article class="card">
+          <h3>Shared Identity</h3>
+          <p class="meta">Uses verified email to recognize the same person across Slack and Thane Chat.</p>
+        </article>
+      </section>
+
+      <h2 class="section-title">Pricing</h2>
+      <section class="pricing-grid" aria-label="Ask Thane pricing">
+        <article class="card">
+          <h3>Free</h3>
+          <p class="price">$0<span>/mo</span></p>
+          <ul>
+            <li>10 active participants</li>
+            <li>Task capture and updates</li>
+            <li>Shared status queries</li>
+            <li>Monthly AI usage safety limit</li>
+          </ul>
+          <a class="button" href="https://bot.askthane.com/slack/install?plan=free">Install Free</a>
+        </article>
+        <article class="card featured">
+          <h3>Team</h3>
+          <p class="price">$99<span>/mo</span></p>
+          <ul>
+            <li>25 participants included</li>
+            <li>AI-written daily task digests</li>
+            <li>$20 monthly AI usage credit</li>
+            <li>Slack and Thane Chat ping routing</li>
+          </ul>
+          <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=team">Choose Team</a>
+        </article>
+        <article class="card">
+          <h3>Growth</h3>
+          <p class="price">$299<span>/mo</span></p>
+          <ul>
+            <li>100 participants included</li>
+            <li>Faster multi-workspace operations</li>
+            <li>Expanded AI context handling</li>
+            <li>$120 monthly AI usage credit</li>
+          </ul>
+          <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=growth">Choose Growth</a>
+        </article>
+        <article class="card">
+          <h3>Scale</h3>
+          <p class="price">$699+<span>/mo</span></p>
+          <ul>
+            <li>300 to 1000 included participants</li>
+            <li>Best-model daily update quality</li>
+            <li>High-volume org support posture</li>
+            <li>$400 to $1000 monthly AI credit</li>
+          </ul>
+          <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=scale">Choose Scale</a>
+        </article>
+      </section>
+    </main>
+
+    <footer class="container">
+      <a href="/">Products</a> |
+      <a href="/install.html">Install</a> |
+      <a href="/dashboard">Dashboard</a> |
+      <a href="/privacy.html">Privacy</a> |
+      <a href="/terms.html">Terms</a>
+    </footer>
+  </body>
+</html>

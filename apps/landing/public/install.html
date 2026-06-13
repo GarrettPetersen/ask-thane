@@ -56,6 +56,18 @@
         padding: 24px;
       }
 
+      .top-links {
+        margin-top: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .top-links a {
+        color: var(--brand-dark);
+        font-weight: 700;
+      }
+
       h1 {
         margin: 0 0 10px;
         font-size: clamp(1.8rem, 4.8vw, 3rem);
@@ -181,6 +193,10 @@
           terminal-native team chat, or add Ask Thane when you want the agent that tracks tasks and follows up
           from Slack or Thane Chat.
         </p>
+        <nav class="top-links" aria-label="Product pages">
+          <a href="/chat">Thane Chat overview</a>
+          <a href="/ask-thane">Ask Thane overview</a>
+        </nav>
 
         <section class="plans">
           <article class="card" id="thane-chat">
