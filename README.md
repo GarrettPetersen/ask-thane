@@ -36,6 +36,7 @@ Instead of asking people to maintain Jira/Linear-style tickets manually, Thane l
   - includes hosted pricing/checkout page at `/subscribe` and checkout session API at `/api/checkout/session`
 - `apps/landing`: marketing site worker for `askthane.com`.
   - includes public legal pages: Privacy, Terms, Acceptable Use, Subprocessors
+- `apps/thane-cli`: local-first MVP for Thane Chat, a Slack-like terminal chat surface with matching scriptable commands for humans and agents.
 
 ### Shared packages
 - `@ask-thane/domain`: entity and enum types.
@@ -104,7 +105,8 @@ What exists today:
 │   ├── api-worker
 │   ├── bot-worker
 │   ├── landing
-│   └── payments-worker
+│   ├── payments-worker
+│   └── thane-cli
 ├── docs
 ├── infra
 │   └── d1
@@ -151,6 +153,164 @@ pnpm dev:landing
 - `pnpm lint`
 - `pnpm test`
 
+## Thane CLI MVP
+Thane CLI is a separate local-first chat MVP. It provides a Slack-like terminal command surface now, with stable JSON output for agents and a storage boundary that can later move to the Cloudflare backend.
+
+Build it:
+```bash
+pnpm thane:build
+```
+
+Run interactive chat:
+```bash
+pnpm thane chat engineering
+```
+
+Navigate inside chat:
+```text
+/commands          show all slash commands
+/menu              open an arrow-key command menu
+/inbox              show unread conversation summaries in the active workspace
+/inbox all          show unread summaries across all workspaces
+/workspaces         list workspaces and mark the active one
+/workspace acme     switch workspace and focus #general
+/channels           list channels in the active workspace
+/join engineering   switch to a channel
+/leave              leave the focused channel
+/members            list focused channel members/subscribers
+/dm alex            switch to a DM
+```
+
+While chat is open, Thane keeps the current channel/DM focused. New messages in the current conversation are shown inline; unread activity elsewhere is surfaced as compact conversation summaries instead of dumping every message into the active view. Slash commands support Tab completion from the command registry.
+
+Create and switch workspaces:
+```bash
+pnpm thane workspaces
+pnpm thane workspace create acme --name "Acme Inc"
+pnpm thane workspace use acme
+pnpm thane workspace current --json
+```
+
+Create and use accounts:
+```bash
+pnpm thane signup garrett@example.com --name "Garrett"
+pnpm thane login garrett@example.com
+pnpm thane verify garrett@example.com 123456
+pnpm thane whoami --json
+pnpm thane logout
+```
+
+The local MVP prints verification codes instead of sending email. The command contract is ready for a backend email-code flow.
+
+Manage workspace members:
+```bash
+pnpm thane members --json
+pnpm thane invite alex@example.com --role admin --handle alex
+pnpm thane member role alex member
+```
+
+Workspace owners and admins can add people to a workspace. Members can create channels.
+
+Import a one-time Slack export ZIP:
+```bash
+pnpm thane workspace create-from-slack ./slack-export.zip --slug acme --apply
+pnpm thane import slack-export ./slack-export.zip --preview
+pnpm thane import slack-export ./slack-export.zip --apply
+pnpm thane import slack-export ./slack-export.zip --preview --json
+```
+
+The most natural migration path is `workspace create-from-slack`: it creates or reuses a Thane workspace, switches to it, then imports the ZIP. The lower-level `import slack-export` command imports into the active workspace. The importer reads Slack's official export archive shape: `users.json`, `channels.json`, optional `groups.json`/`dms.json`/`mpims.json`, and per-conversation daily JSON message files. It preserves authors, timestamps, basic reactions, file links, mentions, and Slack thread roots. Imports are idempotent, so rerunning the same ZIP skips already-imported messages. Applying an export requires the current user to be a workspace owner/admin, and free workspaces must stay within the 10-member/3-private-channel limits.
+
+Create public and private channels:
+```bash
+pnpm thane channel create design --topic "Product design"
+pnpm thane channel create leadership --private
+pnpm thane channel invite leadership alex
+pnpm thane channel join design
+pnpm thane channel leave design
+pnpm thane channel members design --json
+```
+
+Public channel membership means subscription: any workspace member can discover/read a public channel, but only joined public channels feed normal inbox/unread activity. Direct `@you` mentions in readable public channels still surface. Posting in a public channel auto-joins it.
+
+Private channel membership means access: only members can discover, read, search, post, or receive notifications from private channels. Existing private-channel members can invite other workspace members.
+
+Check or upgrade billing:
+```bash
+pnpm thane billing status
+THANE_PAYMENTS_BASE_URL=https://pay.askthane.com \
+  THANE_BILLING_LINK_SIGNING_SECRET=<secret> \
+  pnpm thane billing checkout
+```
+
+Free Thane CLI workspaces are intentionally useful: up to 10 members, 3 private channels, public channels, DMs, threads, mentions, inbox/search, and JSON-friendly commands. Thane CLI Team is `$8/member/mo` and removes the member/private-channel limits for larger hosted teams.
+
+Use scriptable commands:
+```bash
+pnpm thane commands
+pnpm thane commands --json
+pnpm thane inbox --json
+pnpm thane inbox --all-workspaces --json
+pnpm thane channels --json
+pnpm thane send engineering "Shipping the patch now"
+pnpm thane recent engineering --json
+pnpm thane mentions --since yesterday --json
+pnpm thane reply <message-id> "I can review this afternoon"
+```
+
+Manage users, mentions, and DMs:
+```bash
+pnpm thane users --json
+pnpm thane user add alex --name "Alex"
+pnpm thane send engineering "@alex can you review this?"
+pnpm thane dm alex
+pnpm thane dm-send alex "This is private"
+pnpm thane dm-recent alex --json
+```
+
+Enable the optional Ask Thane integration:
+```bash
+pnpm thane login garrett@example.com
+pnpm thane verify garrett@example.com 123456
+pnpm thane ask-thane enable
+pnpm thane notify location thane_cli
+pnpm thane send engineering "@thane can you track this review?"
+pnpm thane thread <message-id> --json
+```
+
+Ask Thane is disabled by default. When enabled, `@thane` is added as a workspace bot identity and `@thane` mentions are handled as Ask Thane events. In the local MVP, the bot returns a bridge placeholder. In the hosted backend, these events should call the same Ask Thane agent runtime used for Slack.
+
+Cross-platform identity is email-based: a Thane CLI account with `garrett@example.com` should resolve to the same `person` as a Slack identity with that email through the existing `identity_accounts` table. The CLI provider key is `thane_cli`, with `external_user_id` set to the verified account email.
+
+Ask Thane ping location is account/person-level:
+```bash
+pnpm thane notify location
+pnpm thane notify location origin
+pnpm thane notify location thane_cli
+pnpm thane notify location slack
+pnpm thane notify location both
+```
+
+You can also ask `@thane` conversationally:
+```bash
+pnpm thane send engineering "@thane ping me here"
+pnpm thane send engineering "@thane send reminders in Slack"
+pnpm thane send engineering "@thane notify me in both places"
+```
+
+For clean JSON in scripts or agents, build once and call the compiled CLI directly:
+```bash
+pnpm thane:build
+node apps/thane-cli/dist/index.js recent engineering --json
+```
+
+By default, MVP data is stored at `.thane/store.json` in the current working directory. Override it for tests or alternate workspaces:
+```bash
+THANE_STORE_PATH=/tmp/thane-store.json pnpm thane recent --json
+```
+
+The CLI always scopes channels, messages, threads, unread state, mentions, and search to the active workspace. That keeps `#engineering` in one workspace separate from `#engineering` in another.
+
 ## Testing
 - The repo includes a full automated test suite across workers and shared packages, including agent tool-call behavior, workflow logic, Slack payload normalization, and route-level worker behavior.
 - Tests are deterministic and run with mocks/stubs where appropriate (for example no live OpenAI calls and no production D1 writes during unit tests).
@@ -158,12 +318,14 @@ pnpm dev:landing
 - Push/PR CI (`.github/workflows/ci.yml`) also runs `pnpm test`.
 
 ## Pricing Defaults
-- Free: 10 active participants max (hard cap), no AI credit.
+- Thane CLI Free: CLI-first team chat for up to 10 workspace members, 3 private channels, public channels, DMs, threads, mentions, inbox/search, JSON-friendly commands, and optional local Ask Thane integration.
+- Thane CLI Team: `$8/member/mo`, unlocks larger workspaces, unlimited private channels, and long-lived hosted history. Configure with `STRIPE_PRICE_CLI_TEAM_MONTHLY`.
+- Ask Thane Free: 10 active participants max (hard cap), no AI credit.
   - Free tier also enforces a monthly AI spend safety cap (`FREE_TIER_MONTHLY_AI_CAP_USD`, default `$10`).
-- Team: `$99/mo`, includes 25 active participants, `+$3` per additional participant, `$20` included monthly AI cost credit, `1.35x` AI overage multiplier.
-- Growth: `$299/mo`, includes 100 participants, `+$2` per additional participant, `$120` AI credit, `1.30x` AI overage multiplier.
-- Scale: `$699/mo`, includes 300 participants, `+$1.25` per additional participant, `$400` AI credit, `1.25x` AI overage multiplier.
-- Scale Plus: `$1499/mo`, includes 1000 participants, `+$1` per additional participant, `$1000` AI credit, `1.20x` AI overage multiplier.
+- Ask Thane Team: `$99/mo`, includes 25 active participants, `+$3` per additional participant, `$20` included monthly AI cost credit, `1.35x` AI overage multiplier.
+- Ask Thane Growth: `$299/mo`, includes 100 participants, `+$2` per additional participant, `$120` AI credit, `1.30x` AI overage multiplier.
+- Ask Thane Scale: `$699/mo`, includes 300 participants, `+$1.25` per additional participant, `$400` AI credit, `1.25x` AI overage multiplier.
+- Ask Thane Scale Plus: `$1499/mo`, includes 1000 participants, `+$1` per additional participant, `$1000` AI credit, `1.20x` AI overage multiplier.
 - Plan tier aliases: legacy `starter -> team`, `pro -> growth`, `business/enterprise -> scale`.
 - Model defaults are also tier-aware:
   - Free defaults to `FREE_TIER_LLM_MODEL` (default `gpt-4.1-mini`).

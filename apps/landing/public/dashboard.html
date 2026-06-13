@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Ask Thane | Live Dashboard</title>
-    <meta name="description" content="Live public dashboard for Ask Thane operational metrics and growth trends." />
+    <title>Thane | Live Product Dashboard</title>
+    <meta name="description" content="Live public dashboard for Ask Thane and Thane Chat operational metrics and growth trends." />
     <style>
       :root {
         --bg: #f5f2ea;
@@ -138,7 +138,7 @@
       .kpis {
         margin-top: 18px;
         display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
+        grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 10px;
       }
 
@@ -176,6 +176,7 @@
         border-radius: var(--radius-md);
         box-shadow: 0 8px 20px rgba(40, 22, 6, 0.05);
         padding: 14px;
+        overflow-x: auto;
       }
 
       .panel h2 {
@@ -229,6 +230,7 @@
 
       .table {
         width: 100%;
+        min-width: 640px;
         border-collapse: collapse;
       }
 
@@ -292,8 +294,8 @@
     <main class="container">
       <section class="hero">
         <p class="eyebrow">Public Metrics</p>
-        <h1>Live Ask Thane Dashboard</h1>
-        <p class="muted">Public operational and growth metrics pulled directly from production data.</p>
+        <h1>Live Thane Product Dashboard</h1>
+        <p class="muted">Public operational and growth metrics for Ask Thane and Thane Chat, pulled directly from production data.</p>
         <div class="toolbar">
           <label for="windowDays">Time window</label>
           <select id="windowDays">
@@ -312,7 +314,10 @@
         <article class="kpi"><p class="kpi-label">Total Workspaces (All-Time)</p><p class="kpi-value" id="kpiWorkspaces">-</p></article>
         <article class="kpi"><p class="kpi-label">Total Users (All-Time)</p><p class="kpi-value" id="kpiUsers">-</p></article>
         <article class="kpi"><p class="kpi-label">Total Tasks (All-Time)</p><p class="kpi-value" id="kpiTasks">-</p></article>
-        <article class="kpi"><p class="kpi-label">Total Slack Installs (All-Time)</p><p class="kpi-value" id="kpiInstalls">-</p></article>
+        <article class="kpi"><p class="kpi-label">Slack Installs (Ask Thane)</p><p class="kpi-value" id="kpiInstalls">-</p></article>
+        <article class="kpi"><p class="kpi-label">CLI Workspaces (Thane Chat)</p><p class="kpi-value" id="kpiCliWorkspaces">-</p></article>
+        <article class="kpi"><p class="kpi-label">CLI Accounts</p><p class="kpi-value" id="kpiCliAccounts">-</p></article>
+        <article class="kpi"><p class="kpi-label">CLI Messages</p><p class="kpi-value" id="kpiCliMessages">-</p></article>
       </section>
 
       <section class="growth-grid">
@@ -346,10 +351,31 @@
         </article>
         <article class="panel">
           <div class="panel-head">
-            <h2>Cumulative New Slack Installs</h2>
+            <h2>Cumulative Ask Thane Slack Installs</h2>
             <p class="panel-stat" id="installTrend">-</p>
           </div>
           <svg class="chart" id="chartInstalls" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
+        </article>
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Cumulative Thane Chat Workspaces</h2>
+            <p class="panel-stat" id="cliWorkspaceTrend">-</p>
+          </div>
+          <svg class="chart" id="chartCliWorkspaces" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
+        </article>
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Cumulative Thane Chat Accounts</h2>
+            <p class="panel-stat" id="cliAccountTrend">-</p>
+          </div>
+          <svg class="chart" id="chartCliAccounts" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
+        </article>
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Cumulative Thane Chat Messages</h2>
+            <p class="panel-stat" id="cliMessageTrend">-</p>
+          </div>
+          <svg class="chart" id="chartCliMessages" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
         </article>
       </section>
 
@@ -363,7 +389,10 @@
               <th>New Workspaces</th>
               <th>New Users</th>
               <th>New Tasks</th>
-              <th>New Installs</th>
+              <th>New Slack Installs</th>
+              <th>New CLI Workspaces</th>
+              <th>New CLI Accounts</th>
+              <th>New CLI Messages</th>
             </tr>
           </thead>
           <tbody id="recentRows"></tbody>
@@ -378,7 +407,10 @@
           workspaces: "#5b8def",
           users: "#0a8f6a",
           tasks: "#b45309",
-          installs: "#7c3aed"
+          installs: "#7c3aed",
+          cliWorkspaces: "#b83280",
+          cliAccounts: "#0e7490",
+          cliMessages: "#64748b"
         };
 
         function setStatus(text, isError) {
@@ -417,6 +449,9 @@
                 <td>${data.series.users.dailyNew[i]}</td>
                 <td>${data.series.tasks.dailyNew[i]}</td>
                 <td>${data.series.installs.dailyNew[i]}</td>
+                <td>${data.series.thaneCliWorkspaces.dailyNew[i]}</td>
+                <td>${data.series.thaneCliAccounts.dailyNew[i]}</td>
+                <td>${data.series.thaneCliMessages.dailyNew[i]}</td>
               </tr>
             `);
           }
@@ -488,6 +523,9 @@
             setText("kpiUsers", formatNumber(data.summary.users));
             setText("kpiTasks", formatNumber(data.summary.tasks));
             setText("kpiInstalls", formatNumber(data.summary.installs));
+            setText("kpiCliWorkspaces", formatNumber(data.summary.thaneCli && data.summary.thaneCli.workspaces));
+            setText("kpiCliAccounts", formatNumber(data.summary.thaneCli && data.summary.thaneCli.accounts));
+            setText("kpiCliMessages", formatNumber(data.summary.thaneCli && data.summary.thaneCli.messages));
             setText(
               "updatedAt",
               `Updated ${new Date(data.generatedAt).toLocaleString("en-US", { timeZoneName: "short" })}`
@@ -526,6 +564,27 @@
               color: colors.installs,
               dates: data.series.dates,
               values: data.series.installs.cumulative
+            });
+            renderSingleSeriesChart({
+              chartId: "chartCliWorkspaces",
+              trendId: "cliWorkspaceTrend",
+              color: colors.cliWorkspaces,
+              dates: data.series.dates,
+              values: data.series.thaneCliWorkspaces.cumulative
+            });
+            renderSingleSeriesChart({
+              chartId: "chartCliAccounts",
+              trendId: "cliAccountTrend",
+              color: colors.cliAccounts,
+              dates: data.series.dates,
+              values: data.series.thaneCliAccounts.cumulative
+            });
+            renderSingleSeriesChart({
+              chartId: "chartCliMessages",
+              trendId: "cliMessageTrend",
+              color: colors.cliMessages,
+              dates: data.series.dates,
+              values: data.series.thaneCliMessages.cumulative
             });
             renderRecentRows(data);
             setStatus(`Showing ${data.range.days} days from ${data.range.startDate} to ${data.range.endDate}.`, false);

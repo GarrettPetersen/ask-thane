@@ -16,7 +16,7 @@ export type NoteVisibility = "private" | "organization" | "conversation_acl";
 export type PermissionWaiverStatus = "pending" | "granted" | "denied" | "revoked" | "expired";
 
 export interface UserRef {
-  platform: "slack" | "teams" | "email" | "system";
+  platform: "slack" | "teams" | "email" | "thane_cli" | "system";
   platformUserId: string;
   displayName?: string;
 }

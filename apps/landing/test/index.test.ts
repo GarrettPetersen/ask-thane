@@ -20,6 +20,15 @@ function makeMetricsDbStub() {
           installs: 3
         };
       }
+      if (sql.includes("COUNT(*) AS count FROM thane_cli_workspaces")) {
+        return { count: 5 };
+      }
+      if (sql.includes("COUNT(*) AS count FROM thane_cli_accounts")) {
+        return { count: 11 };
+      }
+      if (sql.includes("COUNT(*) AS count FROM thane_cli_messages")) {
+        return { count: 42 };
+      }
       return { count_before: 0 };
     };
     return {
@@ -41,6 +50,15 @@ function makeMetricsDbStub() {
           if (sql.includes("COUNT(*) AS count_before FROM slack_workspace_installs")) {
             return { count_before: 1 };
           }
+          if (sql.includes("COUNT(*) AS count_before FROM thane_cli_workspaces")) {
+            return { count_before: 3 };
+          }
+          if (sql.includes("COUNT(*) AS count_before FROM thane_cli_accounts")) {
+            return { count_before: 8 };
+          }
+          if (sql.includes("COUNT(*) AS count_before FROM thane_cli_messages")) {
+            return { count_before: 30 };
+          }
           return { count_before: 0, args };
         },
         all: async () => {
@@ -58,6 +76,15 @@ function makeMetricsDbStub() {
           }
           if (sql.includes("FROM slack_workspace_installs")) {
             return { results: [{ day: "2026-05-14", new_count: 2 }] };
+          }
+          if (sql.includes("FROM thane_cli_workspaces")) {
+            return { results: [{ day: "2026-05-14", new_count: 2 }] };
+          }
+          if (sql.includes("FROM thane_cli_accounts")) {
+            return { results: [{ day: "2026-05-14", new_count: 3 }] };
+          }
+          if (sql.includes("FROM thane_cli_messages")) {
+            return { results: [{ day: "2026-05-14", new_count: 12 }] };
           }
           return { results: [] };
         }
@@ -178,8 +205,14 @@ describe("@ask-thane/landing", () => {
     expect(body.ok).toBe(true);
     expect(body.summary.organizations).toBe(2);
     expect(body.summary.tasks).toBe(20);
+    expect(body.summary.thaneCli).toEqual({
+      workspaces: 5,
+      accounts: 11,
+      messages: 42
+    });
     expect(Array.isArray(body.series.dates)).toBe(true);
     expect(body.series.organizations.cumulative.at(-1)).toBeGreaterThanOrEqual(1);
+    expect(body.series.thaneCliMessages.cumulative.at(-1)).toBeGreaterThanOrEqual(30);
   });
 
   it("rewrites /dashboard to static dashboard asset", async () => {

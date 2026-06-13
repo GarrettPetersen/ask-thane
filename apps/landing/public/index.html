@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Ask Thane | Conversational Task Tracking for Slack Teams</title>
+    <title>Thane | Team Chat and Agentic Task Follow-Up</title>
     <meta
       name="description"
-      content="Ask Thane turns team conversations into accountable execution by auto-capturing tasks, following up, and reporting progress."
+      content="Thane makes two co-equal products: Thane Chat, a terminal-native Slack alternative, and Ask Thane, an agent that turns team conversations into accountable execution."
     />
     <meta name="theme-color" content="#f7f3ea" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
@@ -148,7 +148,14 @@
       .pricing-grid {
         display: grid;
         gap: 14px;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .product-grid {
+        margin-top: 18px;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
       }
 
       .card {
@@ -167,6 +174,38 @@
       .card.featured {
         border-color: #9dc0f9;
         box-shadow: 0 10px 28px rgba(15, 95, 215, 0.12);
+      }
+
+      .product-tag {
+        width: fit-content;
+        border: 1px solid #d7e6ff;
+        border-radius: 999px;
+        background: #eef5ff;
+        color: var(--brand-dark);
+        padding: 5px 9px;
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
+      .terminal {
+        margin-top: 16px;
+        border: 1px solid #1e293b;
+        border-radius: 12px;
+        background: #111827;
+        color: #e5e7eb;
+        padding: 14px;
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 0.92rem;
+        line-height: 1.55;
+        overflow-x: auto;
+      }
+
+      .terminal .prompt {
+        color: #93c5fd;
+      }
+
+      .terminal .ok {
+        color: #86efac;
       }
 
       .tier {
@@ -229,6 +268,7 @@
         }
 
         .proof,
+        .product-grid,
         .feature-stack {
           grid-template-columns: 1fr;
         }
@@ -250,125 +290,172 @@
 
     <main class="container">
       <section class="hero">
-        <span class="pill">Conversational Execution Layer</span>
-        <h1>Track real work in Slack without forcing your team into ticket bureaucracy.</h1>
+        <span class="pill">Two Products, One Execution Layer</span>
+        <h1>Team chat in the terminal. Agentic follow-up wherever work happens.</h1>
         <p class="lead">
-          Ask Thane captures action items from natural conversation, tracks assignees and urgency,
-          follows up automatically, and gives leadership clear status without manual project-board upkeep.
+          Thane is split into two co-equal products: Thane Chat, a CLI-native alternative to Slack, and
+          Ask Thane, the agent that captures tasks, follows up, and reports progress across Slack and Thane Chat.
         </p>
         <div class="hero-cta">
-          <a class="button" href="#pricing">Get Started</a>
-          <a class="button secondary" href="/install.html">How Install Works</a>
+          <a class="button" href="/install.html">Install Thane</a>
+          <a class="button secondary" href="#products">Compare Products</a>
           <a class="button secondary" href="/dashboard">Live Dashboard</a>
         </div>
 
         <div class="proof">
-          <div class="proof-item">1. Someone asks for work in channel or DM.</div>
-          <div class="proof-item">2. Thane logs the task with owner, status, urgency, and notes.</div>
-          <div class="proof-item">3. Thane sends reminders and reports progress back in context.</div>
+          <div class="proof-item">Thane Chat: channels, DMs, threads, mentions, and inbox from a terminal.</div>
+          <div class="proof-item">Ask Thane: task capture, reminders, digests, and status from conversation.</div>
+          <div class="proof-item">Shared identity: the same person can use Slack and Thane Chat by email.</div>
         </div>
+      </section>
+
+      <h2 class="section-title" id="products">Products</h2>
+      <section class="product-grid" aria-label="Thane products">
+        <article class="card featured">
+          <span class="product-tag">Thane Chat</span>
+          <h3 class="tier">Slack, but terminal-first</h3>
+          <p class="meta">
+            A real chat product with workspaces, public/private channels, DMs, threads, mentions, unread summaries,
+            slash commands, and JSON-friendly commands for humans and agents.
+          </p>
+          <div class="terminal" aria-label="Thane Chat terminal preview">
+            <div><span class="prompt">$</span> thane chat engineering</div>
+            <div><span class="ok">#engineering</span> alex: can someone review the CLI billing flow?</div>
+            <div>you: @thane remind me here tomorrow</div>
+            <div><span class="prompt">$</span> thane see-recent --json</div>
+          </div>
+          <a class="button" href="/install.html#thane-chat">Install Thane Chat</a>
+        </article>
+
+        <article class="card">
+          <span class="product-tag">Ask Thane</span>
+          <h3 class="tier">The agent for team execution</h3>
+          <p class="meta">
+            Ask Thane listens in Slack or Thane Chat, turns natural conversation into task state, pings people in
+            their preferred place, and produces useful progress summaries without project-board upkeep.
+          </p>
+          <ul>
+            <li>Task capture from messages and threads</li>
+            <li>Cadence-aware reminders and digests</li>
+            <li>Cross-platform identity by verified email</li>
+          </ul>
+          <a class="button" href="/install.html#ask-thane">Install Ask Thane</a>
+        </article>
       </section>
 
       <h2 class="section-title" id="pricing">Pricing</h2>
       <section class="pricing-grid" aria-label="Pricing tiers">
         <article class="card">
-          <h3 class="tier">Free</h3>
+          <h3 class="tier">Thane Chat Free</h3>
           <p class="price">$0<span>/mo</span></p>
-          <p class="meta">Up to 10 active participants</p>
+          <p class="meta">Generous terminal chat for small teams</p>
           <ul>
-            <li>Slack task capture and updates</li>
-            <li>Shared task visibility and status queries</li>
-            <li>Daily reminders on working days</li>
-            <li>Monthly AI usage safety limit</li>
+            <li>10 workspace members</li>
+            <li>3 private channels</li>
+            <li>Public channels, DMs, threads, mentions</li>
+            <li>Agent-readable JSON commands</li>
           </ul>
-          <a class="button" href="https://bot.askthane.com/slack/install?plan=free">Install Free</a>
+          <a class="button" href="/install.html#thane-chat">Install Thane Chat</a>
         </article>
 
         <article class="card featured">
-          <h3 class="tier">Team</h3>
-          <p class="price">$99<span>/mo</span></p>
-          <p class="meta">25 participants included, then $3/user</p>
+          <h3 class="tier">Thane Chat Team</h3>
+          <p class="price">$8<span>/member/mo</span></p>
+          <p class="meta">For larger hosted chat workspaces</p>
           <ul>
-            <li>Everything in Free</li>
-            <li>Higher-quality reasoning model</li>
-            <li>AI-written daily task digests</li>
-            <li>$20 monthly AI usage credit</li>
+            <li>Unlimited workspace members</li>
+            <li>Unlimited private channels</li>
+            <li>Long-lived hosted history</li>
+            <li>Optional Ask Thane integration</li>
           </ul>
-          <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=team">Choose Team Plan</a>
+          <a class="button" href="https://payments.askthane.com/subscribe?plan_tier=cli_team">Choose Chat Team</a>
         </article>
 
         <article class="card">
-          <h3 class="tier">Growth</h3>
+          <h3 class="tier">Ask Thane Free</h3>
+          <p class="price">$0<span>/mo</span></p>
+          <p class="meta">Task tracking for small Slack teams</p>
+          <ul>
+            <li>10 active participants</li>
+            <li>Slack task capture and updates</li>
+            <li>Shared status queries</li>
+            <li>Monthly AI usage safety limit</li>
+          </ul>
+          <a class="button" href="https://bot.askthane.com/slack/install?plan=free">Install Ask Thane Free</a>
+        </article>
+
+        <article class="card">
+          <h3 class="tier">Ask Thane Team</h3>
+          <p class="price">$99<span>/mo</span></p>
+          <p class="meta">25 participants included, then $3/user</p>
+          <ul>
+            <li>Higher-quality reasoning model</li>
+            <li>AI-written daily task digests</li>
+            <li>$20 monthly AI usage credit</li>
+            <li>Slack and Thane Chat ping routing</li>
+          </ul>
+          <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=team">Choose Ask Thane Team</a>
+        </article>
+
+        <article class="card">
+          <h3 class="tier">Ask Thane Growth</h3>
           <p class="price">$299<span>/mo</span></p>
           <p class="meta">100 participants included, then $2/user</p>
           <ul>
-            <li>Everything in Team</li>
+            <li>Everything in Ask Thane Team</li>
             <li>Faster multi-workspace operations</li>
             <li>Expanded AI context handling</li>
             <li>$120 monthly AI usage credit</li>
           </ul>
-          <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=growth">Choose Growth Plan</a>
+          <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=growth">Choose Growth</a>
         </article>
 
         <article class="card">
-          <h3 class="tier">Scale</h3>
-          <p class="price">$699<span>/mo</span></p>
-          <p class="meta">300 participants included, then $1.25/user</p>
+          <h3 class="tier">Ask Thane Scale</h3>
+          <p class="price">$699+<span>/mo</span></p>
+          <p class="meta">Scale and Scale Plus for large orgs</p>
           <ul>
-            <li>Everything in Growth</li>
-            <li>Higher throughput for large teams</li>
+            <li>300 to 1000 included participants</li>
             <li>Best-model daily update quality</li>
-            <li>$400 monthly AI usage credit</li>
-          </ul>
-          <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=scale">Choose Scale Plan</a>
-        </article>
-
-        <article class="card">
-          <h3 class="tier">Scale Plus</h3>
-          <p class="price">$1499<span>/mo</span></p>
-          <p class="meta">1000 participants included, then $1/user</p>
-          <ul>
-            <li>Everything in Growth</li>
-            <li>Best available model tier</li>
             <li>High-volume org support posture</li>
-            <li>$1000 monthly AI usage credit</li>
+            <li>$400 to $1000 monthly AI credit</li>
           </ul>
-          <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=scale_plus">Choose Scale Plus Plan</a>
+          <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=scale">Choose Scale</a>
         </article>
       </section>
 
       <section class="feature-stack">
         <article class="card">
-          <h3>Core Tracking</h3>
+          <h3>Thane Chat Surface</h3>
+          <ul>
+            <li>Channels, private channels, DMs, threads, and reactions</li>
+            <li>Slash commands, command menu, and Tab completion</li>
+            <li>Scriptable reads and writes for humans and agents</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <h3>Ask Thane Agent</h3>
           <ul>
             <li>Create, edit, merge, and complete tasks conversationally</li>
-            <li>Assignee, urgency, and detail updates from chat</li>
-            <li>Context-aware notes tied to tasks and people</li>
-          </ul>
-        </article>
-
-        <article class="card">
-          <h3>Automation</h3>
-          <ul>
             <li>Scheduled reminders and follow-up cycles</li>
             <li>Digest messages with task prioritization</li>
-            <li>Duplicate and malformed task repair logic</li>
           </ul>
         </article>
 
         <article class="card">
-          <h3>Admin + Billing</h3>
+          <h3>Shared Platform</h3>
           <ul>
-            <li>Workspace-aware active-user tracking</li>
-            <li>Per-call AI usage telemetry and cost rollups</li>
-            <li>Stripe-based subscriptions and overage readiness</li>
+            <li>Email-based identity across Slack and Thane Chat</li>
+            <li>Workspace-aware permissions, billing, and admin controls</li>
+            <li>Stripe subscriptions for Chat Team and Ask Thane tiers</li>
           </ul>
         </article>
       </section>
     </main>
 
     <footer class="container">
-      Ask Thane is in active development. Security, controls, and reliability are being hardened for broader rollout.
+      Thane is in active development. Security, controls, and reliability are being hardened for broader rollout.
       <a href="/install.html">Install</a> |
       <a href="/dashboard">Dashboard</a> |
       <a href="https://payments.askthane.com/subscribe">Pricing</a> |

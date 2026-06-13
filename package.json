@@ -18,7 +18,9 @@
     "dev:bot": "pnpm --filter @ask-thane/bot-worker dev",
     "dev:api": "pnpm --filter @ask-thane/api-worker dev",
     "dev:payments": "pnpm --filter @ask-thane/payments-worker dev",
-    "dev:landing": "pnpm --filter @ask-thane/landing dev"
+    "dev:landing": "pnpm --filter @ask-thane/landing dev",
+    "thane": "pnpm --silent --filter @ask-thane/thane-cli dev",
+    "thane:build": "pnpm --filter @ask-thane/thane-cli build"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260508.0",

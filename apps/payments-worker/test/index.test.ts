@@ -30,7 +30,7 @@ async function signBillingToken(input: {
   organizationId: string;
   workspaceId: string;
   expiresInSeconds?: number;
-  planTier?: "team" | "growth" | "scale" | "scale_plus";
+  planTier?: "cli_team" | "team" | "growth" | "scale" | "scale_plus";
 }): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const payload = {
@@ -227,6 +227,59 @@ describe("@ask-thane/payments-worker", () => {
       expect(stripeBody).toContain("subscription_data%5Bmetadata%5D%5Bworkspace_id%5D=ws_test");
       expect(stripeBody).toContain("metadata%5Borganization_id%5D=org_test");
       expect(stripeBody).toContain("metadata%5Bworkspace_id%5D=ws_test");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("creates checkout session for Thane CLI Team", async () => {
+    const billingToken = await signBillingToken({
+      secret: "billing_secret",
+      organizationId: "org_cli",
+      workspaceId: "ws_cli",
+      planTier: "cli_team"
+    });
+    const originalFetch = globalThis.fetch;
+    let stripeBody = "";
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("api.stripe.com/v1/checkout/sessions")) {
+        stripeBody = init?.body instanceof URLSearchParams ? init.body.toString() : "";
+        return new Response(
+          JSON.stringify({
+            id: "cs_cli_123",
+            url: "https://checkout.stripe.com/pay/cs_cli_123"
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      throw new Error(`unexpected_fetch:${url}`);
+    };
+    try {
+      const res = await worker.fetch(
+        new Request("https://pay.local/api/checkout/session", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            plan_tier: "cli_team",
+            billing_token: billingToken
+          })
+        }),
+        {
+          STRIPE_SECRET_KEY: "sk_test_123",
+          BILLING_LINK_SIGNING_SECRET: "billing_secret",
+          STRIPE_PRICE_CLI_TEAM_MONTHLY: "price_cli_team_123",
+          THANE_BASE_URL: "https://askthane.com"
+        }
+      );
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toMatchObject({
+        ok: true,
+        checkout_url: "https://checkout.stripe.com/pay/cs_cli_123",
+        plan_tier: "cli_team"
+      });
+      expect(stripeBody).toContain("line_items%5B0%5D%5Bprice%5D=price_cli_team_123");
+      expect(stripeBody).toContain("metadata%5Bplan_tier%5D=cli_team");
     } finally {
       globalThis.fetch = originalFetch;
     }

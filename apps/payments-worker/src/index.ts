@@ -6,6 +6,7 @@ interface Env {
   BILLING_PORTAL_RETURN_URL?: string;
   THANE_BASE_URL?: string;
   STRIPE_PRICE_TEAM_MONTHLY?: string;
+  STRIPE_PRICE_CLI_TEAM_MONTHLY?: string;
   STRIPE_PRICE_GROWTH_MONTHLY?: string;
   STRIPE_PRICE_SCALE_MONTHLY?: string;
   STRIPE_PRICE_SCALE_PLUS_MONTHLY?: string;
@@ -14,7 +15,7 @@ interface Env {
   BUILD_DEPLOYED_AT?: string;
 }
 
-type PlanTier = "team" | "growth" | "scale" | "scale_plus";
+type PlanTier = "cli_team" | "team" | "growth" | "scale" | "scale_plus";
 
 interface PlanConfig {
   planTier: PlanTier;
@@ -136,7 +137,7 @@ function html(body: string, status = 200): Response {
 }
 
 function normalizePlanTier(value: unknown): PlanTier | null {
-  if (value === "team" || value === "growth" || value === "scale" || value === "scale_plus") {
+  if (value === "cli_team" || value === "team" || value === "growth" || value === "scale" || value === "scale_plus") {
     return value;
   }
   return null;
@@ -185,6 +186,8 @@ function asSafeIdentifier(value: unknown): string | null {
 
 function planTierForOrganization(planTier: PlanTier): string {
   switch (planTier) {
+    case "cli_team":
+      return "cli_team";
     case "scale_plus":
       return "scale_plus";
     case "scale":
@@ -200,6 +203,15 @@ function planTierForOrganization(planTier: PlanTier): string {
 
 function planCatalog(env: Env): PlanConfig[] {
   return [
+    {
+      planTier: "cli_team",
+      label: "Thane CLI Team",
+      monthlyPriceUsd: 8,
+      includedUsers: 1,
+      perUserOverageUsd: 8,
+      includedAiCreditUsd: 0,
+      priceEnvValue: env.STRIPE_PRICE_CLI_TEAM_MONTHLY
+    },
     {
       planTier: "team",
       label: "Team",

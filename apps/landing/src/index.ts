@@ -68,7 +68,15 @@ function buildDateRange(startIsoDate: string, endIsoDate: string): string[] {
 
 async function fetchNewAndCumulativeSeries(input: {
   env: Env;
-  table: "organizations" | "workspaces" | "users" | "tasks" | "slack_workspace_installs";
+  table:
+    | "organizations"
+    | "workspaces"
+    | "users"
+    | "tasks"
+    | "slack_workspace_installs"
+    | "thane_cli_workspaces"
+    | "thane_cli_accounts"
+    | "thane_cli_messages";
   dateColumn: "created_at" | "installed_at";
   sinceIso: string;
   dates: string[];
@@ -105,6 +113,37 @@ async function fetchNewAndCumulativeSeries(input: {
   return { dailyNew, cumulative };
 }
 
+async function fetchOptionalCount(env: Env, table: "thane_cli_workspaces" | "thane_cli_accounts" | "thane_cli_messages"): Promise<number> {
+  try {
+    const row = await env.DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first<{ count?: number }>();
+    return Number(row?.count ?? 0);
+  } catch (_error) {
+    return 0;
+  }
+}
+
+async function fetchOptionalSeries(input: {
+  env: Env;
+  table: "thane_cli_workspaces" | "thane_cli_accounts" | "thane_cli_messages";
+  sinceIso: string;
+  dates: string[];
+}): Promise<{ dailyNew: number[]; cumulative: number[] }> {
+  try {
+    return await fetchNewAndCumulativeSeries({
+      env: input.env,
+      table: input.table,
+      dateColumn: "created_at",
+      sinceIso: input.sinceIso,
+      dates: input.dates
+    });
+  } catch (_error) {
+    return {
+      dailyNew: input.dates.map(() => 0),
+      cumulative: input.dates.map(() => 0)
+    };
+  }
+}
+
 async function handlePublicMetrics(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const days = normalizeDaysParam(url.searchParams.get("days"));
@@ -113,7 +152,20 @@ async function handlePublicMetrics(request: Request, env: Env): Promise<Response
   const endDate = isoDate(new Date());
   const dates = buildDateRange(startDate, endDate);
 
-  const [topline, organizationsSeries, workspacesSeries, usersSeries, tasksSeries, installsSeries] = await Promise.all([
+  const [
+    topline,
+    thaneCliWorkspaces,
+    thaneCliAccounts,
+    thaneCliMessages,
+    organizationsSeries,
+    workspacesSeries,
+    usersSeries,
+    tasksSeries,
+    installsSeries,
+    thaneCliWorkspacesSeries,
+    thaneCliAccountsSeries,
+    thaneCliMessagesSeries
+  ] = await Promise.all([
     env.DB
       .prepare(
         `SELECT
@@ -124,6 +176,9 @@ async function handlePublicMetrics(request: Request, env: Env): Promise<Response
            (SELECT COUNT(*) FROM slack_workspace_installs) AS installs`
       )
       .first<Record<string, unknown>>(),
+    fetchOptionalCount(env, "thane_cli_workspaces"),
+    fetchOptionalCount(env, "thane_cli_accounts"),
+    fetchOptionalCount(env, "thane_cli_messages"),
     fetchNewAndCumulativeSeries({
       env,
       table: "organizations",
@@ -158,6 +213,24 @@ async function handlePublicMetrics(request: Request, env: Env): Promise<Response
       dateColumn: "installed_at",
       sinceIso,
       dates
+    }),
+    fetchOptionalSeries({
+      env,
+      table: "thane_cli_workspaces",
+      sinceIso,
+      dates
+    }),
+    fetchOptionalSeries({
+      env,
+      table: "thane_cli_accounts",
+      sinceIso,
+      dates
+    }),
+    fetchOptionalSeries({
+      env,
+      table: "thane_cli_messages",
+      sinceIso,
+      dates
     })
   ]);
 
@@ -175,7 +248,12 @@ async function handlePublicMetrics(request: Request, env: Env): Promise<Response
         workspaces: Number(topline?.workspaces ?? 0),
         users: Number(topline?.users ?? 0),
         tasks: Number(topline?.tasks ?? 0),
-        installs: Number(topline?.installs ?? 0)
+        installs: Number(topline?.installs ?? 0),
+        thaneCli: {
+          workspaces: thaneCliWorkspaces,
+          accounts: thaneCliAccounts,
+          messages: thaneCliMessages
+        }
       },
       series: {
         dates,
@@ -183,7 +261,10 @@ async function handlePublicMetrics(request: Request, env: Env): Promise<Response
         workspaces: workspacesSeries,
         users: usersSeries,
         tasks: tasksSeries,
-        installs: installsSeries
+        installs: installsSeries,
+        thaneCliWorkspaces: thaneCliWorkspacesSeries,
+        thaneCliAccounts: thaneCliAccountsSeries,
+        thaneCliMessages: thaneCliMessagesSeries
       }
     },
     "public, max-age=60"

@@ -11,6 +11,21 @@ const catalogProduct = {
 
 const plans = [
   {
+    key: "cli_team",
+    env: "STRIPE_PRICE_CLI_TEAM_MONTHLY",
+    lookupKey: "thane_cli_team_member_monthly_v1",
+    nickname: "Thane CLI Team Member Monthly",
+    amountCents: 800,
+    metadata: {
+      tier: "cli_team",
+      product: "thane_cli",
+      billing_model: "per_member",
+      included_users: "1",
+      overage_user_usd: "8",
+      included_ai_credit_usd: "0"
+    }
+  },
+  {
     key: "team",
     env: "STRIPE_PRICE_TEAM_MONTHLY",
     lookupKey: "thane_team_monthly_v1",
