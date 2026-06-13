@@ -2,6 +2,13 @@
   "name": "@ask-thane/thane-cli",
   "version": "0.1.0",
   "type": "module",
+  "description": "Terminal-native team chat for Thane workspaces.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GarrettPetersen/ask-thane.git",
+    "directory": "apps/thane-cli"
+  },
+  "license": "UNLICENSED",
   "publishConfig": {
     "access": "public"
   },
@@ -11,10 +18,11 @@
   "files": [
     "dist",
     "scripts/postinstall.mjs",
+    "README.md",
     "package.json"
   ],
   "main": "dist/index.js",
-  "types": "src/index.ts",
+  "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "pnpm run build && node dist/index.js",
