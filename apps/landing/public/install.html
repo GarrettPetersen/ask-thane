@@ -6,7 +6,7 @@
     <title>Install Thane | Thane Chat and Ask Thane</title>
     <meta
       name="description"
-      content="Install Thane Chat in your terminal or add Ask Thane to Slack. Choose the product path that matches how your team works."
+      content="Install Thane Chat in your terminal or add Ask Thane to Slack."
     />
     <style>
       :root {
@@ -190,8 +190,7 @@
       <section class="hero">
         <h1>Install Thane</h1>
         <p class="lead">
-          Choose the Thane product that matches how your team works. Install Thane Chat when you want
-          terminal-native team chat, or add Ask Thane when you want the agent that tracks tasks and follows up
+          Install Thane Chat for terminal-based team chat, or add Ask Thane to track tasks and send follow-ups
           from Slack or Thane Chat.
         </p>
         <nav class="top-links" aria-label="Product pages">
@@ -202,14 +201,14 @@
         <section class="plans">
           <article class="card" id="thane-chat">
             <span class="product-label">Thane Chat</span>
-            <h2>Install the CLI</h2>
+            <h2>Install Thane Chat</h2>
             <ul>
-              <li>Terminal-native team chat with workspaces, channels, DMs, threads, and mentions</li>
+              <li>Team chat with workspaces, channels, DMs, threads, and mentions</li>
               <li>Free for 10 members and 3 private channels</li>
-              <li>Every action also has an agent-readable command</li>
+              <li>Scriptable commands with JSON output</li>
             </ul>
             <code class="command">npm install -g @ask-thane/thane-cli<br />thane signup you@example.com<br />thane chat general</code>
-            <a class="button" href="#chat-flow">View CLI Setup</a>
+            <a class="button" href="#chat-flow">View Setup</a>
             <a class="button secondary" href="https://payments.askthane.com/subscribe?plan_tier=cli_team">Upgrade Chat Team</a>
           </article>
 
@@ -217,8 +216,8 @@
             <span class="product-label">Ask Thane</span>
             <h2>Add the agent to Slack</h2>
             <ul>
-              <li>Captures tasks from natural Slack conversation</li>
-              <li>Follows up with the right person on the right cadence</li>
+              <li>Captures tasks from conversation</li>
+              <li>Sends timely reminders to the right person</li>
               <li>Can share identity with Thane Chat by verified email</li>
             </ul>
             <a class="button" href="https://bot.askthane.com/slack/install?plan=free">Install Free</a>
@@ -260,24 +259,24 @@
         </section>
 
         <section class="flow" id="chat-flow">
-          <h3>Thane Chat CLI Setup</h3>
+          <h3>Thane Chat Setup</h3>
           <ol>
-            <li>Install the CLI package with <code>npm install -g @ask-thane/thane-cli</code>.</li>
+            <li>Install with <code>npm install -g @ask-thane/thane-cli</code>.</li>
             <li>Create the first account with <code>thane signup you@example.com</code> and verify the code.</li>
-            <li>Create or use a workspace, then open live chat with <code>thane chat general</code>.</li>
-            <li>To switch from Slack, export your Slack workspace ZIP and run <code>thane workspace create-from-slack ./export.zip --apply</code>.</li>
+            <li>Create or select a workspace, then open chat with <code>thane chat general</code>.</li>
+            <li>To migrate, export a Slack workspace ZIP and run <code>thane workspace create-from-slack ./export.zip --apply</code>.</li>
             <li>Invite teammates with <code>thane invite teammate@example.com</code>.</li>
-            <li>Upgrade with <code>thane billing checkout</code> when the workspace needs more members or private channels.</li>
+            <li>Upgrade with <code>thane billing checkout</code> for more members or private channels.</li>
           </ol>
         </section>
 
         <section class="flow">
           <h3>Ask Thane Setup</h3>
           <ol>
-            <li>Approve Slack OAuth so Ask Thane can identify your workspace.</li>
-            <li>For paid tiers, you are automatically sent to Stripe checkout for the tier you selected.</li>
+            <li>Approve Slack OAuth so Ask Thane can join the workspace.</li>
+            <li>For paid tiers, continue to Stripe checkout.</li>
             <li>After install, invite Thane to channels with <code>/invite @Thane</code>.</li>
-            <li>Assign work naturally in channel or DM and Ask Thane will track it.</li>
+            <li>Assign work in channel or DM and Ask Thane will track it.</li>
             <li>In Thane Chat, enable the bridge with <code>thane ask-thane enable</code> and mention <code>@thane</code>.</li>
           </ol>
         </section>

@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Thane | Live Product Dashboard</title>
-    <meta name="description" content="Live public dashboard for Ask Thane and Thane Chat operational metrics and growth trends." />
+    <title>Thane | Metrics</title>
+    <meta name="description" content="Public metrics for Ask Thane and Thane Chat." />
     <style>
       :root {
         --bg: #f5f2ea;
@@ -295,8 +295,8 @@
     <main class="container">
       <section class="hero">
         <p class="eyebrow">Public Metrics</p>
-        <h1>Live Thane Product Dashboard</h1>
-        <p class="muted">Public operational and growth metrics for Ask Thane and Thane Chat, pulled directly from production data.</p>
+        <h1>Thane Metrics</h1>
+        <p class="muted">Public usage metrics for Ask Thane and Thane Chat.</p>
         <div class="toolbar">
           <label for="windowDays">Time window</label>
           <select id="windowDays">
@@ -311,69 +311,69 @@
       </section>
 
       <section class="kpis" aria-label="Topline metrics">
-        <article class="kpi"><p class="kpi-label">Total Orgs (All-Time)</p><p class="kpi-value" id="kpiOrgs">-</p></article>
-        <article class="kpi"><p class="kpi-label">Total Workspaces (All-Time)</p><p class="kpi-value" id="kpiWorkspaces">-</p></article>
-        <article class="kpi"><p class="kpi-label">Total Users (All-Time)</p><p class="kpi-value" id="kpiUsers">-</p></article>
-        <article class="kpi"><p class="kpi-label">Total Tasks (All-Time)</p><p class="kpi-value" id="kpiTasks">-</p></article>
+        <article class="kpi"><p class="kpi-label">Organizations</p><p class="kpi-value" id="kpiOrgs">-</p></article>
+        <article class="kpi"><p class="kpi-label">Workspaces</p><p class="kpi-value" id="kpiWorkspaces">-</p></article>
+        <article class="kpi"><p class="kpi-label">Users</p><p class="kpi-value" id="kpiUsers">-</p></article>
+        <article class="kpi"><p class="kpi-label">Tasks</p><p class="kpi-value" id="kpiTasks">-</p></article>
         <article class="kpi"><p class="kpi-label">Slack Installs (Ask Thane)</p><p class="kpi-value" id="kpiInstalls">-</p></article>
-        <article class="kpi"><p class="kpi-label">CLI Workspaces (Thane Chat)</p><p class="kpi-value" id="kpiCliWorkspaces">-</p></article>
-        <article class="kpi"><p class="kpi-label">CLI Accounts</p><p class="kpi-value" id="kpiCliAccounts">-</p></article>
-        <article class="kpi"><p class="kpi-label">CLI Messages</p><p class="kpi-value" id="kpiCliMessages">-</p></article>
+        <article class="kpi"><p class="kpi-label">Thane Chat Workspaces</p><p class="kpi-value" id="kpiCliWorkspaces">-</p></article>
+        <article class="kpi"><p class="kpi-label">Thane Chat Accounts</p><p class="kpi-value" id="kpiCliAccounts">-</p></article>
+        <article class="kpi"><p class="kpi-label">Thane Chat Messages</p><p class="kpi-value" id="kpiCliMessages">-</p></article>
       </section>
 
       <section class="growth-grid">
         <article class="panel">
           <div class="panel-head">
-            <h2>Cumulative New Orgs Created</h2>
+            <h2>Organizations</h2>
             <p class="panel-stat" id="orgTrend">-</p>
           </div>
           <svg class="chart" id="chartOrganizations" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
-            <h2>Cumulative New Workspaces Created</h2>
+            <h2>Workspaces</h2>
             <p class="panel-stat" id="workspaceTrend">-</p>
           </div>
           <svg class="chart" id="chartWorkspaces" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
-            <h2>Cumulative New Users Created</h2>
+            <h2>Users</h2>
             <p class="panel-stat" id="userTrend">-</p>
           </div>
           <svg class="chart" id="chartUsers" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
-            <h2>Cumulative New Tasks Created</h2>
+            <h2>Tasks</h2>
             <p class="panel-stat" id="taskTrend">-</p>
           </div>
           <svg class="chart" id="chartTasks" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
-            <h2>Cumulative Ask Thane Slack Installs</h2>
+            <h2>Ask Thane Installs</h2>
             <p class="panel-stat" id="installTrend">-</p>
           </div>
           <svg class="chart" id="chartInstalls" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
-            <h2>Cumulative Thane Chat Workspaces</h2>
+            <h2>Thane Chat Workspaces</h2>
             <p class="panel-stat" id="cliWorkspaceTrend">-</p>
           </div>
           <svg class="chart" id="chartCliWorkspaces" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
-            <h2>Cumulative Thane Chat Accounts</h2>
+            <h2>Thane Chat Accounts</h2>
             <p class="panel-stat" id="cliAccountTrend">-</p>
           </div>
           <svg class="chart" id="chartCliAccounts" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
-            <h2>Cumulative Thane Chat Messages</h2>
+            <h2>Thane Chat Messages</h2>
             <p class="panel-stat" id="cliMessageTrend">-</p>
           </div>
           <svg class="chart" id="chartCliMessages" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
@@ -381,19 +381,19 @@
       </section>
 
       <section class="panel" style="margin: 0 0 30px;">
-        <h2>Recent Daily New Records</h2>
+        <h2>Recent Daily Activity</h2>
         <table class="table" aria-label="Recent daily counts">
           <thead>
             <tr>
               <th>Date</th>
-              <th>New Orgs</th>
+              <th>New Organizations</th>
               <th>New Workspaces</th>
               <th>New Users</th>
               <th>New Tasks</th>
-              <th>New Slack Installs</th>
-              <th>New CLI Workspaces</th>
-              <th>New CLI Accounts</th>
-              <th>New CLI Messages</th>
+              <th>New Ask Thane Installs</th>
+              <th>New Thane Chat Workspaces</th>
+              <th>New Thane Chat Accounts</th>
+              <th>New Thane Chat Messages</th>
             </tr>
           </thead>
           <tbody id="recentRows"></tbody>
