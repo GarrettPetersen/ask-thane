@@ -1,5 +1,6 @@
 import { stdin as input, stdout as output } from "node:process";
 import { emitKeypressEvents } from "node:readline";
+import { renderChannels, renderInbox, renderMembers, renderMessages, renderWorkspaces } from "./render.js";
 import { completeSlashCommand, renderSlashCommands, slashCommands } from "./slash-commands.js";
 import { ThaneStore } from "./store.js";
 import type { ConversationSummary, MessageView, ThaneChannel, ThaneWorkspace } from "./model.js";
@@ -422,6 +423,7 @@ function renderScreen(inputText: string, state: {
   showMenu: boolean;
   menuIndex: number;
   showReactionPicker: boolean;
+  sidePanelLines?: string[];
   reactionIndex: number;
   focus: ChatFocus;
   conversationIndex: number;
@@ -459,6 +461,8 @@ function renderScreen(inputText: string, state: {
     ? renderMenuLines(state.menuIndex, contentRows, state.updateStatus)
     : state.showReactionPicker
     ? renderReactionPickerLines(state.reactionIndex)
+    : state.sidePanelLines
+    ? state.sidePanelLines.slice(0, contentRows)
     : state.showHelp
     ? [
         `${BOLD}Commands${RESET}`,
@@ -523,6 +527,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
   let status = "";
   let showHelp = false;
   let showMenu = false;
+  let sidePanelLines: string[] | undefined;
   let menuIndex = 0;
   let showReactionPicker = false;
   let reactionIndex = 0;
@@ -555,6 +560,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status,
       showHelp,
       showMenu,
+      ...(sidePanelLines ? { sidePanelLines } : {}),
       menuIndex,
       showReactionPicker,
       reactionIndex,
@@ -581,6 +587,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     activeChannel = channel;
     showHelp = false;
     showMenu = false;
+    sidePanelLines = undefined;
     showReactionPicker = false;
     focus = nextFocus;
     messageIndex = Math.max(0, threadedMessages(store.recent(activeChannel.id, 200)).length - 1);
@@ -692,6 +699,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     if (trimmed === "/menu") {
       showMenu = true;
       showHelp = false;
+      sidePanelLines = undefined;
       status = "Command menu";
       return;
     }
@@ -719,13 +727,84 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = `Invite link: ${await createWorkspaceInviteLink(store, role)}`;
       showHelp = false;
       showMenu = false;
+      sidePanelLines = undefined;
       showReactionPicker = false;
       return;
     }
     if (trimmed === "/help" || trimmed === "/commands") {
       showHelp = !showHelp;
       showMenu = false;
+      sidePanelLines = undefined;
       status = showHelp ? "Command help" : "";
+      return;
+    }
+    if (trimmed === "/workspaces") {
+      const workspaces = renderWorkspaces(store.listWorkspaces(), store.activeWorkspace.id);
+      sidePanelLines = [
+        `${BOLD}Workspaces${RESET}`,
+        `${DIM}Active workspace is marked with *. Switch with /workspace <slug>.${RESET}`,
+        "",
+        ...workspaces.split("\n")
+      ];
+      showHelp = false;
+      showMenu = false;
+      showReactionPicker = false;
+      status = `Active workspace: ${store.activeWorkspace.slug}`;
+      return;
+    }
+    if (trimmed === "/channels") {
+      sidePanelLines = [`${BOLD}Channels${RESET}`, "", ...renderChannels(store.listChannels()).split("\n")];
+      showHelp = false;
+      showMenu = false;
+      showReactionPicker = false;
+      status = "Channels in this workspace.";
+      return;
+    }
+    if (trimmed === "/members") {
+      sidePanelLines = [`${BOLD}Members${RESET}`, "", ...renderMembers(store.listMembers()).split("\n")];
+      showHelp = false;
+      showMenu = false;
+      showReactionPicker = false;
+      status = "Members in this workspace.";
+      return;
+    }
+    if (trimmed === "/inbox" || trimmed === "/inbox all") {
+      const allWorkspaces = trimmed.endsWith(" all");
+      sidePanelLines = [
+        `${BOLD}${allWorkspaces ? "Inbox: All Workspaces" : "Inbox"}${RESET}`,
+        "",
+        ...renderInbox(store.inbox({ allWorkspaces })).split("\n")
+      ];
+      showHelp = false;
+      showMenu = false;
+      showReactionPicker = false;
+      status = allWorkspaces ? "Unread conversations across workspaces." : "Unread conversations in this workspace.";
+      return;
+    }
+    if (trimmed === "/recent") {
+      sidePanelLines = [
+        `${BOLD}Recent: ${channelLabel(activeChannel)}${RESET}`,
+        "",
+        ...renderMessages(store.recent(activeChannel.id, 12)).split("\n")
+      ];
+      showHelp = false;
+      showMenu = false;
+      showReactionPicker = false;
+      status = `Recent messages in ${channelLabel(activeChannel)}.`;
+      return;
+    }
+    if (trimmed === "/leave") {
+      if (activeChannel.kind === "dm") {
+        status = "DMs cannot be left.";
+        return;
+      }
+      const left = await store.leaveChannel(activeChannel.name);
+      activeChannel = await selectConversation(store, "general");
+      sidePanelLines = undefined;
+      showHelp = false;
+      showMenu = false;
+      showReactionPicker = false;
+      status = `Left #${left.name}`;
       return;
     }
     if (trimmed.startsWith("/join ")) {
@@ -734,6 +813,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = `Joined ${channelLabel(activeChannel)}`;
       showHelp = false;
       showMenu = false;
+      sidePanelLines = undefined;
       showReactionPicker = false;
       focus = "messages";
       messageIndex = Math.max(0, threadedMessages(store.recent(activeChannel.id, 200)).length - 1);
@@ -745,6 +825,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = `Opened ${channelLabel(activeChannel)}`;
       showHelp = false;
       showMenu = false;
+      sidePanelLines = undefined;
       showReactionPicker = false;
       focus = "messages";
       messageIndex = Math.max(0, threadedMessages(store.recent(activeChannel.id, 200)).length - 1);
@@ -756,6 +837,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = `Switched to workspace ${workspace.slug}`;
       showHelp = false;
       showMenu = false;
+      sidePanelLines = undefined;
       showReactionPicker = false;
       return;
     }
@@ -769,6 +851,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     messageIndex = Math.max(0, messages.findIndex((message) => message.id === sent.id));
     showHelp = false;
     showMenu = false;
+    sidePanelLines = undefined;
     await store.markReadConversation(activeChannel.id);
   };
 
@@ -800,6 +883,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
         menuIndex = Math.max(0, slashCommands.findIndex((command) => command.name === firstCommand.name));
         showMenu = true;
         showHelp = false;
+        sidePanelLines = undefined;
         status = "Command menu";
       } else {
         status = `Matches: ${matches.slice(0, 4).map((candidate) => candidate.label).join("  ")}`;
@@ -970,6 +1054,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
         } else if (key.name === "escape") {
           showHelp = false;
           showMenu = false;
+          sidePanelLines = undefined;
           showReactionPicker = false;
           if (composerMode !== "message") {
             composerMode = "message";
