@@ -198,7 +198,15 @@ pnpm thane whoami --json
 pnpm thane logout
 ```
 
-The local MVP prints verification codes instead of sending email. The command contract is ready for a backend email-code flow.
+Hosted Thane Chat sends verification codes by email through the API worker. For local-only development, set
+`THANE_API_BASE_URL=local` to print verification codes in the terminal.
+
+Optional authenticator-app MFA:
+```bash
+pnpm thane mfa status
+pnpm thane mfa setup
+pnpm thane mfa disable 123456
+```
 
 Manage workspace members:
 ```bash

@@ -15,6 +15,19 @@ declare const Buffer: {
   from(value: string, encoding: string): BufferLike;
 };
 
+declare function fetch(
+  input: string,
+  init?: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+  }
+): Promise<{
+  ok: boolean;
+  status: number;
+  json(): Promise<unknown>;
+}>;
+
 declare namespace NodeJS {
   interface ErrnoException extends Error {
     code?: string;

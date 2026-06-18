@@ -6,6 +6,7 @@ export interface ThaneAccount {
   email: string;
   displayName: string;
   createdAt: string;
+  authToken?: string;
 }
 
 export interface ThaneWorkspaceMember {

@@ -11,7 +11,7 @@ import { ThaneStore } from "./store.js";
 import { parseSince } from "./time.js";
 import type { SlackImportPreview } from "./slack-import.js";
 import type { SlackImportResult } from "./store.js";
-import type { PingLocation, WorkspaceRole } from "./model.js";
+import type { PingLocation, ThaneAccount, WorkspaceRole } from "./model.js";
 
 interface ParsedArgs {
   positionals: string[];
@@ -103,6 +103,121 @@ function createPrompter(): { ask(label: string): Promise<string>; close(): void 
   };
 }
 
+function thaneApiBaseUrl(): string | undefined {
+  const value = process.env.THANE_API_BASE_URL?.trim();
+  if (value === "local" || value === "none") {
+    return undefined;
+  }
+  return (value || "https://api.askthane.com").replace(/\/+$/g, "");
+}
+
+async function postThaneApi<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  const baseUrl = thaneApiBaseUrl();
+  if (!baseUrl) {
+    throw new Error("Set THANE_API_BASE_URL to use hosted Thane auth.");
+  }
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const payload = (await response.json()) as { ok?: boolean; error?: string } & T;
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.error ?? `Thane API request failed with status ${response.status}`);
+  }
+  return payload;
+}
+
+async function getThaneApi<T>(path: string, authToken: string): Promise<T> {
+  const baseUrl = thaneApiBaseUrl();
+  if (!baseUrl) {
+    throw new Error("Set THANE_API_BASE_URL to use hosted Thane auth.");
+  }
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: "GET",
+    headers: { authorization: `Bearer ${authToken}` }
+  });
+  const payload = (await response.json()) as { ok?: boolean; error?: string } & T;
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.error ?? `Thane API request failed with status ${response.status}`);
+  }
+  return payload;
+}
+
+async function postThaneApiWithAuth<T>(path: string, authToken: string, body: Record<string, unknown> = {}): Promise<T> {
+  const baseUrl = thaneApiBaseUrl();
+  if (!baseUrl) {
+    throw new Error("Set THANE_API_BASE_URL to use hosted Thane auth.");
+  }
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${authToken}`,
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  const payload = (await response.json()) as { ok?: boolean; error?: string } & T;
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.error ?? `Thane API request failed with status ${response.status}`);
+  }
+  return payload;
+}
+
+async function startHostedAuth(email: string, displayName?: string): Promise<{
+  email: string;
+  delivery: "email" | "dev_code";
+  expiresAt: string;
+  verificationCode?: string;
+}> {
+  return postThaneApi("/v1/thane-cli/auth/start", {
+    email,
+    ...(displayName ? { displayName } : {})
+  });
+}
+
+async function verifyHostedAuth(email: string, code: string): Promise<
+  | { account: ThaneAccount; mfaRequired?: false }
+  | { email: string; mfaRequired: true; mfaChallengeToken: string }
+> {
+  return postThaneApi("/v1/thane-cli/auth/verify", { email, code });
+}
+
+async function verifyHostedMfa(challengeToken: string, code: string): Promise<ThaneAccount> {
+  const response = await postThaneApi<{ account: ThaneAccount }>("/v1/thane-cli/auth/mfa-verify", { challengeToken, code });
+  return response.account;
+}
+
+async function finishHostedAuth(input: {
+  store: ThaneStore;
+  email: string;
+  code: string;
+  prompts?: { ask(label: string): Promise<string>; close(): void } | undefined;
+}): Promise<ThaneAccount> {
+  const verified = await verifyHostedAuth(input.email, input.code);
+  if ("mfaRequired" in verified && verified.mfaRequired) {
+    const mfaCode = await input.prompts?.ask("Authenticator code: ");
+    const hostedAccount = await verifyHostedMfa(verified.mfaChallengeToken, mfaCode ?? "");
+    return input.store.acceptVerifiedAccount(hostedAccount);
+  }
+  return input.store.acceptVerifiedAccount(verified.account);
+}
+
+function renderHostedAuthStart(response: { email: string; delivery: "email" | "dev_code"; verificationCode?: string }): string {
+  if (response.delivery === "dev_code" && response.verificationCode) {
+    return `verification code for ${response.email}: ${response.verificationCode}\n`;
+  }
+  return `sent a verification code to ${response.email}\n`;
+}
+
+function requireHostedAuthToken(store: ThaneStore): string {
+  const token = store.currentAccount?.authToken;
+  if (!token) {
+    throw new Error("Run `thane init` with THANE_API_BASE_URL set before managing MFA.");
+  }
+  return token;
+}
+
 function slugFromSlackExportPath(path: string): string {
   const base = basename(path).replace(/\.zip$/i, "").replace(/slack[-_ ]?export/gi, "slack").replace(/[^a-z0-9._-]+/gi, "-");
   return base.toLowerCase().replace(/^-+|-+$/g, "") || "slack-import";
@@ -153,6 +268,11 @@ Accounts:
   thane verify <email> <code>
   thane whoami [--json]
   thane logout
+
+Security:
+  thane mfa status [--json]
+  thane mfa setup
+  thane mfa disable <code>
 
 Ask Thane:
   thane ask-thane status [--json]
@@ -267,6 +387,18 @@ async function main(): Promise<void> {
         throw new Error("Usage: thane init --email <email> [--name \"...\"] --json");
       }
       const displayName = flagString(args, "name") ?? (prompts ? await prompts.ask("Name (optional): ") : undefined);
+      if (thaneApiBaseUrl()) {
+        const started = await startHostedAuth(email, displayName || undefined);
+        if (wantsJson(args)) {
+          printJson(started);
+          return;
+        }
+        process.stdout.write(`${renderHostedAuthStart(started)}Enter the code to finish setup.\n`);
+        const enteredCode = await prompts?.ask("Code: ");
+        const verified = await finishHostedAuth({ store, email: started.email, code: enteredCode ?? "", prompts });
+        process.stdout.write(`signed in as ${verified.email}\nopen chat: thane chat general\n`);
+        return;
+      }
       const { account, code } = await store.signup(email, displayName || undefined);
       if (wantsJson(args)) {
         printJson({
@@ -294,6 +426,11 @@ async function main(): Promise<void> {
     if (!email) {
       throw new Error("Usage: thane signup <email>");
     }
+    if (thaneApiBaseUrl()) {
+      const started = await startHostedAuth(email, flagString(args, "name"));
+      wantsJson(args) ? printJson(started) : process.stdout.write(renderHostedAuthStart(started));
+      return;
+    }
     const { account, code } = await store.signup(email, flagString(args, "name"));
     wantsJson(args)
       ? printJson({ account, verificationCode: code })
@@ -305,6 +442,11 @@ async function main(): Promise<void> {
     const email = second;
     if (!email) {
       throw new Error("Usage: thane login <email>");
+    }
+    if (thaneApiBaseUrl()) {
+      const started = await startHostedAuth(email);
+      wantsJson(args) ? printJson(started) : process.stdout.write(renderHostedAuthStart(started));
+      return;
     }
     const { account, code } = await store.login(email);
     wantsJson(args)
@@ -318,6 +460,16 @@ async function main(): Promise<void> {
     const code = args.positionals[2];
     if (!email || !code) {
       throw new Error("Usage: thane verify <email> <code>");
+    }
+    if (thaneApiBaseUrl()) {
+      const prompts = wantsJson(args) ? undefined : createPrompter();
+      try {
+        const account = await finishHostedAuth({ store, email, code, prompts });
+        wantsJson(args) ? printJson({ account }) : process.stdout.write(`signed in as ${account.email}\n`);
+      } finally {
+        prompts?.close();
+      }
+      return;
     }
     const account = await store.verify(email, code);
     wantsJson(args) ? printJson({ account }) : process.stdout.write(`signed in as ${account.email}\n`);
@@ -337,6 +489,53 @@ async function main(): Promise<void> {
   if (command === "logout") {
     await store.logout();
     process.stdout.write("signed out\n");
+    return;
+  }
+
+  if (command === "mfa" && second === "status") {
+    const token = requireHostedAuthToken(store);
+    const status = await getThaneApi<{ enabled: boolean }>("/v1/thane-cli/mfa/status", token);
+    wantsJson(args) ? printJson(status) : process.stdout.write(status.enabled ? "MFA enabled\n" : "MFA disabled\n");
+    return;
+  }
+
+  if (command === "mfa" && second === "setup") {
+    const token = requireHostedAuthToken(store);
+    const setup = await postThaneApiWithAuth<{ factorId: string; secret: string; otpauthUrl: string }>(
+      "/v1/thane-cli/mfa/setup/start",
+      token
+    );
+    if (wantsJson(args)) {
+      printJson(setup);
+      return;
+    }
+    const prompts = createPrompter();
+    try {
+      process.stdout.write(
+        "Add this to your authenticator app.\n" +
+          `Manual secret: ${setup.secret}\n` +
+          `otpauth URL: ${setup.otpauthUrl}\n`
+      );
+      const code = await prompts.ask("Authenticator code: ");
+      const verified = await postThaneApiWithAuth<{ enabled: boolean }>("/v1/thane-cli/mfa/setup/verify", token, {
+        factorId: setup.factorId,
+        code
+      });
+      process.stdout.write(verified.enabled ? "MFA enabled\n" : "MFA setup incomplete\n");
+    } finally {
+      prompts.close();
+    }
+    return;
+  }
+
+  if (command === "mfa" && second === "disable") {
+    const token = requireHostedAuthToken(store);
+    const code = args.positionals[2];
+    if (!code) {
+      throw new Error("Usage: thane mfa disable <code>");
+    }
+    const disabled = await postThaneApiWithAuth<{ enabled: boolean }>("/v1/thane-cli/mfa/disable", token, { code });
+    wantsJson(args) ? printJson(disabled) : process.stdout.write("MFA disabled\n");
     return;
   }
 

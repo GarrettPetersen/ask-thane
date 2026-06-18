@@ -921,6 +921,31 @@ export class ThaneStore {
     return account ? { account, code } : { code };
   }
 
+  async acceptVerifiedAccount(account: ThaneAccount): Promise<ThaneAccount> {
+    const existing = this.data.accounts.find((candidate) => candidate.email === account.email);
+    const stored =
+      existing ??
+      ({
+        id: account.id,
+        email: account.email,
+        displayName: account.displayName,
+        createdAt: account.createdAt,
+        ...(account.authToken ? { authToken: account.authToken } : {})
+      } satisfies ThaneAccount);
+    if (!existing) {
+      this.data.accounts.push(stored);
+    } else {
+      existing.displayName = account.displayName || existing.displayName;
+      if (account.authToken) {
+        existing.authToken = account.authToken;
+      }
+    }
+    this.data.currentAccountId = stored.id;
+    this.ensureAccountMembership(stored, this.activeWorkspace.id, this.data.workspaceMembers.length === 0 ? "owner" : "member");
+    await saveData(this.data);
+    return stored;
+  }
+
   async verify(email: string, code: string): Promise<ThaneAccount> {
     const normalized = normalizeEmail(email);
     const pending = this.data.pendingLogins.find((candidate) => candidate.email === normalized && candidate.code === code.trim());
