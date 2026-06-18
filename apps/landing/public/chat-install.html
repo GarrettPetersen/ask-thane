@@ -118,8 +118,40 @@
         padding: 16px;
       }
 
-      .prompt {
-        color: #93c5fd;
+      .command-wrap {
+        position: relative;
+      }
+
+      .command-wrap .command {
+        margin: 0;
+        padding-right: 92px;
+        white-space: pre;
+      }
+
+      .copy-command {
+        appearance: none;
+        border: 1px solid rgba(229, 231, 235, 0.22);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #f9fafb;
+        cursor: pointer;
+        font: inherit;
+        font-size: 0.82rem;
+        font-weight: 800;
+        padding: 8px 10px;
+        position: absolute;
+        right: 10px;
+        top: 10px;
+      }
+
+      .copy-command:hover,
+      .copy-command:focus-visible {
+        background: rgba(255, 255, 255, 0.15);
+        outline: none;
+      }
+
+      .copy-command:focus-visible {
+        box-shadow: 0 0 0 3px rgba(147, 197, 253, 0.42);
       }
 
       .grid {
@@ -206,6 +238,11 @@
         .hero {
           padding: 24px 18px;
         }
+
+        .command-wrap .command {
+          padding-right: 16px;
+          padding-top: 54px;
+        }
       }
     </style>
     <link rel="stylesheet" href="/site-modern.css" />
@@ -231,7 +268,12 @@
             10 private channels.
           </p>
         </div>
-        <code class="command"><span class="prompt">$</span> npm install -g @ask-thane/thane-cli<br /><span class="prompt">$</span> thane init<br /><span class="prompt">$</span> thane chat general</code>
+        <div class="command-wrap">
+          <button class="copy-command" type="button" data-copy-target="chat-install-commands">Copy</button>
+          <pre class="command"><code id="chat-install-commands">npm install -g @ask-thane/thane-cli
+thane init
+thane chat general</code></pre>
+        </div>
       </section>
 
       <h2 class="section-title">Setup</h2>
@@ -296,5 +338,47 @@
       <a href="/privacy.html">Privacy</a> |
       <a href="/terms.html">Terms</a>
     </footer>
+    <script>
+      async function copyText(text) {
+        if (navigator.clipboard?.writeText) {
+          try {
+            await navigator.clipboard.writeText(text);
+            return true;
+          } catch (_error) {
+            // Fall back for browsers that block Clipboard API on this page.
+          }
+        }
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.left = "-9999px";
+        textarea.style.top = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand("copy");
+        textarea.remove();
+        return copied;
+      }
+
+      document.querySelectorAll("[data-copy-target]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const targetId = button.getAttribute("data-copy-target");
+          const target = targetId ? document.getElementById(targetId) : null;
+          const text = target?.textContent ?? "";
+          if (!text.trim()) {
+            return;
+          }
+          if (await copyText(text)) {
+            button.textContent = "Copied";
+            window.setTimeout(() => {
+              button.textContent = "Copy";
+            }, 1800);
+          } else {
+            button.textContent = "Select";
+          }
+        });
+      });
+    </script>
   </body>
 </html>
