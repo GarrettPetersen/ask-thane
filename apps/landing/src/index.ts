@@ -342,6 +342,13 @@ export default {
       return env.ASSETS.fetch(assetRequest);
     }
 
+    if (url.pathname === "/install") {
+      const assetUrl = new URL(request.url);
+      assetUrl.pathname = "/install.html";
+      const assetRequest = new Request(assetUrl.toString(), request);
+      return env.ASSETS.fetch(assetRequest);
+    }
+
     if (url.pathname === "/chat") {
       const assetUrl = new URL(request.url);
       assetUrl.pathname = "/chat.html";
@@ -349,9 +356,23 @@ export default {
       return env.ASSETS.fetch(assetRequest);
     }
 
+    if (url.pathname === "/chat/install") {
+      const assetUrl = new URL(request.url);
+      assetUrl.pathname = "/chat-install.html";
+      const assetRequest = new Request(assetUrl.toString(), request);
+      return env.ASSETS.fetch(assetRequest);
+    }
+
     if (url.pathname === "/ask-thane") {
       const assetUrl = new URL(request.url);
       assetUrl.pathname = "/ask-thane.html";
+      const assetRequest = new Request(assetUrl.toString(), request);
+      return env.ASSETS.fetch(assetRequest);
+    }
+
+    if (url.pathname === "/ask-thane/install") {
+      const assetUrl = new URL(request.url);
+      assetUrl.pathname = "/ask-thane-install.html";
       const assetRequest = new Request(assetUrl.toString(), request);
       return env.ASSETS.fetch(assetRequest);
     }

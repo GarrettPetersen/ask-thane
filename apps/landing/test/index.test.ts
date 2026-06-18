@@ -230,6 +230,21 @@ describe("@ask-thane/landing", () => {
     expect(await res.text()).toContain("dashboard");
   });
 
+  it("rewrites /install to static install chooser asset", async () => {
+    const assetResponse = new Response("<html>install</html>", { status: 200 });
+    const fetchAssets = vi.fn(async () => assetResponse);
+    const env = {
+      DB: makeDbStub(),
+      ASSETS: { fetch: fetchAssets }
+    };
+    const req = new Request("https://site.local/install");
+    const res = await worker.fetch(req, env as never);
+    expect(fetchAssets).toHaveBeenCalledTimes(1);
+    const calledRequest = fetchAssets.mock.calls[0]?.[0] as Request;
+    expect(new URL(calledRequest.url).pathname).toBe("/install.html");
+    expect(await res.text()).toContain("install");
+  });
+
   it("rewrites /chat to static Thane Chat asset", async () => {
     const assetResponse = new Response("<html>chat</html>", { status: 200 });
     const fetchAssets = vi.fn(async () => assetResponse);
@@ -245,6 +260,21 @@ describe("@ask-thane/landing", () => {
     expect(await res.text()).toContain("chat");
   });
 
+  it("rewrites /chat/install to static Thane Chat install asset", async () => {
+    const assetResponse = new Response("<html>chat-install</html>", { status: 200 });
+    const fetchAssets = vi.fn(async () => assetResponse);
+    const env = {
+      DB: makeDbStub(),
+      ASSETS: { fetch: fetchAssets }
+    };
+    const req = new Request("https://site.local/chat/install");
+    const res = await worker.fetch(req, env as never);
+    expect(fetchAssets).toHaveBeenCalledTimes(1);
+    const calledRequest = fetchAssets.mock.calls[0]?.[0] as Request;
+    expect(new URL(calledRequest.url).pathname).toBe("/chat-install.html");
+    expect(await res.text()).toContain("chat-install");
+  });
+
   it("rewrites /ask-thane to static Ask Thane asset", async () => {
     const assetResponse = new Response("<html>ask-thane</html>", { status: 200 });
     const fetchAssets = vi.fn(async () => assetResponse);
@@ -258,6 +288,21 @@ describe("@ask-thane/landing", () => {
     const calledRequest = fetchAssets.mock.calls[0]?.[0] as Request;
     expect(new URL(calledRequest.url).pathname).toBe("/ask-thane.html");
     expect(await res.text()).toContain("ask-thane");
+  });
+
+  it("rewrites /ask-thane/install to static Ask Thane install asset", async () => {
+    const assetResponse = new Response("<html>ask-thane-install</html>", { status: 200 });
+    const fetchAssets = vi.fn(async () => assetResponse);
+    const env = {
+      DB: makeDbStub(),
+      ASSETS: { fetch: fetchAssets }
+    };
+    const req = new Request("https://site.local/ask-thane/install");
+    const res = await worker.fetch(req, env as never);
+    expect(fetchAssets).toHaveBeenCalledTimes(1);
+    const calledRequest = fetchAssets.mock.calls[0]?.[0] as Request;
+    expect(new URL(calledRequest.url).pathname).toBe("/ask-thane-install.html");
+    expect(await res.text()).toContain("ask-thane-install");
   });
 
   it("serves privacy policy page through static assets", async () => {

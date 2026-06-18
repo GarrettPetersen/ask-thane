@@ -3,20 +3,25 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Install Thane | Thane Chat and Ask Thane</title>
+    <title>Install Thane</title>
     <meta
       name="description"
-      content="Install Thane Chat in your terminal or add Ask Thane to Slack."
+      content="Choose the Thane product you want to install: Thane Chat or Ask Thane."
     />
+    <meta name="theme-color" content="#f7f3ea" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
     <style>
       :root {
         --bg: #f7f3ea;
         --ink: #141414;
-        --muted: #616161;
+        --muted: #5f5b54;
         --brand: #0f5fd7;
         --brand-dark: #0848a6;
+        --accent: #c95d2e;
+        --border: #e5dccb;
         --surface: #fffdf8;
-        --border: #e7decd;
       }
 
       * {
@@ -28,15 +33,21 @@
         color: var(--ink);
         font-family: "Avenir Next", "Segoe UI", sans-serif;
         background:
-          radial-gradient(980px 420px at 100% -10%, #ffe4be 0%, transparent 65%),
-          radial-gradient(680px 400px at -10% 0%, #dceaff 0%, transparent 60%),
+          linear-gradient(135deg, rgba(248, 240, 226, 0.9), rgba(228, 237, 250, 0.76)),
           var(--bg);
       }
 
       .container {
         width: min(980px, 100% - 2rem);
         margin: 0 auto;
-        padding: 24px 0 36px;
+      }
+
+      header {
+        padding: 24px 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
       }
 
       .brand {
@@ -45,136 +56,119 @@
 
       .brand img {
         width: 168px;
+        max-width: 100%;
         height: auto;
       }
 
-      .hero {
-        margin-top: 14px;
-        border: 1px solid var(--border);
-        border-radius: 16px;
-        background: var(--surface);
-        padding: 24px;
-      }
-
-      .top-links {
-        margin-top: 12px;
+      nav {
         display: flex;
+        gap: 14px;
         flex-wrap: wrap;
-        gap: 10px;
       }
 
-      .top-links a {
+      nav a,
+      footer a {
         color: var(--brand-dark);
-        font-weight: 700;
+        font-weight: 800;
+        text-decoration: none;
+      }
+
+      .hero {
+        padding: 34px 28px 28px;
       }
 
       h1 {
         margin: 0 0 10px;
-        font-size: clamp(1.8rem, 4.8vw, 3rem);
+        font-size: clamp(2.1rem, 5vw, 4rem);
+        line-height: 1;
       }
 
       .lead {
         margin: 0;
+        max-width: 58ch;
         color: var(--muted);
+        font-size: 1.08rem;
         line-height: 1.65;
       }
 
-      .plans {
-        margin-top: 16px;
+      .choices {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 14px;
+        gap: 16px;
+        margin: 22px 0 30px;
       }
 
-      .product-label {
-        display: inline-block;
-        border: 1px solid #d7e6ff;
-        border-radius: 999px;
-        background: #eef5ff;
-        color: var(--brand-dark);
-        padding: 5px 9px;
-        font-size: 0.78rem;
-        font-weight: 700;
-      }
-
-      .command {
-        display: block;
-        margin: 10px 0 12px;
-        border: 1px solid #1f2937;
-        border-radius: 10px;
-        background: #111827;
-        color: #e5e7eb;
-        padding: 10px 12px;
-        overflow-x: auto;
-        font-family: "SFMono-Regular", Consolas, monospace;
-        font-size: 0.9rem;
-      }
-
-      .card {
+      .choice {
         border: 1px solid var(--border);
-        border-radius: 14px;
+        border-radius: 8px;
         background: #fff;
-        padding: 16px;
-      }
-
-      .card h2 {
-        margin: 0 0 8px;
-      }
-
-      .card p,
-      .card li {
-        color: var(--muted);
-      }
-
-      ul {
-        margin: 0 0 12px;
-        padding-left: 18px;
-      }
-
-      .button {
-        display: inline-block;
-        border-radius: 10px;
-        padding: 11px 13px;
+        color: inherit;
+        display: grid;
+        gap: 14px;
+        min-height: 250px;
+        padding: 22px;
         text-decoration: none;
-        background: var(--brand);
-        color: #fff;
-        font-weight: 700;
       }
 
-      .button:hover {
-        background: var(--brand-dark);
+      .choice:hover {
+        border-color: #9dc0f9;
+        box-shadow: 0 18px 44px rgba(28, 40, 62, 0.12);
+        transform: translateY(-1px);
       }
 
-      .secondary {
-        margin-left: 8px;
+      .choice.ask:hover {
+        border-color: #f4c7a8;
+      }
+
+      .choice img {
+        width: 172px;
+        max-width: 100%;
+        height: auto;
+      }
+
+      .choice h2 {
+        margin: 0;
+        font-size: 1.65rem;
+      }
+
+      .choice p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .pill {
+        align-self: end;
+        justify-self: start;
+        border-radius: 8px;
         background: #e8f1ff;
         color: var(--brand-dark);
+        font-weight: 800;
+        padding: 10px 12px;
       }
 
-      .flow {
-        margin-top: 16px;
-        border: 1px dashed #d7ccba;
-        border-radius: 12px;
-        background: #fff;
-        padding: 14px;
+      .ask .pill {
+        background: #fff0e6;
+        color: #994514;
       }
 
-      .flow h3 {
-        margin: 0 0 8px;
-      }
-
-      .flow ol {
-        margin: 0;
-        padding-left: 18px;
-      }
-
-      .flow li {
-        margin-bottom: 7px;
+      footer {
+        margin: 28px 0 36px;
         color: var(--muted);
+        font-size: 0.95rem;
       }
 
-      @media (max-width: 860px) {
-        .plans {
+      @media (max-width: 760px) {
+        header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .hero {
+          padding: 24px 18px;
+        }
+
+        .choices {
           grid-template-columns: 1fr;
         }
       }
@@ -182,105 +176,46 @@
     <link rel="stylesheet" href="/site-modern.css" />
   </head>
   <body>
-    <main class="container">
+    <header class="container">
       <a class="brand" href="/">
-        <img src="/brand/ask-thane-gray-logo-with-text.svg" alt="Ask Thane" />
+        <img src="/brand/ask-thane-gray-logo-with-text.svg" alt="Thane" />
       </a>
+      <nav aria-label="Product pages">
+        <a href="/chat">Thane Chat</a>
+        <a href="/ask-thane">Ask Thane</a>
+      </nav>
+    </header>
 
+    <main class="container">
       <section class="hero">
-        <h1>Install Thane</h1>
+        <h1>Choose what you want to install.</h1>
         <p class="lead">
-          Install Thane Chat for terminal-based team chat, or add Ask Thane to track tasks and send follow-ups
-          from Slack or Thane Chat.
+          Thane Chat is team chat in the terminal. Ask Thane is the follow-up agent for work conversations.
         </p>
-        <nav class="top-links" aria-label="Product pages">
-          <a href="/chat">Thane Chat overview</a>
-          <a href="/ask-thane">Ask Thane overview</a>
-        </nav>
+      </section>
 
-        <section class="plans">
-          <article class="card" id="thane-chat">
-            <span class="product-label">Thane Chat</span>
-            <h2>Install Thane Chat</h2>
-            <ul>
-              <li>Team chat with workspaces, channels, DMs, threads, and mentions</li>
-              <li>Free for 100 members and 10 private channels</li>
-              <li>Scriptable commands with JSON output</li>
-            </ul>
-            <code class="command">npm install -g @ask-thane/thane-cli<br />thane init<br />thane chat general</code>
-            <a class="button" href="#chat-flow">View Setup</a>
-            <a class="button secondary" href="https://payments.askthane.com/subscribe?plan_tier=cli_team">Upgrade Chat Team</a>
-          </article>
+      <section class="choices" aria-label="Install choices">
+        <a class="choice chat" href="/chat/install">
+          <img src="/brand/thane-chat-gray-logo-with-text.svg" alt="Thane Chat" />
+          <h2>Install Thane Chat</h2>
+          <p>Set up the CLI, create a workspace, open channels and DMs, and invite your team.</p>
+          <span class="pill">CLI setup</span>
+        </a>
 
-          <article class="card" id="ask-thane">
-            <span class="product-label">Ask Thane</span>
-            <h2>Add the agent to Slack</h2>
-            <ul>
-              <li>Captures tasks from conversation</li>
-              <li>Sends timely reminders to the right person</li>
-              <li>Can share identity with Thane Chat by verified email</li>
-            </ul>
-            <a class="button" href="https://bot.askthane.com/slack/install?plan=free">Install Free</a>
-            <a class="button secondary" href="https://bot.askthane.com/slack/install?plan=paid&tier=team">Choose Team</a>
-          </article>
-
-          <article class="card">
-            <span class="product-label">Ask Thane</span>
-            <h2>Growth</h2>
-            <ul>
-              <li>$299/month</li>
-              <li>100 participants included, then $2/user</li>
-              <li>$120 monthly AI credit</li>
-            </ul>
-            <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=growth">Choose Growth</a>
-          </article>
-
-          <article class="card">
-            <span class="product-label">Ask Thane</span>
-            <h2>Scale</h2>
-            <ul>
-              <li>$699/month</li>
-              <li>300 participants included, then $1.25/user</li>
-              <li>$400 monthly AI credit</li>
-            </ul>
-            <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=scale">Choose Scale</a>
-          </article>
-
-          <article class="card">
-            <span class="product-label">Ask Thane</span>
-            <h2>Scale Plus</h2>
-            <ul>
-              <li>$1499/month</li>
-              <li>1000 participants included, then $1/user</li>
-              <li>$1000 monthly AI credit</li>
-            </ul>
-            <a class="button" href="https://bot.askthane.com/slack/install?plan=paid&tier=scale_plus">Choose Scale Plus</a>
-          </article>
-        </section>
-
-        <section class="flow" id="chat-flow">
-          <h3>Thane Chat Setup</h3>
-          <ol>
-            <li>Install with <code>npm install -g @ask-thane/thane-cli</code>.</li>
-            <li>Run <code>thane init</code> and enter your email when prompted.</li>
-            <li>Create or select a workspace, then open chat with <code>thane chat general</code>.</li>
-            <li>To migrate, export a Slack workspace ZIP and run <code>thane workspace create-from-slack ./export.zip --apply</code>.</li>
-            <li>Invite teammates with <code>thane invite teammate@example.com</code>.</li>
-            <li>Upgrade with <code>thane billing checkout</code> for more members or private channels.</li>
-          </ol>
-        </section>
-
-        <section class="flow">
-          <h3>Ask Thane Setup</h3>
-          <ol>
-            <li>Approve Slack OAuth so Ask Thane can join the workspace.</li>
-            <li>For paid tiers, continue to Stripe checkout.</li>
-            <li>After install, invite Thane to channels with <code>/invite @Thane</code>.</li>
-            <li>Assign work in channel or DM and Ask Thane will track it.</li>
-            <li>In Thane Chat, enable the bridge with <code>thane ask-thane enable</code> and mention <code>@thane</code>.</li>
-          </ol>
-        </section>
+        <a class="choice ask" href="/ask-thane/install">
+          <img src="/brand/ask-thane-gray-logo-with-text.svg" alt="Ask Thane" />
+          <h2>Install Ask Thane</h2>
+          <p>Add the agent to Slack, choose a plan, and connect it to Thane Chat when you want both products.</p>
+          <span class="pill">Agent setup</span>
+        </a>
       </section>
     </main>
+
+    <footer class="container">
+      <a href="/">Products</a> |
+      <a href="/dashboard">Dashboard</a> |
+      <a href="/privacy.html">Privacy</a> |
+      <a href="/terms.html">Terms</a>
+    </footer>
   </body>
 </html>
