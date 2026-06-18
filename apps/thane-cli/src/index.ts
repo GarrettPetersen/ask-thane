@@ -389,7 +389,7 @@ Channels:
 
 Members, users, and DMs:
   thane members [--json]
-  thane invite <email> [--role admin|member] [--handle "..."]
+  thane invite <email> [--role admin|member] [--expires 7d] [--handle "..."]
   thane invite-link create [--role admin|member] [--expires 7d] [--max-uses 10] [--json]
   thane invite-link accept <link-or-token> [--json]
   thane member role <handle-or-email> <admin|member>
@@ -1066,7 +1066,40 @@ async function main(): Promise<void> {
     if (!email) {
       throw new Error("Usage: thane invite <email>");
     }
-    const member = await store.invite(email, flagRole(args, "member"), flagString(args, "handle"));
+    const role = flagMemberRole(args, "member");
+    if (hasHostedChat(store)) {
+      store.requireWorkspaceAdmin();
+      const token = requireHostedAuthToken(store);
+      const response = await postThaneApiWithAuth<{
+        invite: {
+          url: string;
+          token: string;
+          workspace: { id: string; slug: string; name: string };
+          role: "admin" | "member";
+          expiresAt: string;
+          maxUses?: number | null;
+          inviteeEmail?: string;
+          emailSent?: boolean;
+        };
+      }>("/v1/thane-cli/workspace-invites", token, {
+        workspaceId: store.activeWorkspace.id,
+        workspaceSlug: store.activeWorkspace.slug,
+        workspaceName: store.activeWorkspace.name,
+        inviteeEmail: email,
+        role,
+        expiresInHours: parseExpiresInHours(flagString(args, "expires")),
+        maxUses: 1
+      });
+      wantsJson(args)
+        ? printJson(response)
+        : process.stdout.write(
+            `sent invite to ${email} for ${response.invite.workspace.slug}\n` +
+              `role: ${response.invite.role}\n` +
+              `expires: ${response.invite.expiresAt}\n`
+          );
+      return;
+    }
+    const member = await store.invite(email, role, flagString(args, "handle"));
     wantsJson(args) ? printJson({ member }) : process.stdout.write(`invited ${email} as ${member.role}\n`);
     return;
   }

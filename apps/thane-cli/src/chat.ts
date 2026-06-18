@@ -1,7 +1,7 @@
 import { stdin as input, stdout as output } from "node:process";
 import { emitKeypressEvents } from "node:readline";
 import { createHostedChannel, hasHostedChat, reactHostedMessage, sendHostedMessage, syncHostedStore } from "./hosted.js";
-import { renderChannels, renderInbox, renderMembers, renderMessages } from "./render.js";
+import { renderChannels, renderInbox, renderMessages, renderUsers } from "./render.js";
 import { completeSlashCommand, renderSlashCommands, slashCommands } from "./slash-commands.js";
 import { ThaneStore } from "./store.js";
 import type { ConversationSummary, MessageView, ThaneChannel, ThaneWorkspace } from "./model.js";
@@ -411,7 +411,7 @@ function requireHostedAuthToken(store: ThaneStore): string {
   return token;
 }
 
-async function createWorkspaceInviteLink(store: ThaneStore, role: "admin" | "member" = "member"): Promise<string> {
+async function createWorkspaceInviteLink(store: ThaneStore, role: "admin" | "member" = "member", inviteeEmail?: string): Promise<string> {
   store.requireWorkspaceAdmin();
   const token = requireHostedAuthToken(store);
   const response = await postThaneApiWithAuth<{
@@ -419,14 +419,20 @@ async function createWorkspaceInviteLink(store: ThaneStore, role: "admin" | "mem
       url: string;
       role: "admin" | "member";
       expiresAt: string;
+      inviteeEmail?: string;
+      emailSent?: boolean;
     };
   }>("/v1/thane-cli/workspace-invites", token, {
     workspaceId: store.activeWorkspace.id,
     workspaceSlug: store.activeWorkspace.slug,
     workspaceName: store.activeWorkspace.name,
     role,
-    expiresInHours: 24 * 7
+    expiresInHours: 24 * 7,
+    ...(inviteeEmail ? { inviteeEmail, maxUses: 1 } : {})
   });
+  if (response.invite.inviteeEmail) {
+    return `${response.invite.emailSent ? "Sent" : "Created"} invite for ${response.invite.inviteeEmail} (${response.invite.role}, expires ${response.invite.expiresAt})`;
+  }
   return `${response.invite.url} (${response.invite.role}, expires ${response.invite.expiresAt})`;
 }
 
@@ -773,6 +779,20 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = "Reset workspace art to generated default.";
       return;
     }
+    if (trimmed.startsWith("/invite ")) {
+      const email = trimmed.slice("/invite ".length).trim();
+      if (!email) {
+        status = "Usage: /invite <email>";
+        return;
+      }
+      status = await createWorkspaceInviteLink(store, "member", email);
+      showHelp = false;
+      showMenu = false;
+      sidePanelLines = undefined;
+      workspacePickerOpen = false;
+      showReactionPicker = false;
+      return;
+    }
     if (trimmed === "/invite-link" || trimmed === "/invite-link create" || trimmed === "/invite-link admin") {
       const role = trimmed.endsWith(" admin") ? "admin" : "member";
       status = `Invite link: ${await createWorkspaceInviteLink(store, role)}`;
@@ -812,12 +832,13 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       return;
     }
     if (trimmed === "/members") {
-      sidePanelLines = [`${BOLD}Members${RESET}`, "", ...renderMembers(store.listMembers()).split("\n")];
+      const members = activeChannel.kind === "channel" ? store.channelMembers(activeChannel.name) : store.listUsers();
+      sidePanelLines = [`${BOLD}Members: ${channelLabel(activeChannel)}${RESET}`, "", ...renderUsers(members).split("\n")];
       workspacePickerOpen = false;
       showHelp = false;
       showMenu = false;
       showReactionPicker = false;
-      status = "Members in this workspace.";
+      status = `Members in ${channelLabel(activeChannel)}.`;
       return;
     }
     if (trimmed === "/inbox" || trimmed === "/inbox all") {
@@ -845,6 +866,80 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       showMenu = false;
       showReactionPicker = false;
       status = `Recent messages in ${channelLabel(activeChannel)}.`;
+      return;
+    }
+    if (trimmed.startsWith("/thread ")) {
+      const messageId = trimmed.slice("/thread ".length).trim();
+      sidePanelLines = [`${BOLD}Thread${RESET}`, "", ...renderMessages(store.thread(messageId)).split("\n")];
+      workspacePickerOpen = false;
+      showHelp = false;
+      showMenu = false;
+      showReactionPicker = false;
+      status = `Thread ${messageId}`;
+      return;
+    }
+    if (trimmed.startsWith("/reply ")) {
+      const match = trimmed.match(/^\/reply\s+(\S+)\s+([\s\S]+)$/);
+      if (!match?.[1] || !match[2]?.trim()) {
+        status = "Usage: /reply <message-id> <text>";
+        return;
+      }
+      const messageId = match[1];
+      const text = match[2].trim();
+      const root = store.thread(messageId)[0];
+      if (!root) {
+        status = `Message ${messageId} was not found.`;
+        return;
+      }
+      const target = store.findChannel(root.channel);
+      if (!target) {
+        status = `Channel ${root.channel} was not found.`;
+        return;
+      }
+      if (hasHostedChat(store)) {
+        await sendHostedMessage(store, { channelId: target.id, text, source: "chat", threadRootId: root.threadRootId ?? root.id });
+        store = await ThaneStore.open();
+      } else {
+        await store.reply(messageId, text, "chat");
+      }
+      activeChannel = target;
+      sidePanelLines = [`${BOLD}Thread${RESET}`, "", ...renderMessages(store.thread(messageId)).split("\n")];
+      workspacePickerOpen = false;
+      showHelp = false;
+      showMenu = false;
+      showReactionPicker = false;
+      status = `Replied in thread ${messageId}.`;
+      return;
+    }
+    if (trimmed.startsWith("/react ")) {
+      const match = trimmed.match(/^\/react\s+(\S+)\s+(.+)$/);
+      if (!match?.[1] || !match[2]?.trim()) {
+        status = "Usage: /react <message-id> <emoji>";
+        return;
+      }
+      const messageId = match[1];
+      const emoji = match[2].trim();
+      if (hasHostedChat(store)) {
+        await reactHostedMessage(store, { messageId, emoji });
+        store = await ThaneStore.open();
+      } else {
+        await store.react(messageId, emoji);
+      }
+      status = `Reacted ${emoji}`;
+      return;
+    }
+    if (trimmed.startsWith("/search ")) {
+      const query = trimmed.slice("/search ".length).trim();
+      if (!query) {
+        status = "Usage: /search <query>";
+        return;
+      }
+      sidePanelLines = [`${BOLD}Search: ${query}${RESET}`, "", ...renderMessages(store.search(query, 20)).split("\n")];
+      workspacePickerOpen = false;
+      showHelp = false;
+      showMenu = false;
+      showReactionPicker = false;
+      status = `Search results for ${query}.`;
       return;
     }
     if (trimmed === "/leave") {

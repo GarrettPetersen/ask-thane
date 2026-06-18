@@ -46,6 +46,7 @@ interface WorkspaceInviteCreatePayload {
   workspaceId?: unknown;
   workspaceSlug?: unknown;
   workspaceName?: unknown;
+  inviteeEmail?: unknown;
   role?: unknown;
   expiresInHours?: unknown;
   maxUses?: unknown;
@@ -910,6 +911,28 @@ async function sendVerificationEmail(env: Env, input: { email: string; code: str
   return true;
 }
 
+async function sendWorkspaceInviteEmail(
+  env: Env,
+  input: { email: string; invitedBy: string; workspaceName: string; workspaceSlug: string; role: "admin" | "member"; url: string; expiresAt: string }
+): Promise<boolean> {
+  if (!env.EMAIL) {
+    return false;
+  }
+
+  await env.EMAIL.send({
+    from: fromAddress(env),
+    to: input.email,
+    subject: `${input.invitedBy} invited you to ${input.workspaceName} on Thane Chat`,
+    text:
+      `${input.invitedBy} invited you to join ${input.workspaceName} (${input.workspaceSlug}) on Thane Chat as ${input.role}.\n\n` +
+      `Accept the invite:\n${input.url}\n\n` +
+      `Install the CLI first if needed:\nnpm install -g @ask-thane/thane-cli\n\n` +
+      `Then run:\nthane init\nthane invite-link accept ${input.url}\n\n` +
+      `This invite expires ${input.expiresAt}.`
+  });
+  return true;
+}
+
 async function parseJsonObject<T>(request: Request): Promise<T | null> {
   try {
     const payload = await request.json();
@@ -1441,6 +1464,7 @@ async function handleThaneCliWorkspaceInviteCreate(request: Request, env: Env): 
   if (!workspaceId || !workspaceSlug || !workspaceName) {
     return Response.json({ ok: false, error: "workspace_id_slug_and_name_required" }, { status: 400 });
   }
+  const inviteeEmail = normalizeEmail(payload?.inviteeEmail);
   const workspace = await ensureThaneCliWorkspace(env, {
     workspaceId,
     workspaceSlug,
@@ -1453,11 +1477,41 @@ async function handleThaneCliWorkspaceInviteCreate(request: Request, env: Env): 
   const expiresInHours = normalizePositiveInteger(payload?.expiresInHours, 24 * 7, 24 * 30);
   const maxUsesRaw = payload?.maxUses;
   const maxUses =
-    maxUsesRaw === undefined || maxUsesRaw === null || maxUsesRaw === ""
+    inviteeEmail && (maxUsesRaw === undefined || maxUsesRaw === null || maxUsesRaw === "")
+      ? 1
+      : maxUsesRaw === undefined || maxUsesRaw === null || maxUsesRaw === ""
       ? null
       : normalizePositiveInteger(maxUsesRaw, 0, 10_000);
   if (maxUses === 0) {
     return Response.json({ ok: false, error: "max_uses_must_be_positive" }, { status: 400 });
+  }
+  if (inviteeEmail) {
+    const creatorLimit = await checkRateLimit(env, {
+      purpose: "thane_cli_invite_email:creator",
+      key: email,
+      keyHint: email,
+      limit: 30,
+      windowSeconds: 60 * 60
+    });
+    if (!creatorLimit.ok) {
+      return Response.json(
+        { ok: false, error: "rate_limited", retryAfterSeconds: creatorLimit.retryAfterSeconds },
+        { status: 429, headers: { "retry-after": String(creatorLimit.retryAfterSeconds ?? 60) } }
+      );
+    }
+    const recipientLimit = await checkRateLimit(env, {
+      purpose: "thane_cli_invite_email:recipient",
+      key: inviteeEmail,
+      keyHint: inviteeEmail,
+      limit: 10,
+      windowSeconds: 60 * 60
+    });
+    if (!recipientLimit.ok) {
+      return Response.json(
+        { ok: false, error: "rate_limited", retryAfterSeconds: recipientLimit.retryAfterSeconds },
+        { status: 429, headers: { "retry-after": String(recipientLimit.retryAfterSeconds ?? 60) } }
+      );
+    }
   }
 
   const token = makeInviteToken();
@@ -1474,6 +1528,20 @@ async function handleThaneCliWorkspaceInviteCreate(request: Request, env: Env): 
     .run();
 
   const url = `${inviteBaseUrl(env, request)}/${token}`;
+  const emailSent = inviteeEmail
+    ? await sendWorkspaceInviteEmail(env, {
+        email: inviteeEmail,
+        invitedBy: email,
+        workspaceName: workspace.name,
+        workspaceSlug: workspace.slug,
+        role,
+        url,
+        expiresAt
+      })
+    : false;
+  if (inviteeEmail && !emailSent && !shouldReturnDevCodes(env)) {
+    return Response.json({ ok: false, error: "email_send_failed" }, { status: 502 });
+  }
   return Response.json({
     ok: true,
     invite: {
@@ -1482,7 +1550,8 @@ async function handleThaneCliWorkspaceInviteCreate(request: Request, env: Env): 
       workspace,
       role,
       expiresAt,
-      maxUses
+      maxUses,
+      ...(inviteeEmail ? { inviteeEmail, emailSent } : {})
     }
   });
 }

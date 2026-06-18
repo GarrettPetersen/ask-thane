@@ -238,6 +238,7 @@ describe("@ask-thane/api-worker", () => {
 
   it("creates Thane CLI workspace invite links", async () => {
     const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const sendEmail = vi.fn(async () => ({ messageId: "email_1" }));
     const run = vi.fn(async () => ({ meta: { changes: 1 } }));
     const first = vi.fn(async function (this: { sql?: string }) {
       const sql = this.sql ?? "";
@@ -276,7 +277,8 @@ describe("@ask-thane/api-worker", () => {
       DB: { prepare },
       BUILD_ENV: "production",
       THANE_CLI_AUTH_SECRET: "test-secret",
-      THANE_CLI_INVITE_BASE_URL: "https://api.askthane.com/invite"
+      THANE_CLI_INVITE_BASE_URL: "https://api.askthane.com/invite",
+      EMAIL: { send: sendEmail }
     } as never;
 
     const res = await worker.fetch(
@@ -287,6 +289,7 @@ describe("@ask-thane/api-worker", () => {
           workspaceId: "wsp_1",
           workspaceSlug: "Acme Inc",
           workspaceName: "Acme Inc",
+          inviteeEmail: "alex@example.com",
           role: "member",
           expiresInHours: 24,
           maxUses: 10
@@ -302,10 +305,18 @@ describe("@ask-thane/api-worker", () => {
       invite: {
         workspace: { id: "wsp_1", slug: "acme-inc", name: "Acme Inc" },
         role: "member",
-        maxUses: 10
+        maxUses: 10,
+        inviteeEmail: "alex@example.com",
+        emailSent: true
       }
     });
     expect(body.invite.url).toContain("https://api.askthane.com/invite/");
+    expect(sendEmail).toHaveBeenCalledWith({
+      from: "Thane <noreply@askthane.com>",
+      to: "alex@example.com",
+      subject: expect.stringContaining("invited you to Acme Inc"),
+      text: expect.stringContaining("thane invite-link accept")
+    });
     expect(prepare).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO thane_cli_workspace_invites"));
     const inviteInsert = calls.find((call) => call.sql.includes("INSERT INTO thane_cli_workspace_invites"));
     expect(inviteInsert?.args[2]).toBe("wsp_1");

@@ -152,9 +152,9 @@ export const cliCommands: CliCommand[] = [
   },
   {
     category: "Members",
-    command: "thane invite <email> [--role admin|member] [--handle \"...\"]",
-    description: "Invite or add a workspace member.",
-    examples: ["thane invite alex@example.com --role admin --handle alex"]
+    command: "thane invite <email> [--role admin|member] [--expires 7d] [--handle \"...\"]",
+    description: "Email a hosted workspace invite, or add a local workspace member when offline.",
+    examples: ["thane invite alex@example.com", "thane invite alex@example.com --role admin --expires 24h"]
   },
   {
     category: "Members",

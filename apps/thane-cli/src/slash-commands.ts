@@ -14,6 +14,7 @@ export const slashCommands: SlashCommand[] = [
   { name: "/workspaces", usage: "/workspaces", description: "List workspaces.", needsArgument: false },
   { name: "/workspace", usage: "/workspace <slug>", description: "Switch workspace and focus #general.", needsArgument: true },
   { name: "/workspace-art", usage: "/workspace-art", description: "Show workspace art setup command.", needsArgument: false },
+  { name: "/invite", usage: "/invite <email>", description: "Email a workspace invite.", needsArgument: true },
   { name: "/invite-link", usage: "/invite-link", description: "Create a workspace invite link.", needsArgument: false },
   { name: "/channels", usage: "/channels", description: "List channels in this workspace.", needsArgument: false },
   { name: "/join", usage: "/join <channel>", description: "Switch to a channel.", needsArgument: true },
