@@ -170,10 +170,12 @@ Navigate inside chat:
 ```text
 /commands          show all slash commands
 /menu              open an arrow-key command menu
+/update            check whether a newer CLI is available
 /inbox              show unread conversation summaries in the active workspace
 /inbox all          show unread summaries across all workspaces
 /workspaces         list workspaces and mark the active one
 /workspace acme     switch workspace and focus #general
+/workspace-art      show workspace ASCII art setup commands
 /channels           list channels in the active workspace
 /join engineering   switch to a channel
 /leave              leave the focused channel
@@ -205,6 +207,20 @@ pnpm thane workspaces
 pnpm thane workspace create acme --name "Acme Inc"
 pnpm thane workspace use acme
 pnpm thane workspace current --json
+```
+
+Check for CLI updates:
+```bash
+pnpm thane update
+pnpm thane update --json
+```
+
+Workspace admins can keep the generated workspace crest or set custom ASCII art shown above the channel list:
+```bash
+pnpm thane workspace art show
+pnpm thane workspace art set --file ./workspace-art.txt
+printf 'ACME\n====' | pnpm thane workspace art set --stdin
+pnpm thane workspace art reset
 ```
 
 Create and use accounts:

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
@@ -10,11 +11,11 @@ import { renderChannels, renderDms, renderInbox, renderMembers, renderMessages, 
 import { parseSlackExportZip } from "./slack-import.js";
 import { resolveStorePath, ThaneStore } from "./store.js";
 import { parseSince } from "./time.js";
+import { checkForUpdate, renderUpdateStatus } from "./update.js";
+import { CLI_PACKAGE_NAME, CLI_VERSION } from "./version.js";
 import type { SlackImportPreview } from "./slack-import.js";
 import type { SlackImportResult } from "./store.js";
 import type { PingLocation, ThaneAccount, WorkspaceRole } from "./model.js";
-
-const CLI_VERSION = "0.1.14";
 
 interface ParsedArgs {
   positionals: string[];
@@ -95,6 +96,17 @@ function readMessageText(args: ParsedArgs, startAt: number): string {
     return readFileSync(0, "utf8").trim();
   }
   return args.positionals.slice(startAt).join(" ").trim();
+}
+
+async function readWorkspaceArtInput(args: ParsedArgs, startAt: number): Promise<string> {
+  const file = flagString(args, "file");
+  if (file) {
+    return readFile(file, "utf8");
+  }
+  if (args.flags.has("stdin")) {
+    return readFileSync(0, "utf8");
+  }
+  return args.positionals.slice(startAt).join(" ");
 }
 
 function createPrompter(): { ask(label: string): Promise<string>; close(): void } {
@@ -220,6 +232,37 @@ function renderHostedAuthStart(response: { email: string; delivery: "email" | "d
   return `sent a verification code to ${response.email}\n`;
 }
 
+async function handleUpdateCommand(args: ParsedArgs): Promise<void> {
+  const status = await checkForUpdate({ force: args.flags.has("force") });
+  if (wantsJson(args)) {
+    printJson(status);
+    return;
+  }
+  process.stdout.write(`${renderUpdateStatus(status)}\n`);
+  if (status.state !== "available") {
+    return;
+  }
+  if (!stdin.isTTY) {
+    return;
+  }
+  const prompts = createPrompter();
+  try {
+    const answer = await prompts.ask("Update now? [y/N] ");
+    if (!/^y(es)?$/i.test(answer)) {
+      return;
+    }
+  } finally {
+    prompts.close();
+  }
+  const result = spawnSync("npm", ["install", "-g", `${CLI_PACKAGE_NAME}@latest`], { stdio: "inherit" });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`npm install exited with status ${result.status ?? "unknown"}`);
+  }
+}
+
 function requireHostedAuthToken(store: ThaneStore): string {
   const token = store.currentAccount?.authToken;
   if (!token) {
@@ -290,6 +333,7 @@ function help(): string {
 
 Command discovery:
   thane --version
+  thane update [--json] [--force]
   thane commands [--json]
   thane help
   thane doctor [--json]
@@ -361,6 +405,9 @@ Workspaces:
   thane workspace current [--json]
   thane workspace create <slug> [--name "..."]
   thane workspace use <slug>
+  thane workspace art show [--json]
+  thane workspace art set [--file <path>|--stdin|<text>]
+  thane workspace art reset
   thane workspace create-from-slack <export.zip> [--slug "..."] [--name "..."] [--apply] [--json]
 
 Messages:
@@ -478,6 +525,11 @@ async function main(): Promise<void> {
 
   if (command === "doctor") {
     await renderDoctor(args);
+    return;
+  }
+
+  if (command === "update") {
+    await handleUpdateCommand(args);
     return;
   }
 
@@ -905,6 +957,33 @@ async function main(): Promise<void> {
     const workspace = await store.useWorkspace(slug);
     wantsJson(args) ? printJson({ activeWorkspace: workspace }) : process.stdout.write(`using workspace ${workspace.slug}\n`);
     return;
+  }
+
+  if (command === "workspace" && second === "art") {
+    const action = args.positionals[2] ?? "show";
+    if (action === "show") {
+      const art = store.activeWorkspace.asciiArt ?? null;
+      wantsJson(args)
+        ? printJson({ workspace: store.activeWorkspace, art, source: art ? "custom" : "generated" })
+        : process.stdout.write(art ? `${art}\n` : "Using generated workspace art.\n");
+      return;
+    }
+    if (action === "set") {
+      const art = await readWorkspaceArtInput(args, 3);
+      const workspace = await store.setWorkspaceAsciiArt(art);
+      wantsJson(args)
+        ? printJson({ workspace, art: workspace.asciiArt, source: "custom" })
+        : process.stdout.write(`updated workspace art for ${workspace.slug}\n`);
+      return;
+    }
+    if (action === "reset" || action === "clear") {
+      const workspace = await store.clearWorkspaceAsciiArt();
+      wantsJson(args)
+        ? printJson({ workspace, art: null, source: "generated" })
+        : process.stdout.write(`reset workspace art for ${workspace.slug}\n`);
+      return;
+    }
+    throw new Error("Usage: thane workspace art <show|set|reset>");
   }
 
   if (command === "workspace" && second === "create-from-slack") {

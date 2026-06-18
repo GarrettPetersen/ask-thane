@@ -80,6 +80,24 @@ export const cliCommands: CliCommand[] = [
   },
   {
     category: "Workspaces",
+    command: "thane workspace art show [--json]",
+    description: "Show the active workspace ASCII art.",
+    examples: ["thane workspace art show"]
+  },
+  {
+    category: "Workspaces",
+    command: "thane workspace art set [--file <path>|--stdin|<text>]",
+    description: "Set custom ASCII art for the active workspace.",
+    examples: ["thane workspace art set --file ./art.txt", "printf 'ACME\\n====' | thane workspace art set --stdin"]
+  },
+  {
+    category: "Workspaces",
+    command: "thane workspace art reset",
+    description: "Reset the active workspace to generated ASCII art.",
+    examples: ["thane workspace art reset"]
+  },
+  {
+    category: "Workspaces",
     command: "thane workspace create-from-slack <export.zip> [--slug \"...\"] [--name \"...\"] [--apply] [--json]",
     description: "Create or reuse a workspace from a Slack export ZIP, then import it when --apply is set.",
     examples: ["thane workspace create-from-slack ./slack-export.zip --slug acme --apply"]
@@ -293,6 +311,12 @@ export const cliCommands: CliCommand[] = [
     command: "thane billing activate-team-dev",
     description: "Activate Thane Chat Team locally when dev activation is enabled.",
     examples: ["THANE_ALLOW_DEV_BILLING_ACTIVATION=1 thane billing activate-team-dev"]
+  },
+  {
+    category: "Help",
+    command: "thane update [--json] [--force]",
+    description: "Check npm for a newer Thane CLI and prompt to update.",
+    examples: ["thane update", "thane update --json"]
   },
   {
     category: "Help",

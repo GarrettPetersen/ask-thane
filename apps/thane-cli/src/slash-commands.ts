@@ -8,10 +8,12 @@ export interface SlashCommand {
 export const slashCommands: SlashCommand[] = [
   { name: "/commands", usage: "/commands", description: "Show slash commands.", needsArgument: false },
   { name: "/menu", usage: "/menu", description: "Open an arrow-key command menu.", needsArgument: false },
+  { name: "/update", usage: "/update", description: "Check whether a newer CLI is available.", needsArgument: false },
   { name: "/inbox", usage: "/inbox", description: "Show unread summaries in this workspace.", needsArgument: false },
   { name: "/inbox all", usage: "/inbox all", description: "Show unread summaries across all workspaces.", needsArgument: false },
   { name: "/workspaces", usage: "/workspaces", description: "List workspaces.", needsArgument: false },
   { name: "/workspace", usage: "/workspace <slug>", description: "Switch workspace and focus #general.", needsArgument: true },
+  { name: "/workspace-art", usage: "/workspace-art", description: "Show workspace art setup command.", needsArgument: false },
   { name: "/invite-link", usage: "/invite-link", description: "Create a workspace invite link.", needsArgument: false },
   { name: "/channels", usage: "/channels", description: "List channels in this workspace.", needsArgument: false },
   { name: "/join", usage: "/join <channel>", description: "Switch to a channel.", needsArgument: true },

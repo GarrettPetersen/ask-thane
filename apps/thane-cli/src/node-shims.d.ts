@@ -47,6 +47,14 @@ declare module "node:crypto" {
   };
 }
 
+declare module "node:child_process" {
+  export function spawnSync(
+    command: string,
+    args?: string[],
+    options?: { stdio?: "inherit" | "pipe"; shell?: boolean }
+  ): { status: number | null; error?: Error };
+}
+
 declare module "node:fs/promises" {
   export function mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
   export function readFile(path: string, encoding: string): Promise<string>;

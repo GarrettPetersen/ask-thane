@@ -168,6 +168,25 @@ function normalizeWorkspaceSlug(slug: string): string {
   return slug.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
+function normalizeWorkspaceAsciiArt(value: string): string {
+  const lines = value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const trimmed = lines
+    .map((line) => line.replace(/\s+$/g, ""))
+    .join("\n")
+    .trim();
+  if (!trimmed) {
+    throw new Error("Workspace ASCII art cannot be empty.");
+  }
+  const normalizedLines = trimmed.split("\n");
+  if (normalizedLines.length > 10) {
+    throw new Error("Workspace ASCII art can be at most 10 lines.");
+  }
+  if (normalizedLines.some((line) => line.length > 30)) {
+    throw new Error("Workspace ASCII art lines can be at most 30 characters.");
+  }
+  return normalizedLines.join("\n");
+}
+
 function migrateData(
   rawData: ThaneStoreData &
     Partial<{
@@ -510,6 +529,22 @@ export class ThaneStore {
     }
     await saveData(this.data);
     return plan;
+  }
+
+  async setWorkspaceAsciiArt(value: string): Promise<ThaneWorkspace> {
+    this.requireWorkspaceAdmin();
+    const workspace = this.activeWorkspace;
+    workspace.asciiArt = normalizeWorkspaceAsciiArt(value);
+    await saveData(this.data);
+    return workspace;
+  }
+
+  async clearWorkspaceAsciiArt(): Promise<ThaneWorkspace> {
+    this.requireWorkspaceAdmin();
+    const workspace = this.activeWorkspace;
+    delete workspace.asciiArt;
+    await saveData(this.data);
+    return workspace;
   }
 
   createBillingCheckoutUrl(input: { paymentsBaseUrl?: string; signingSecret?: string; email?: string }): string {

@@ -8,6 +8,20 @@ thane init
 thane chat general
 ```
 
+Check for updates:
+
+```bash
+thane update
+```
+
+Customize the workspace art shown above the channel list:
+
+```bash
+thane workspace art set --file ./workspace-art.txt
+printf 'ACME\n====' | thane workspace art set --stdin
+thane workspace art reset
+```
+
 To migrate from Slack:
 
 ```bash

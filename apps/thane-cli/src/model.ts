@@ -72,6 +72,7 @@ export interface ThaneWorkspace {
   slug: string;
   name: string;
   createdAt: string;
+  asciiArt?: string;
 }
 
 export interface ThaneChannel {

@@ -4,6 +4,7 @@ import { completeSlashCommand, renderSlashCommands, slashCommands } from "./slas
 import { ThaneStore } from "./store.js";
 import type { ConversationSummary, MessageView, ThaneChannel, ThaneWorkspace } from "./model.js";
 import type { SlashCommand } from "./slash-commands.js";
+import { checkForUpdate, renderUpdateStatus, type UpdateStatus } from "./update.js";
 
 const CLEAR = "\x1b[2J\x1b[H";
 const HIDE_CURSOR = "\x1b[?25l";
@@ -76,6 +77,14 @@ function workspaceInitials(workspace: ThaneWorkspace): string {
 }
 
 function renderWorkspaceCrest(workspace: ThaneWorkspace, width: number): string[] {
+  if (workspace.asciiArt?.trim()) {
+    return [
+      ...workspace.asciiArt.split("\n").slice(0, 10).map((line) => fit(line, width)),
+      fit(`${BOLD}${workspace.slug}${RESET}`, width),
+      fit("", width)
+    ];
+  }
+
   if (width < 18) {
     return [fit(`${BOLD}${workspace.slug}${RESET}`, width), fit("", width)];
   }
@@ -296,7 +305,23 @@ function completionCandidates(store: ThaneStore, inputText: string): CompletionC
   }));
 }
 
-function renderMenuLines(selectedIndex: number, availableRows: number): string[] {
+function updateMenuDescription(updateStatus: UpdateStatus): { description: string; dim: boolean } {
+  if (updateStatus.state === "available") {
+    return { description: `Update available: ${updateStatus.latestVersion}`, dim: false };
+  }
+  if (updateStatus.state === "latest") {
+    return { description: `Up to date (${updateStatus.currentVersion})`, dim: true };
+  }
+  if (updateStatus.state === "ahead") {
+    return { description: `Dev build (${updateStatus.currentVersion})`, dim: true };
+  }
+  if (updateStatus.state === "unavailable") {
+    return { description: "Check for CLI updates", dim: false };
+  }
+  return { description: "Checking for updates...", dim: true };
+}
+
+function renderMenuLines(selectedIndex: number, availableRows: number, updateStatus: UpdateStatus): string[] {
   const visibleRows = Math.max(1, availableRows - 4);
   const start = Math.max(0, Math.min(selectedIndex - Math.floor(visibleRows / 2), slashCommands.length - visibleRows));
   const visibleCommands = slashCommands.slice(start, start + visibleRows);
@@ -307,8 +332,12 @@ function renderMenuLines(selectedIndex: number, availableRows: number): string[]
     ...visibleCommands.map((command, index) => {
       const actualIndex = start + index;
       const pointer = actualIndex === selectedIndex ? "> " : "  ";
-      const row = `${pointer}${command.usage.padEnd(26)} ${command.description}`;
-      return actualIndex === selectedIndex ? `${INVERSE}${row}${RESET}` : row;
+      const update = command.name === "/update" ? updateMenuDescription(updateStatus) : undefined;
+      const row = `${pointer}${command.usage.padEnd(26)} ${update?.description ?? command.description}`;
+      if (actualIndex === selectedIndex) {
+        return `${INVERSE}${row}${RESET}`;
+      }
+      return update?.dim ? `${DIM}${row}${RESET}` : row;
     })
   ];
 }
@@ -398,6 +427,7 @@ function renderScreen(inputText: string, state: {
   conversationIndex: number;
   messageIndex: number;
   composerMode: ComposerMode;
+  updateStatus: UpdateStatus;
   targetMessageId?: string;
 }): void {
   const { columns, rows } = size();
@@ -426,7 +456,7 @@ function renderScreen(inputText: string, state: {
     ? Math.max(0, Math.min(state.conversationIndex - Math.floor(conversationRows / 2), items.length - conversationRows))
     : 0;
   const helpLines = state.showMenu
-    ? renderMenuLines(state.menuIndex, contentRows)
+    ? renderMenuLines(state.menuIndex, contentRows, state.updateStatus)
     : state.showReactionPicker
     ? renderReactionPickerLines(state.reactionIndex)
     : state.showHelp
@@ -500,6 +530,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
   let conversationIndex = 0;
   let messageIndex = 0;
   let composerMode: ComposerMode = "message";
+  let updateStatus: UpdateStatus = { state: "checking" };
   let targetMessageId: string | undefined;
   let isOpen = true;
 
@@ -531,8 +562,15 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       conversationIndex,
       messageIndex,
       composerMode,
+      updateStatus,
       ...(targetMessageId ? { targetMessageId } : {})
     });
+  };
+
+  const refreshUpdateStatus = async (force = false): Promise<UpdateStatus> => {
+    updateStatus = await checkForUpdate({ force });
+    await refresh();
+    return updateStatus;
   };
 
   const switchTo = async (conversationId: string, nextFocus: ChatFocus = "messages"): Promise<void> => {
@@ -657,6 +695,25 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = "Command menu";
       return;
     }
+    if (trimmed === "/update") {
+      updateStatus = { state: "checking" };
+      status = "Checking for updates...";
+      await refreshUpdateStatus(true);
+      status = renderUpdateStatus(updateStatus).replace(/\n/g, " ");
+      return;
+    }
+    if (trimmed === "/workspace-art") {
+      const current = store.activeWorkspace.asciiArt?.trim();
+      status = current
+        ? "Custom workspace art is set. Use `thane workspace art show|set|reset` to manage it."
+        : "Using generated workspace art. Admins can set custom art with `thane workspace art set --file art.txt` or `--stdin`.";
+      return;
+    }
+    if (trimmed === "/workspace-art reset") {
+      await store.clearWorkspaceAsciiArt();
+      status = "Reset workspace art to generated default.";
+      return;
+    }
     if (trimmed === "/invite-link" || trimmed === "/invite-link create" || trimmed === "/invite-link admin") {
       const role = trimmed.endsWith(" admin") ? "admin" : "member";
       status = `Invite link: ${await createWorkspaceInviteLink(store, role)}`;
@@ -756,6 +813,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     input.setRawMode?.(true);
   }
   input.resume();
+  void refreshUpdateStatus();
 
   const onKeypress = (_chunk: string, key: { name?: string; ctrl?: boolean; meta?: boolean; sequence?: string }): void => {
     void (async () => {
