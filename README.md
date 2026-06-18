@@ -183,6 +183,14 @@ Navigate inside chat:
 
 While chat is open, Thane keeps the current channel/DM focused. New messages in the current conversation are shown inline; unread activity elsewhere is surfaced as compact conversation summaries instead of dumping every message into the active view. Slash commands support Tab completion from the command registry.
 
+Keyboard shortcuts in chat:
+```text
+Up / Down          recall previous and next input
+Tab                autocomplete slash commands
+Alt+Up / Alt+Down  switch focused channel or DM
+Esc                close menu/help or clear transient UI
+```
+
 Create and switch workspaces:
 ```bash
 pnpm thane workspaces

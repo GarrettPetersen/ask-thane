@@ -1,8 +1,9 @@
 import { stdin as input, stdout as output } from "node:process";
 import { emitKeypressEvents } from "node:readline";
-import { renderSlashCommands } from "./slash-commands.js";
+import { completeSlashCommand, renderSlashCommands, slashCommands } from "./slash-commands.js";
 import { ThaneStore } from "./store.js";
 import type { ConversationSummary, MessageView, ThaneChannel } from "./model.js";
+import type { SlashCommand } from "./slash-commands.js";
 
 const CLEAR = "\x1b[2J\x1b[H";
 const HIDE_CURSOR = "\x1b[?25l";
@@ -19,6 +20,11 @@ interface ChatConversation {
   kind: "channel" | "dm";
   unreadCount: number;
   mentionCount: number;
+}
+
+interface CompletionCandidate {
+  label: string;
+  value: string;
 }
 
 function size(): { columns: number; rows: number } {
@@ -136,11 +142,89 @@ function renderMessage(message: MessageView, width: number): string[] {
   return lines.map((line, index) => (index === 0 ? `${prefix}${line}` : `${" ".repeat(visibleLength(prefix))}${line}`));
 }
 
+function commandMatches(inputText: string): SlashCommand[] {
+  if (!inputText.startsWith("/")) {
+    return [];
+  }
+  const [names] = completeSlashCommand(inputText);
+  return names
+    .map((name) => slashCommands.find((command) => command.name === name))
+    .filter((command): command is SlashCommand => Boolean(command));
+}
+
+function replaceTrailingToken(inputText: string, value: string): string {
+  const match = inputText.match(/(^|\s)(\S*)$/);
+  if (!match || match.index === undefined) {
+    return value;
+  }
+  const start = match.index + (match[1]?.length ?? 0);
+  return `${inputText.slice(0, start)}${value}`;
+}
+
+function completionCandidates(store: ThaneStore, inputText: string): CompletionCandidate[] {
+  if (inputText.startsWith("/join ")) {
+    const prefix = inputText.slice("/join ".length).replace(/^#/, "").toLowerCase();
+    return store
+      .listChannels()
+      .filter((channel) => channel.name.startsWith(prefix))
+      .map((channel) => ({ label: `#${channel.name}`, value: `/join ${channel.name}` }));
+  }
+  if (inputText.startsWith("/workspace ")) {
+    const prefix = inputText.slice("/workspace ".length).toLowerCase();
+    return store
+      .listWorkspaces()
+      .filter((workspace) => workspace.slug.startsWith(prefix))
+      .map((workspace) => ({ label: workspace.slug, value: `/workspace ${workspace.slug}` }));
+  }
+  if (inputText.startsWith("/dm ")) {
+    const prefix = inputText.slice("/dm ".length).replace(/^@/, "").toLowerCase();
+    return store
+      .listUsers()
+      .filter((user) => user.handle.startsWith(prefix) && user.id !== store.currentUser.id)
+      .map((user) => ({ label: `@${user.handle}`, value: `/dm ${user.handle}` }));
+  }
+  const trailingMention = inputText.match(/(^|\s)@([a-z0-9._-]*)$/i);
+  if (trailingMention) {
+    const prefix = trailingMention[2]?.toLowerCase() ?? "";
+    return store
+      .listUsers()
+      .filter((user) => user.handle.startsWith(prefix))
+      .map((user) => ({ label: `@${user.handle}`, value: replaceTrailingToken(inputText, `@${user.handle}`) }));
+  }
+  return commandMatches(inputText).map((command) => ({
+    label: command.usage,
+    value: commandInput(command)
+  }));
+}
+
+function renderMenuLines(selectedIndex: number, availableRows: number): string[] {
+  const visibleRows = Math.max(1, availableRows - 4);
+  const start = Math.max(0, Math.min(selectedIndex - Math.floor(visibleRows / 2), slashCommands.length - visibleRows));
+  const visibleCommands = slashCommands.slice(start, start + visibleRows);
+  return [
+    `${BOLD}Command Menu${RESET}`,
+    `${DIM}Use arrows, Return to choose, Esc to close.${RESET}`,
+    "",
+    ...visibleCommands.map((command, index) => {
+      const actualIndex = start + index;
+      const pointer = actualIndex === selectedIndex ? "> " : "  ";
+      const row = `${pointer}${command.usage.padEnd(26)} ${command.description}`;
+      return actualIndex === selectedIndex ? `${INVERSE}${row}${RESET}` : row;
+    })
+  ];
+}
+
+function commandInput(command: SlashCommand): string {
+  return command.needsArgument ? `${command.name} ` : command.name;
+}
+
 function renderScreen(inputText: string, state: {
   store: ThaneStore;
   activeChannelId: string;
   status: string;
   showHelp: boolean;
+  showMenu: boolean;
+  menuIndex: number;
 }): void {
   const { columns, rows } = size();
   const sidebarWidth = Math.min(32, Math.max(24, Math.floor(columns * 0.28)));
@@ -155,7 +239,9 @@ function renderScreen(inputText: string, state: {
   lines.push(`${"─".repeat(columns)}`);
 
   const renderedMessages = messages.flatMap((message) => renderMessage(message, mainWidth - 2));
-  const helpLines = state.showHelp
+  const helpLines = state.showMenu
+    ? renderMenuLines(state.menuIndex, contentRows)
+    : state.showHelp
     ? [
         `${BOLD}Commands${RESET}`,
         "/join <channel>   /dm <handle>   /workspace <slug>",
@@ -185,7 +271,11 @@ function renderScreen(inputText: string, state: {
     lines.push(`${left}│${right}`);
   }
 
-  const status = state.status || `${active ? channelLabel(active) : "conversation"}  ${DIM}Enter sends. Up/down switches. /help for commands.${RESET}`;
+  const matches = state.showMenu ? [] : completionCandidates(state.store, inputText).slice(0, 4);
+  const suggestionStatus = matches.length > 0
+    ? `${DIM}Tab completes:${RESET} ${matches.map((candidate) => candidate.label).join("  ")}`
+    : "";
+  const status = suggestionStatus || state.status || `${active ? channelLabel(active) : "conversation"}  ${DIM}Enter sends. Up/down recalls input. Alt+up/down switches. /menu opens menu.${RESET}`;
   lines.push(`${"─".repeat(columns)}`);
   lines.push(fit(status, columns));
   lines.push(fit(`> ${inputText}`, columns));
@@ -198,11 +288,16 @@ export async function runChat(initialChannel = "general"): Promise<void> {
   let inputText = "";
   let status = "";
   let showHelp = false;
+  let showMenu = false;
+  let menuIndex = 0;
+  const inputHistory: string[] = [];
+  let historyIndex: number | undefined;
+  let draftInput = "";
   let isOpen = true;
 
   const refresh = async (): Promise<void> => {
     store = await ThaneStore.open();
-    renderScreen(inputText, { store, activeChannelId: activeChannel.id, status, showHelp });
+    renderScreen(inputText, { store, activeChannelId: activeChannel.id, status, showHelp, showMenu, menuIndex });
   };
 
   const switchTo = async (conversationId: string): Promise<void> => {
@@ -212,18 +307,55 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     }
     activeChannel = channel;
     showHelp = false;
+    showMenu = false;
     status = `Switched to ${channelLabel(channel)}`;
     await store.markReadConversation(activeChannel.id);
     await refresh();
   };
 
-  const moveSelection = async (direction: 1 | -1): Promise<void> => {
+  const switchConversation = async (direction: 1 | -1): Promise<void> => {
     const items = conversations(store, activeChannel.id);
     const index = Math.max(0, items.findIndex((item) => item.id === activeChannel.id));
     const next = items[(index + direction + items.length) % items.length];
     if (next) {
       await switchTo(next.id);
     }
+  };
+
+  const rememberInput = (line: string): void => {
+    if (!line.trim()) {
+      return;
+    }
+    if (inputHistory[inputHistory.length - 1] !== line) {
+      inputHistory.push(line);
+    }
+    historyIndex = undefined;
+    draftInput = "";
+  };
+
+  const recallInput = (direction: 1 | -1): void => {
+    if (inputHistory.length === 0) {
+      return;
+    }
+    if (historyIndex === undefined) {
+      draftInput = inputText;
+      historyIndex = direction === -1 ? inputHistory.length - 1 : 0;
+    } else {
+      historyIndex += direction;
+    }
+    if (historyIndex < 0) {
+      historyIndex = undefined;
+      inputText = draftInput;
+      draftInput = "";
+      return;
+    }
+    if (historyIndex >= inputHistory.length) {
+      historyIndex = undefined;
+      inputText = draftInput;
+      draftInput = "";
+      return;
+    }
+    inputText = inputHistory[historyIndex] ?? "";
   };
 
   const runLine = async (line: string): Promise<void> => {
@@ -235,8 +367,15 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       isOpen = false;
       return;
     }
-    if (trimmed === "/help" || trimmed === "/commands" || trimmed === "/menu") {
+    if (trimmed === "/menu") {
+      showMenu = true;
+      showHelp = false;
+      status = "Command menu";
+      return;
+    }
+    if (trimmed === "/help" || trimmed === "/commands") {
       showHelp = !showHelp;
+      showMenu = false;
       status = showHelp ? "Command help" : "";
       return;
     }
@@ -245,6 +384,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       await store.markReadConversation(activeChannel.id);
       status = `Joined ${channelLabel(activeChannel)}`;
       showHelp = false;
+      showMenu = false;
       return;
     }
     if (trimmed.startsWith("/dm ")) {
@@ -252,6 +392,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       await store.markReadConversation(activeChannel.id);
       status = `Opened ${channelLabel(activeChannel)}`;
       showHelp = false;
+      showMenu = false;
       return;
     }
     if (trimmed.startsWith("/workspace ")) {
@@ -259,6 +400,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       activeChannel = await selectConversation(store, "general");
       status = `Switched to workspace ${workspace.slug}`;
       showHelp = false;
+      showMenu = false;
       return;
     }
     if (trimmed.startsWith("/")) {
@@ -269,7 +411,44 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     const messages = store.recent(activeChannel.id, 200);
     status = messages.some((message) => message.id === sent.id) ? "" : "";
     showHelp = false;
+    showMenu = false;
     await store.markReadConversation(activeChannel.id);
+  };
+
+  const completeInput = (): boolean => {
+    const matches = completionCandidates(store, inputText);
+    if (matches.length === 0) {
+      return false;
+    }
+    if (matches.length === 1) {
+      const match = matches[0];
+      if (!match) {
+        return false;
+      }
+      inputText = match.value;
+      return true;
+    }
+    const values = matches.map((candidate) => candidate.value);
+    let prefix = values[0] ?? inputText;
+    for (const value of values.slice(1)) {
+      while (!value.startsWith(prefix) && prefix.length > 1) {
+        prefix = prefix.slice(0, -1);
+      }
+    }
+    if (prefix.length > inputText.length) {
+      inputText = prefix;
+    } else {
+      const firstCommand = commandMatches(inputText)[0];
+      if (firstCommand) {
+        menuIndex = Math.max(0, slashCommands.findIndex((command) => command.name === firstCommand.name));
+        showMenu = true;
+        showHelp = false;
+        status = "Command menu";
+      } else {
+        status = `Matches: ${matches.slice(0, 4).map((candidate) => candidate.label).join("  ")}`;
+      }
+    }
+    return true;
   };
 
   emitKeypressEvents(input);
@@ -278,30 +457,76 @@ export async function runChat(initialChannel = "general"): Promise<void> {
   }
   input.resume();
 
-  const onKeypress = (_chunk: string, key: { name?: string; ctrl?: boolean; sequence?: string }): void => {
+  const onKeypress = (_chunk: string, key: { name?: string; ctrl?: boolean; meta?: boolean; sequence?: string }): void => {
     void (async () => {
       try {
         if ((key.ctrl && key.name === "c") || key.sequence === "\u0003") {
           isOpen = false;
           return;
         }
+        if (showMenu) {
+          if (key.name === "escape") {
+            showMenu = false;
+            status = "";
+          } else if (key.name === "up") {
+            menuIndex = menuIndex === 0 ? slashCommands.length - 1 : menuIndex - 1;
+          } else if (key.name === "down" || key.name === "tab") {
+            menuIndex = menuIndex === slashCommands.length - 1 ? 0 : menuIndex + 1;
+          } else if (key.name === "return") {
+            const selected = slashCommands[menuIndex];
+            if (!selected) {
+              showMenu = false;
+              status = "";
+              await refresh();
+              return;
+            }
+            showMenu = false;
+            if (selected.needsArgument) {
+              inputText = commandInput(selected);
+              status = `${selected.usage} ${DIM}${selected.description}${RESET}`;
+            } else {
+              inputText = "";
+              await runLine(selected.name);
+            }
+          }
+          if (!isOpen) {
+            return;
+          }
+          await refresh();
+          return;
+        }
         if (key.name === "return") {
           const submitted = inputText;
           inputText = "";
+          rememberInput(submitted);
           await runLine(submitted);
         } else if (key.name === "backspace") {
           inputText = inputText.slice(0, -1);
+          historyIndex = undefined;
         } else if (key.name === "up") {
-          await moveSelection(-1);
-          return;
-        } else if (key.name === "down" || key.name === "tab") {
-          await moveSelection(1);
-          return;
+          if (key.ctrl || key.meta || key.sequence === "\u001b[1;5A" || key.sequence === "\u001b[1;3A") {
+            await switchConversation(-1);
+            return;
+          }
+          recallInput(-1);
+        } else if (key.name === "down") {
+          if (key.ctrl || key.meta || key.sequence === "\u001b[1;5B" || key.sequence === "\u001b[1;3B") {
+            await switchConversation(1);
+            return;
+          }
+          recallInput(1);
+        } else if (key.name === "tab") {
+          if (completeInput()) {
+            await refresh();
+            return;
+          }
         } else if (key.name === "escape") {
           showHelp = false;
+          showMenu = false;
           status = "";
         } else if (key.sequence && key.sequence >= " " && !key.ctrl) {
           inputText += key.sequence;
+          historyIndex = undefined;
         }
         if (!isOpen) {
           return;

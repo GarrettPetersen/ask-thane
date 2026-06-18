@@ -36,8 +36,9 @@ export function completeSlashCommand(line: string): [string[], string] {
   if (!line.startsWith("/")) {
     return [[], line];
   }
+  const commandPrefix = line.match(/^\/\S*/)?.[0] ?? line;
   const hits = slashCommands
     .map((command) => command.name)
-    .filter((name) => name.startsWith(line));
+    .filter((name) => name.startsWith(commandPrefix));
   return [hits.length > 0 ? hits : slashCommands.map((command) => command.name), line];
 }
