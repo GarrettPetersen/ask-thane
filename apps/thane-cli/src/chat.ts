@@ -275,6 +275,61 @@ function commandInput(command: SlashCommand): string {
   return command.needsArgument ? `${command.name} ` : command.name;
 }
 
+function thaneApiBaseUrl(): string | undefined {
+  const value = process.env.THANE_API_BASE_URL?.trim();
+  if (value === "local" || value === "none") {
+    return undefined;
+  }
+  return (value || "https://api.askthane.com").replace(/\/+$/g, "");
+}
+
+async function postThaneApiWithAuth<T>(path: string, authToken: string, body: Record<string, unknown> = {}): Promise<T> {
+  const baseUrl = thaneApiBaseUrl();
+  if (!baseUrl) {
+    throw new Error("Set THANE_API_BASE_URL to use hosted Thane Chat invite links.");
+  }
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${authToken}`,
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  const payload = (await response.json()) as { ok?: boolean; error?: string } & T;
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.error ?? `Thane API request failed with status ${response.status}`);
+  }
+  return payload;
+}
+
+function requireHostedAuthToken(store: ThaneStore): string {
+  const token = store.currentAccount?.authToken;
+  if (!token) {
+    throw new Error("Run `thane init` with hosted Thane Chat auth before creating invite links.");
+  }
+  return token;
+}
+
+async function createWorkspaceInviteLink(store: ThaneStore, role: "admin" | "member" = "member"): Promise<string> {
+  store.requireWorkspaceAdmin();
+  const token = requireHostedAuthToken(store);
+  const response = await postThaneApiWithAuth<{
+    invite: {
+      url: string;
+      role: "admin" | "member";
+      expiresAt: string;
+    };
+  }>("/v1/thane-cli/workspace-invites", token, {
+    workspaceId: store.activeWorkspace.id,
+    workspaceSlug: store.activeWorkspace.slug,
+    workspaceName: store.activeWorkspace.name,
+    role,
+    expiresInHours: 24 * 7
+  });
+  return `${response.invite.url} (${response.invite.role}, expires ${response.invite.expiresAt})`;
+}
+
 function renderScreen(inputText: string, state: {
   store: ThaneStore;
   activeChannelId: string;
@@ -541,6 +596,14 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       showMenu = true;
       showHelp = false;
       status = "Command menu";
+      return;
+    }
+    if (trimmed === "/invite-link" || trimmed === "/invite-link create" || trimmed === "/invite-link admin") {
+      const role = trimmed.endsWith(" admin") ? "admin" : "member";
+      status = `Invite link: ${await createWorkspaceInviteLink(store, role)}`;
+      showHelp = false;
+      showMenu = false;
+      showReactionPicker = false;
       return;
     }
     if (trimmed === "/help" || trimmed === "/commands") {

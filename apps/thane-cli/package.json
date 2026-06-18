@@ -1,6 +1,6 @@
 {
   "name": "@ask-thane/thane-cli",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "type": "module",
   "description": "Terminal-native team chat for Thane workspaces.",
   "repository": {

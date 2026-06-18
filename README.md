@@ -239,6 +239,8 @@ Invite links are the normal way to add someone who is not already set up. Owners
 for the active workspace, send it to a teammate, and the teammate runs `thane invite-link accept <link>` after
 `thane init`. Invite links default to member access and expire after 7 days; use `--role admin`, `--expires 24h`,
 or `--max-uses 1` for narrower links.
+Inside `thane chat`, owners/admins can also run `/invite-link` or choose it from `/menu` to create a default
+7-day member invite link.
 
 Import a one-time Slack export ZIP:
 ```bash
