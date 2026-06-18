@@ -11,6 +11,10 @@ binding = "DB"
 database_name = "ask-thane"
 database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"
 
+[[send_email]]
+name = "EMAIL"
+allowed_sender_addresses = ["noreply@askthane.com"]
+
 [vars]
 BUILD_ENV = "local"
 BUILD_GIT_SHA = "dev"
@@ -27,6 +31,10 @@ binding = "DB"
 database_name = "ask-thane-staging"
 database_id = "02db76d8-728f-40a4-84f8-f17779f8e8de"
 
+[[env.staging.send_email]]
+name = "EMAIL"
+allowed_sender_addresses = ["noreply@askthane.com"]
+
 [env.staging.vars]
 BUILD_ENV = "staging"
 BUILD_GIT_SHA = "unknown"
@@ -34,6 +42,10 @@ BUILD_DEPLOYED_AT = "unknown"
 THANE_CLI_AUTH_DEV_CODES = "true"
 THANE_CLI_EMAIL_FROM = "Thane <noreply@askthane.com>"
 THANE_CLI_INVITE_BASE_URL = "https://api-staging.askthane.com/invite"
+
+[[env.staging.routes]]
+pattern = "api-staging.askthane.com"
+custom_domain = true
 
 [env.production]
 name = "ask-thane-api"
@@ -43,6 +55,10 @@ binding = "DB"
 database_name = "ask-thane"
 database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"
 
+[[env.production.send_email]]
+name = "EMAIL"
+allowed_sender_addresses = ["noreply@askthane.com"]
+
 [env.production.vars]
 BUILD_ENV = "production"
 BUILD_GIT_SHA = "unknown"
@@ -50,3 +66,7 @@ BUILD_DEPLOYED_AT = "unknown"
 THANE_CLI_AUTH_DEV_CODES = "false"
 THANE_CLI_EMAIL_FROM = "Thane <noreply@askthane.com>"
 THANE_CLI_INVITE_BASE_URL = "https://api.askthane.com/invite"
+
+[[env.production.routes]]
+pattern = "api.askthane.com"
+custom_domain = true

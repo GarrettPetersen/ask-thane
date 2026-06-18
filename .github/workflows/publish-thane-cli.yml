@@ -29,6 +29,9 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: pnpm
 
+      - name: Use npm with trusted publishing support
+        run: npm install -g npm@latest && npm --version
+
       - name: Install
         run: pnpm install --frozen-lockfile=false
 

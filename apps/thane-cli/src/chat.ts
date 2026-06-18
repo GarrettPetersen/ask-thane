@@ -2,7 +2,7 @@ import { stdin as input, stdout as output } from "node:process";
 import { emitKeypressEvents } from "node:readline";
 import { completeSlashCommand, renderSlashCommands, slashCommands } from "./slash-commands.js";
 import { ThaneStore } from "./store.js";
-import type { ConversationSummary, MessageView, ThaneChannel } from "./model.js";
+import type { ConversationSummary, MessageView, ThaneChannel, ThaneWorkspace } from "./model.js";
 import type { SlashCommand } from "./slash-commands.js";
 
 const CLEAR = "\x1b[2J\x1b[H";
@@ -53,6 +53,61 @@ function fit(value: string, width: number): string {
     return value + " ".repeat(width - plain.length);
   }
   return `${plain.slice(0, Math.max(0, width - 1))}…`;
+}
+
+function hashString(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function workspaceInitials(workspace: ThaneWorkspace): string {
+  const words = (workspace.name || workspace.slug)
+    .split(/[^a-z0-9]+/i)
+    .map((word) => word.trim())
+    .filter(Boolean);
+  const initials = words.length > 1
+    ? words.map((word) => word[0]).join("")
+    : (words[0] ?? workspace.slug).slice(0, 4);
+  return initials.toUpperCase().slice(0, 4);
+}
+
+function renderWorkspaceCrest(workspace: ThaneWorkspace, width: number): string[] {
+  if (width < 18) {
+    return [fit(`${BOLD}${workspace.slug}${RESET}`, width), fit("", width)];
+  }
+
+  const innerWidth = Math.min(width - 2, 26);
+  const sidePad = " ".repeat(Math.max(0, Math.floor((width - innerWidth - 2) / 2)));
+  const seed = `${workspace.id}:${workspace.slug}:${workspace.name}`;
+  const hash = hashString(seed);
+  const glyphs = [" ", ".", ":", "+", "*", "#"];
+  const motifRows = Array.from({ length: 4 }, (_, row) => {
+    const left = Array.from({ length: 4 }, (_, column) => {
+      const shift = (row * 7 + column * 5) % 24;
+      return glyphs[(hash >>> shift) % glyphs.length] ?? " ";
+    });
+    return [...left, glyphs[(hash >>> ((row * 11) % 24)) % glyphs.length] ?? " ", ...left.slice().reverse()].join("");
+  });
+  const title = ` ${workspaceInitials(workspace)} `;
+  const titlePad = Math.max(0, innerWidth - title.length);
+  const titleLine = `${title}${" ".repeat(titlePad)}`;
+  const artPad = Math.max(0, Math.floor((innerWidth - motifRows[0]!.length) / 2));
+
+  return [
+    `${sidePad}.${"-".repeat(innerWidth)}.${" ".repeat(width - sidePad.length - innerWidth - 2)}`,
+    `${sidePad}|${fit(titleLine, innerWidth)}|${" ".repeat(width - sidePad.length - innerWidth - 2)}`,
+    ...motifRows.map((row) => {
+      const art = `${" ".repeat(artPad)}${row}`;
+      return `${sidePad}|${fit(art, innerWidth)}|${" ".repeat(width - sidePad.length - innerWidth - 2)}`;
+    }),
+    `${sidePad}'${"-".repeat(innerWidth)}'${" ".repeat(width - sidePad.length - innerWidth - 2)}`,
+    fit(`${BOLD}${workspace.slug}${RESET}`, width),
+    fit("", width)
+  ];
 }
 
 function wrap(value: string, width: number): string[] {
@@ -365,8 +420,10 @@ function renderScreen(inputText: string, state: {
   const renderedMessages = messages
     .slice(firstVisibleMessage)
     .flatMap((message, index) => renderMessage(message, mainWidth - 2, state.focus === "messages" && firstVisibleMessage + index === state.messageIndex));
+  const workspaceCrest = renderWorkspaceCrest(state.store.activeWorkspace, sidebarWidth);
+  const conversationRows = Math.max(1, contentRows - workspaceCrest.length);
   const firstVisibleConversation = state.focus === "sidebar"
-    ? Math.max(0, Math.min(state.conversationIndex - Math.floor(contentRows / 2), items.length - contentRows))
+    ? Math.max(0, Math.min(state.conversationIndex - Math.floor(conversationRows / 2), items.length - conversationRows))
     : 0;
   const helpLines = state.showMenu
     ? renderMenuLines(state.menuIndex, contentRows)
@@ -383,10 +440,12 @@ function renderScreen(inputText: string, state: {
     : renderedMessages.slice(-contentRows);
 
   for (let row = 0; row < contentRows; row += 1) {
-    const itemIndex = firstVisibleConversation + row;
-    const item = items[itemIndex];
+    const itemIndex = firstVisibleConversation + row - workspaceCrest.length;
+    const item = row >= workspaceCrest.length ? items[itemIndex] : undefined;
     let left = "";
-    if (item) {
+    if (row < workspaceCrest.length) {
+      left = workspaceCrest[row] ?? " ".repeat(sidebarWidth);
+    } else if (item) {
       const unread = item.unreadCount > 0 ? ` ${item.unreadCount}` : "";
       const mention = item.mentionCount > 0 ? " @" : "";
       const marker = item.id === state.activeChannelId ? ">" : " ";

@@ -35,6 +35,19 @@ async function signAuthToken(email: string): Promise<string> {
   return `${payload}.${signature}`;
 }
 
+function createAuthStartDbMock(rateRows: Array<{ id?: string; window_started_at?: string; count?: number } | null> = []) {
+  const calls: Array<{ sql: string; args: unknown[] }> = [];
+  const first = vi.fn(async () => rateRows.shift() ?? null);
+  const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+  const prepare = vi.fn((sql: string) => ({
+    bind: vi.fn((...args: unknown[]) => {
+      calls.push({ sql, args });
+      return sql.includes("FROM thane_cli_rate_limits") ? { first } : { run };
+    })
+  }));
+  return { calls, first, prepare, run };
+}
+
 describe("@ask-thane/api-worker", () => {
   const env = {
     DB: {},
@@ -61,15 +74,12 @@ describe("@ask-thane/api-worker", () => {
   });
 
   it("starts Thane CLI auth by sending a verification email", async () => {
-    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
-    const bind = vi.fn(() => ({ run }));
-    const prepare = vi.fn(() => ({ bind }));
-    const fetchEmail = vi.fn(async () => new Response("{}", { status: 200 }));
-    vi.stubGlobal("fetch", fetchEmail);
+    const db = createAuthStartDbMock();
+    const sendEmail = vi.fn(async () => ({ messageId: "email_1" }));
     const authEnv = {
-      DB: { prepare },
+      DB: { prepare: db.prepare },
+      EMAIL: { send: sendEmail },
       BUILD_ENV: "production",
-      RESEND_API_KEY: "resend_test",
       THANE_CLI_AUTH_SECRET: "test-secret",
       THANE_CLI_EMAIL_FROM: "Thane <noreply@askthane.com>"
     } as never;
@@ -88,19 +98,22 @@ describe("@ask-thane/api-worker", () => {
       email: "garrett@example.com",
       delivery: "email"
     });
-    expect(fetchEmail).toHaveBeenCalledTimes(1);
-    expect(prepare).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO thane_cli_auth_codes"));
-    expect(bind.mock.calls[0]?.[1]).toBe("garrett@example.com");
-    expect(bind.mock.calls[0]?.[2]).toBe("Garrett");
-    expect(bind.mock.calls[0]?.[4]).toBe("email");
+    expect(sendEmail).toHaveBeenCalledWith({
+      from: "Thane <noreply@askthane.com>",
+      to: "garrett@example.com",
+      subject: "Your Thane Chat verification code",
+      text: expect.stringContaining("Your Thane Chat verification code is ")
+    });
+    const authInsert = db.calls.find((call) => call.sql.includes("INSERT INTO thane_cli_auth_codes"));
+    expect(authInsert?.args[1]).toBe("garrett@example.com");
+    expect(authInsert?.args[2]).toBe("Garrett");
+    expect(authInsert?.args[4]).toBe("email");
   });
 
   it("returns a Thane CLI dev verification code when email is not configured locally", async () => {
-    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
-    const bind = vi.fn(() => ({ run }));
-    const prepare = vi.fn(() => ({ bind }));
+    const db = createAuthStartDbMock();
     const authEnv = {
-      DB: { prepare },
+      DB: { prepare: db.prepare },
       BUILD_ENV: "local",
       THANE_CLI_AUTH_SECRET: "test-secret"
     } as never;
@@ -121,13 +134,14 @@ describe("@ask-thane/api-worker", () => {
       delivery: "dev_code"
     });
     expect(body.verificationCode).toMatch(/^\d{6}$/);
-    expect(bind.mock.calls[0]?.[4]).toBe("dev_code");
+    const authInsert = db.calls.find((call) => call.sql.includes("INSERT INTO thane_cli_auth_codes"));
+    expect(authInsert?.args[4]).toBe("dev_code");
   });
 
   it("rejects Thane CLI auth start in production when email is not configured", async () => {
-    const prepare = vi.fn();
+    const db = createAuthStartDbMock();
     const authEnv = {
-      DB: { prepare },
+      DB: { prepare: db.prepare },
       BUILD_ENV: "production",
       THANE_CLI_AUTH_SECRET: "test-secret"
     } as never;
@@ -142,7 +156,39 @@ describe("@ask-thane/api-worker", () => {
 
     expect(res.status).toBe(503);
     await expect(res.json()).resolves.toEqual({ ok: false, error: "email_not_configured" });
-    expect(prepare).not.toHaveBeenCalled();
+    expect(db.calls.some((call) => call.sql.includes("INSERT INTO thane_cli_auth_codes"))).toBe(false);
+  });
+
+  it("rate limits Thane CLI auth email sends before sending email", async () => {
+    const db = createAuthStartDbMock([
+      {
+        id: "rl_email",
+        window_started_at: new Date(Date.now() - 60_000).toISOString(),
+        count: 5
+      }
+    ]);
+    const sendEmail = vi.fn(async () => ({ messageId: "email_1" }));
+    const authEnv = {
+      DB: { prepare: db.prepare },
+      EMAIL: { send: sendEmail },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/auth/start", {
+        method: "POST",
+        headers: { "cf-connecting-ip": "203.0.113.10" },
+        body: JSON.stringify({ email: "garrett@example.com" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toMatch(/^\d+$/);
+    await expect(res.json()).resolves.toMatchObject({ ok: false, error: "rate_limited" });
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(db.calls.some((call) => call.sql.includes("INSERT INTO thane_cli_auth_codes"))).toBe(false);
   });
 
   it("verifies Thane CLI auth codes and returns an account", async () => {
@@ -168,7 +214,7 @@ describe("@ask-thane/api-worker", () => {
       DB: { prepare },
       BUILD_ENV: "production",
       THANE_CLI_AUTH_SECRET: "test-secret",
-      RESEND_API_KEY: "resend_test"
+      EMAIL: { send: vi.fn(async () => ({ messageId: "email_1" })) }
     } as never;
 
     const res = await worker.fetch(

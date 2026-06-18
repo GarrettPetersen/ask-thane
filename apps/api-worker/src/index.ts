@@ -2,8 +2,8 @@ import { D1TaskRepository } from "@ask-thane/data";
 
 interface Env {
   DB: D1Database;
+  EMAIL?: SendEmail;
   INTERNAL_API_BEARER_TOKEN?: string;
-  RESEND_API_KEY?: string;
   THANE_CLI_AUTH_DEV_CODES?: string;
   THANE_CLI_AUTH_SECRET?: string;
   THANE_CLI_EMAIL_FROM?: string;
@@ -16,6 +16,11 @@ interface Env {
 interface AuthStartPayload {
   email?: unknown;
   displayName?: unknown;
+}
+
+interface RateLimitResult {
+  ok: boolean;
+  retryAfterSeconds?: number;
 }
 
 interface AuthVerifyPayload {
@@ -115,6 +120,108 @@ function makeVerificationCode(): string {
   const randomValues = new Uint32Array(1);
   crypto.getRandomValues(randomValues);
   return String((randomValues[0] ?? 0) % 1_000_000).padStart(6, "0");
+}
+
+function requestIp(request: Request): string {
+  const direct = request.headers.get("cf-connecting-ip")?.trim();
+  if (direct) {
+    return direct.slice(0, 120);
+  }
+  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  return (forwarded || "unknown").slice(0, 120);
+}
+
+async function checkRateLimit(env: Env, input: {
+  purpose: string;
+  key: string;
+  keyHint?: string;
+  limit: number;
+  windowSeconds: number;
+  nowMs?: number;
+}): Promise<RateLimitResult> {
+  const nowMs = input.nowMs ?? Date.now();
+  const now = new Date(nowMs);
+  const keyHash = await sha256Hex(`thane_rate_limit:${input.purpose}:${input.key}`);
+  const row = await env.DB
+    .prepare(
+      `SELECT id, window_started_at, count
+       FROM thane_cli_rate_limits
+       WHERE purpose = ? AND key_hash = ?
+       LIMIT 1`
+    )
+    .bind(input.purpose, keyHash)
+    .first<{ id?: string; window_started_at?: string; count?: number }>();
+
+  const existingWindowMs = row?.window_started_at ? new Date(row.window_started_at).getTime() : Number.NaN;
+  const isCurrentWindow = Number.isFinite(existingWindowMs) && nowMs - existingWindowMs < input.windowSeconds * 1000;
+  const currentCount = Number(row?.count ?? 0);
+  if (row?.id && isCurrentWindow && currentCount >= input.limit) {
+    return {
+      ok: false,
+      retryAfterSeconds: Math.max(1, Math.ceil((input.windowSeconds * 1000 - (nowMs - existingWindowMs)) / 1000))
+    };
+  }
+
+  if (row?.id && isCurrentWindow) {
+    await env.DB
+      .prepare("UPDATE thane_cli_rate_limits SET count = count + 1, updated_at = ? WHERE id = ?")
+      .bind(now.toISOString(), row.id)
+      .run();
+    return { ok: true };
+  }
+
+  if (row?.id) {
+    await env.DB
+      .prepare("UPDATE thane_cli_rate_limits SET window_started_at = ?, count = 1, updated_at = ?, key_hint = ? WHERE id = ?")
+      .bind(now.toISOString(), now.toISOString(), input.keyHint ?? null, row.id)
+      .run();
+    return { ok: true };
+  }
+
+  await env.DB
+    .prepare(
+      `INSERT INTO thane_cli_rate_limits (
+         id, purpose, key_hash, key_hint, window_started_at, count, updated_at
+       ) VALUES (?, ?, ?, ?, ?, 1, ?)`
+    )
+    .bind(makeId("rl"), input.purpose, keyHash, input.keyHint ?? null, now.toISOString(), now.toISOString())
+    .run();
+  return { ok: true };
+}
+
+async function enforceAuthEmailRateLimits(request: Request, env: Env, email: string): Promise<Response | null> {
+  const nowMs = Date.now();
+  const emailLimit = await checkRateLimit(env, {
+    purpose: "thane_cli_auth_email:email",
+    key: email,
+    keyHint: email,
+    limit: 5,
+    windowSeconds: 60 * 60,
+    nowMs
+  });
+  if (!emailLimit.ok) {
+    return Response.json(
+      { ok: false, error: "rate_limited", retryAfterSeconds: emailLimit.retryAfterSeconds },
+      { status: 429, headers: { "retry-after": String(emailLimit.retryAfterSeconds ?? 60) } }
+    );
+  }
+
+  const ip = requestIp(request);
+  const ipLimit = await checkRateLimit(env, {
+    purpose: "thane_cli_auth_email:ip",
+    key: ip,
+    ...(ip === "unknown" ? { keyHint: "unknown" } : {}),
+    limit: 30,
+    windowSeconds: 60 * 60,
+    nowMs
+  });
+  if (!ipLimit.ok) {
+    return Response.json(
+      { ok: false, error: "rate_limited", retryAfterSeconds: ipLimit.retryAfterSeconds },
+      { status: 429, headers: { "retry-after": String(ipLimit.retryAfterSeconds ?? 60) } }
+    );
+  }
+  return null;
 }
 
 function makeTotpSecret(): string {
@@ -573,28 +680,16 @@ function fromAddress(env: Env): string {
 }
 
 async function sendVerificationEmail(env: Env, input: { email: string; code: string }): Promise<boolean> {
-  const apiKey = env.RESEND_API_KEY?.trim();
-  if (!apiKey) {
+  if (!env.EMAIL) {
     return false;
   }
 
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${apiKey}`,
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({
-      from: fromAddress(env),
-      to: input.email,
-      subject: "Your Thane Chat verification code",
-      text: `Your Thane Chat verification code is ${input.code}.\n\nThis code expires in 10 minutes.`
-    })
+  await env.EMAIL.send({
+    from: fromAddress(env),
+    to: input.email,
+    subject: "Your Thane Chat verification code",
+    text: `Your Thane Chat verification code is ${input.code}.\n\nThis code expires in 10 minutes.`
   });
-
-  if (!response.ok) {
-    throw new Error(`Resend email failed with status ${response.status}`);
-  }
   return true;
 }
 
@@ -613,6 +708,10 @@ async function handleThaneCliAuthStart(request: Request, env: Env): Promise<Resp
   const displayName = normalizeDisplayName(payload?.displayName);
   if (!email) {
     return Response.json({ ok: false, error: "invalid_email" }, { status: 400 });
+  }
+  const rateLimited = await enforceAuthEmailRateLimits(request, env, email);
+  if (rateLimited) {
+    return rateLimited;
   }
 
   const code = makeVerificationCode();

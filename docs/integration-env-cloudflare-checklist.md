@@ -75,13 +75,22 @@ Fill these values:
 - [ ] `ADMIN_TRIGGER_TOKEN` (for protected manual poll/status endpoints)
 - [ ] `ADMIN_HMAC_KEYS` (optional stronger admin auth: `keyId:secret,keyId2:secret2`)
 - [ ] `ADMIN_HMAC_MAX_SKEW_SECONDS` (optional, default `300`)
+- [ ] `THANE_CLI_AUTH_SECRET` (required for hosted Thane CLI auth tokens)
+- [ ] `THANE_CLI_EMAIL_FROM` (default `Thane <noreply@askthane.com>`)
 
 Notes:
 - `.env` is for local workflows and your own reference.
 - Cloudflare Workers do not automatically consume your local `.env` in production; set secrets/vars in Cloudflare too.
 - Use `node scripts/setup-stripe-prices.mjs` to create/reuse Stripe monthly prices and print the four `STRIPE_PRICE_*` values.
 
-## 3) Create and migrate D1 (separate staging and production)
+## 3) Configure Cloudflare Email Service for Thane CLI auth
+- [ ] Enable Cloudflare Email Service / Email Sending on the Cloudflare account that hosts `apps/api-worker`.
+- [ ] Verify the sender domain or subdomain used by `THANE_CLI_EMAIL_FROM` (for example `noreply@askthane.com`).
+- [ ] Add Cloudflare's required email authentication DNS records for the sender domain/subdomain.
+- [ ] Confirm `apps/api-worker/wrangler.toml` includes the `EMAIL` `send_email` binding for local, staging, and production.
+- [ ] On production, keep `THANE_CLI_AUTH_DEV_CODES=false`; without a working `EMAIL` binding, `/v1/thane-cli/auth/start` should fail closed instead of returning codes.
+
+## 4) Create and migrate D1 (separate staging and production)
 From `apps/bot-worker`:
 
 ```bash
@@ -108,7 +117,7 @@ Note:
 - Do not replay the full historical migration chain on a fresh DB after loading `schema.sql`; that can cause duplicate-column/table errors.
 - For upgrades of an already-running older DB, apply only the incremental migration files that have not yet been applied.
 
-## 4) Configure bot Worker (`ask-thane-bot`)
+## 5) Configure bot Worker (`ask-thane-bot`)
 Deploy once to create/update the Worker:
 
 ```bash
@@ -148,7 +157,7 @@ Verify endpoint:
 - [ ] `POST /admin/usage/sync-stripe` succeeds once Stripe meter names are configured
 - [ ] `GET /build-info` returns service + env + git SHA + deployed timestamp
 
-## 5) Configure API Worker (`ask-thane-api`)
+## 6) Configure API Worker (`ask-thane-api`)
 
 ```bash
 cd apps/api-worker
@@ -162,7 +171,7 @@ Checklist:
 - [ ] `GET /health` returns 200
 - [ ] `GET /v1/tasks/open-visible?...` returns JSON
 
-## 6) Configure payments Worker (`ask-thane-payments`)
+## 7) Configure payments Worker (`ask-thane-payments`)
 
 ```bash
 cd apps/payments-worker
@@ -189,7 +198,7 @@ Billing behavior expectations:
 - [ ] Upgrades are immediate with Stripe proration and unchanged billing-cycle anchor.
 - [ ] Downgrades/cancellations are configured to take effect at period end.
 
-## 7) Slack app configuration
+## 8) Slack app configuration
 In Slack app settings:
 - [ ] Upload app icon in `Basic Information` -> `Display Information`:
   - Use `apps/bot-worker/assets/slack-bot-profile-512.png` (white mark on dark gray square) for the bot profile image.
@@ -234,7 +243,7 @@ Then:
 - [ ] Copy signing secret into Worker secrets.
 - [ ] Keep bot token secret as fallback, but expect per-workspace tokens to come from OAuth installs.
 
-## 8) OpenAI / Anthropic setup
+## 9) OpenAI / Anthropic setup
 - [ ] Create API key in OpenAI dashboard.
 - [ ] Store as `OPENAI_API_KEY` in bot Worker secrets.
 - [ ] Optional: create Anthropic key and store `ANTHROPIC_API_KEY`.
@@ -244,7 +253,7 @@ Reality check:
 - Webhook path uses OpenAI for the tool-calling agent runtime when `DEFAULT_LLM_PROVIDER=openai` and `OPENAI_API_KEY` is set.
 - Scheduled polling can also invoke that runtime for context-driven interpretation.
 
-## 9) Cloudflare routing and domains
+## 10) Cloudflare routing and domains
 - [ ] Keep landing Worker on `askthane.com` (already done).
 - [ ] Put bot/api/payments Workers on non-conflicting subdomains, for example:
   - `bot.askthane.com`
@@ -252,22 +261,23 @@ Reality check:
   - `payments.askthane.com`
 - [ ] Update Slack/Stripe webhook URLs to those final domains.
 
-## 10) Final smoke test
+## 11) Final smoke test
 - [ ] Hit all three `/health` endpoints.
 - [ ] Send a message in a subscribed Slack channel and confirm bot webhook returns `{ ok: true, ... }`.
 - [ ] Wait for next cron window and confirm poll ingestion writes rows without webhook traffic.
 - [ ] Query API worker for open tasks.
 - [ ] Confirm D1 rows are being written (`tasks`, `task_actions`, `ingest_events`, `conversation_sources`, `identity_accounts`, `workspace_poll_cursors`).
 
-## 11) Recommended order from where you are now
+## 12) Recommended order from where you are now
 1. [ ] Set Cloudflare + D1 first.
-2. [ ] Deploy bot/api workers.
-3. [ ] Configure Slack app and events URL.
-4. [ ] Add OpenAI key (and Anthropic optionally).
-5. [ ] Deploy payments worker + Stripe webhook only when you start billing flows.
-6. [ ] Add bot to test Slack org after the above is stable.
+2. [ ] Configure Cloudflare Email Service before enabling production Thane CLI auth.
+3. [ ] Deploy bot/api workers.
+4. [ ] Configure Slack app and events URL.
+5. [ ] Add OpenAI key (and Anthropic optionally).
+6. [ ] Deploy payments worker + Stripe webhook only when you start billing flows.
+7. [ ] Add bot to test Slack org after the above is stable.
 
-## 12) GitHub Actions deploy workflow
+## 13) GitHub Actions deploy workflow
 - Staging workflow: `.github/workflows/deploy-workers-staging.yml`
   - Pushes to `master` deploy changed worker apps (`bot`, `api`, `payments`) to Wrangler `--env staging`.
   - Validates migration SQL with `scripts/check-d1-migrations-nondestructive.mjs` before applying migrations.
