@@ -237,9 +237,41 @@ describe("@ask-thane/api-worker", () => {
   });
 
   it("creates Thane CLI workspace invite links", async () => {
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
     const run = vi.fn(async () => ({ meta: { changes: 1 } }));
-    const bind = vi.fn(() => ({ run }));
-    const prepare = vi.fn(() => ({ bind }));
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspaces")) {
+        return { id: "wsp_1", workspace_slug: "acme-inc", workspace_name: "Acme Inc", ascii_art: null };
+      }
+      if (sql.includes("FROM thane_cli_workspace_members")) {
+        return {
+          id: "tcm_1",
+          account_id: "acct_1",
+          email: "owner@example.com",
+          display_name: "Owner",
+          handle: "owner",
+          role: "owner"
+        };
+      }
+      if (sql.includes("FROM thane_cli_channels")) {
+        return {
+          id: "tcc_1",
+          workspace_id: "wsp_1",
+          name: "general",
+          visibility: "public",
+          topic: "Default team chat",
+          created_at: new Date().toISOString()
+        };
+      }
+      return null;
+    });
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        return { run, first: first.bind({ sql }) };
+      })
+    }));
     const authEnv = {
       DB: { prepare },
       BUILD_ENV: "production",
@@ -275,9 +307,10 @@ describe("@ask-thane/api-worker", () => {
     });
     expect(body.invite.url).toContain("https://api.askthane.com/invite/");
     expect(prepare).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO thane_cli_workspace_invites"));
-    expect(bind.mock.calls[0]?.[2]).toBe("wsp_1");
-    expect(bind.mock.calls[0]?.[3]).toBe("acme-inc");
-    expect(bind.mock.calls[0]?.[6]).toBe("owner@example.com");
+    const inviteInsert = calls.find((call) => call.sql.includes("INSERT INTO thane_cli_workspace_invites"));
+    expect(inviteInsert?.args[2]).toBe("wsp_1");
+    expect(inviteInsert?.args[3]).toBe("acme-inc");
+    expect(inviteInsert?.args[6]).toBe("owner@example.com");
   });
 
   it("accepts valid Thane CLI workspace invite links", async () => {
@@ -292,10 +325,26 @@ describe("@ask-thane/api-worker", () => {
       accepted_count: 0,
       max_uses: null
     };
-    const first = vi.fn(async () => inviteRow);
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("SELECT id, workspace_id")) {
+        return inviteRow;
+      }
+      if (sql.includes("FROM thane_cli_workspace_members")) {
+        return {
+          id: "tcm_1",
+          account_id: "acct_1",
+          email: "alex@example.com",
+          display_name: "Alex",
+          handle: "alex",
+          role: "member"
+        };
+      }
+      return null;
+    });
     const run = vi.fn(async () => ({ meta: { changes: 1 } }));
     const prepare = vi.fn((sql: string) => ({
-      bind: vi.fn(() => (sql.includes("SELECT id, workspace_id") ? { first } : { run }))
+      bind: vi.fn(() => ({ run, first: first.bind({ sql }) }))
     }));
     const authEnv = {
       DB: { prepare },

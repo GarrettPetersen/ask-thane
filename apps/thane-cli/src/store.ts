@@ -456,6 +456,68 @@ export class ThaneStore {
     return this.data.accounts.find((account) => account.id === this.data.currentAccountId);
   }
 
+  async applyHostedSnapshot(snapshot: {
+    account?: ThaneAccount;
+    activeWorkspaceId?: string | null;
+    workspaces: ThaneWorkspace[];
+    workspaceMembers: ThaneWorkspaceMember[];
+    users: ThaneUser[];
+    channels: ThaneChannel[];
+    messages: ThaneMessage[];
+  }): Promise<void> {
+    if (snapshot.account) {
+      const existing = this.data.accounts.find((account) => account.id === snapshot.account?.id || account.email === snapshot.account?.email);
+      if (existing) {
+        existing.displayName = snapshot.account.displayName || existing.displayName;
+        if (snapshot.account.authToken) {
+          existing.authToken = snapshot.account.authToken;
+        }
+      } else {
+        this.data.accounts.push(snapshot.account);
+      }
+      this.data.currentAccountId = existing?.id ?? snapshot.account.id;
+    }
+
+    for (const workspace of snapshot.workspaces) {
+      const existing = this.data.workspaces.find((candidate) => candidate.id === workspace.id || candidate.slug === workspace.slug);
+      if (existing) {
+        existing.id = workspace.id;
+        existing.slug = workspace.slug;
+        existing.name = workspace.name;
+        existing.createdAt = workspace.createdAt;
+        if (workspace.asciiArt) {
+          existing.asciiArt = workspace.asciiArt;
+        } else {
+          delete existing.asciiArt;
+        }
+      } else {
+        this.data.workspaces.push(workspace);
+      }
+    }
+
+    const activeWorkspaceId = snapshot.activeWorkspaceId ?? snapshot.workspaces[0]?.id;
+    if (activeWorkspaceId) {
+      this.data.activeWorkspaceId = activeWorkspaceId;
+      this.data.workspaceMembers = this.data.workspaceMembers
+        .filter((member) => member.workspaceId !== activeWorkspaceId)
+        .concat(snapshot.workspaceMembers);
+      this.data.users = this.data.users.filter((user) => user.workspaceId !== activeWorkspaceId).concat(snapshot.users);
+      this.data.channels = this.data.channels.filter((channel) => channel.workspaceId !== activeWorkspaceId).concat(snapshot.channels);
+      this.data.messages = this.data.messages.filter((message) => message.workspaceId !== activeWorkspaceId).concat(snapshot.messages);
+
+      const currentAccountId = this.data.currentAccountId;
+      const hostedUser =
+        (currentAccountId && snapshot.users.find((user) => user.accountId === currentAccountId)) ??
+        snapshot.users.find((user) => user.email === this.currentAccount?.email) ??
+        snapshot.users[0];
+      if (hostedUser) {
+        this.data.currentUserId = hostedUser.id;
+      }
+    }
+
+    await saveData(this.data);
+  }
+
   get currentUser(): ThaneUser {
     const user =
       this.data.users.find(

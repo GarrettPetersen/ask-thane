@@ -7,6 +7,7 @@ import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline";
 import { runChat } from "./chat.js";
 import { cliCommands, renderCliCommands } from "./commands.js";
+import { createHostedChannel, ensureHostedWorkspace, hasHostedChat, reactHostedMessage, sendHostedMessage, syncHostedStore } from "./hosted.js";
 import { renderChannels, renderDms, renderInbox, renderMembers, renderMessages, printJson, renderUsers, renderWorkspaces } from "./render.js";
 import { parseSlackExportZip } from "./slack-import.js";
 import { resolveStorePath, ThaneStore } from "./store.js";
@@ -548,7 +549,23 @@ async function main(): Promise<void> {
     return;
   }
 
-  const store = await ThaneStore.open();
+  let store = await ThaneStore.open();
+  const syncHosted = async (options: { workspaceId?: string; silent?: boolean } = {}): Promise<boolean> => {
+    if (!hasHostedChat(store)) {
+      return false;
+    }
+    try {
+      await syncHostedStore(store, options.workspaceId ? { workspaceId: options.workspaceId } : {});
+      store = await ThaneStore.open();
+      return true;
+    } catch (error) {
+      if (!options.silent) {
+        throw error;
+      }
+      return false;
+    }
+  };
+  await syncHosted({ silent: true });
 
   if (command === "agent" && second === "context") {
     const recent = store.recent(undefined, flagNumber(args, "limit", 12));
@@ -944,7 +961,13 @@ async function main(): Promise<void> {
     if (!slug) {
       throw new Error("Usage: thane workspace create <slug>");
     }
-    const workspace = await store.createWorkspace(slug, flagString(args, "name"));
+    let workspace = await store.createWorkspace(slug, flagString(args, "name"));
+    await store.useWorkspace(workspace.slug);
+    if (hasHostedChat(store)) {
+      await ensureHostedWorkspace(store);
+      store = await ThaneStore.open();
+      workspace = store.activeWorkspace;
+    }
     wantsJson(args) ? printJson({ workspace }) : process.stdout.write(`created workspace ${workspace.slug}\n`);
     return;
   }
@@ -955,6 +978,7 @@ async function main(): Promise<void> {
       throw new Error("Usage: thane workspace use <slug>");
     }
     const workspace = await store.useWorkspace(slug);
+    await syncHosted({ workspaceId: workspace.id, silent: true });
     wantsJson(args) ? printJson({ activeWorkspace: workspace }) : process.stdout.write(`using workspace ${workspace.slug}\n`);
     return;
   }
@@ -971,6 +995,9 @@ async function main(): Promise<void> {
     if (action === "set") {
       const art = await readWorkspaceArtInput(args, 3);
       const workspace = await store.setWorkspaceAsciiArt(art);
+      if (hasHostedChat(store)) {
+        await ensureHostedWorkspace(store);
+      }
       wantsJson(args)
         ? printJson({ workspace, art: workspace.asciiArt, source: "custom" })
         : process.stdout.write(`updated workspace art for ${workspace.slug}\n`);
@@ -978,6 +1005,9 @@ async function main(): Promise<void> {
     }
     if (action === "reset" || action === "clear") {
       const workspace = await store.clearWorkspaceAsciiArt();
+      if (hasHostedChat(store)) {
+        await ensureHostedWorkspace(store);
+      }
       wantsJson(args)
         ? printJson({ workspace, art: null, source: "generated" })
         : process.stdout.write(`reset workspace art for ${workspace.slug}\n`);
@@ -1145,7 +1175,13 @@ async function main(): Promise<void> {
     if (!name) {
       throw new Error("Usage: thane channel create <name>");
     }
-    const channel = await store.createChannel(name, flagString(args, "topic"), args.flags.has("private") ? "private" : "public");
+    const topic = flagString(args, "topic");
+    let channel = await store.createChannel(name, topic, args.flags.has("private") ? "private" : "public");
+    if (hasHostedChat(store)) {
+      await createHostedChannel(store, { name, ...(topic ? { topic } : {}), private: args.flags.has("private") });
+      store = await ThaneStore.open();
+      channel = store.findChannel(name) ?? channel;
+    }
     wantsJson(args) ? printJson({ channel }) : process.stdout.write(`created #${channel.name}\n`);
     return;
   }
@@ -1197,8 +1233,18 @@ async function main(): Promise<void> {
     if (!channel || !text) {
       throw new Error("Usage: thane send <channel> <message>");
     }
-    const message = await store.sendMessage(channel, text);
-    wantsJson(args) ? printJson({ message }) : process.stdout.write(`sent ${message.id} to #${store.findChannel(channel)?.name ?? channel}\n`);
+    const localMessage = await store.sendMessage(channel, text);
+    let outputMessage: { id: string } = localMessage;
+    if (hasHostedChat(store)) {
+      const target = store.findChannel(channel);
+      if (!target) {
+        throw new Error(`Channel ${channel} was not found.`);
+      }
+      await sendHostedMessage(store, { channelId: target.id, text, source: "terminal" });
+      store = await ThaneStore.open();
+      outputMessage = store.recent(target.id, 1).at(-1) ?? localMessage;
+    }
+    wantsJson(args) ? printJson({ message: outputMessage }) : process.stdout.write(`sent ${outputMessage.id} to #${store.findChannel(channel)?.name ?? channel}\n`);
     return;
   }
 
@@ -1264,8 +1310,22 @@ async function main(): Promise<void> {
     if (!second || !text) {
       throw new Error("Usage: thane reply <message-id> <message>");
     }
-    const message = await store.reply(second, text);
-    wantsJson(args) ? printJson({ message }) : process.stdout.write(`sent ${message.id} in thread ${message.threadRootId}\n`);
+    const root = store.thread(second)[0];
+    if (!root) {
+      throw new Error(`Message ${second} was not found.`);
+    }
+    const localMessage = await store.reply(second, text);
+    let outputMessage: { id: string; threadRootId?: string } = localMessage;
+    if (hasHostedChat(store)) {
+      const target = store.findChannel(root.channel);
+      if (!target) {
+        throw new Error(`Channel ${root.channel} was not found.`);
+      }
+      await sendHostedMessage(store, { channelId: target.id, text, source: "terminal", threadRootId: root.threadRootId ?? root.id });
+      store = await ThaneStore.open();
+      outputMessage = store.thread(second).at(-1) ?? localMessage;
+    }
+    wantsJson(args) ? printJson({ message: outputMessage }) : process.stdout.write(`sent ${outputMessage.id} in thread ${outputMessage.threadRootId ?? second}\n`);
     return;
   }
 
@@ -1274,8 +1334,14 @@ async function main(): Promise<void> {
     if (!second || !emoji) {
       throw new Error("Usage: thane react <message-id> <emoji>");
     }
-    const message = await store.react(second, emoji);
-    wantsJson(args) ? printJson({ message }) : process.stdout.write(`reacted to ${second}\n`);
+    const localMessage = await store.react(second, emoji);
+    let outputMessage: { id: string } = localMessage;
+    if (hasHostedChat(store)) {
+      await reactHostedMessage(store, { messageId: second, emoji });
+      store = await ThaneStore.open();
+      outputMessage = store.thread(second)[0] ?? localMessage;
+    }
+    wantsJson(args) ? printJson({ message: outputMessage }) : process.stdout.write(`reacted to ${second}\n`);
     return;
   }
 

@@ -10,6 +10,7 @@ compatibility_date = "2026-05-08"
 binding = "DB"
 database_name = "ask-thane"
 database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"
+migrations_dir = "../../infra/d1/migrations"
 
 [[send_email]]
 name = "EMAIL"
@@ -30,6 +31,7 @@ name = "ask-thane-api-staging"
 binding = "DB"
 database_name = "ask-thane-staging"
 database_id = "02db76d8-728f-40a4-84f8-f17779f8e8de"
+migrations_dir = "../../infra/d1/migrations"
 
 [[env.staging.send_email]]
 name = "EMAIL"
@@ -54,6 +56,7 @@ name = "ask-thane-api"
 binding = "DB"
 database_name = "ask-thane"
 database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"
+migrations_dir = "../../infra/d1/migrations"
 
 [[env.production.send_email]]
 name = "EMAIL"
