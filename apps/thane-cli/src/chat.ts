@@ -134,17 +134,49 @@ async function selectConversation(store: ThaneStore, target: string): Promise<Th
   return store.createChannel(target.replace(/^#/, ""));
 }
 
+function threadedMessages(messages: MessageView[]): MessageView[] {
+  const byRoot = new Map<string, MessageView[]>();
+  const roots: MessageView[] = [];
+  const seen = new Set<string>();
+
+  for (const message of messages) {
+    if (message.threadRootId) {
+      const replies = byRoot.get(message.threadRootId) ?? [];
+      replies.push(message);
+      byRoot.set(message.threadRootId, replies);
+    } else {
+      roots.push(message);
+      seen.add(message.id);
+    }
+  }
+
+  const ordered: MessageView[] = [];
+  for (const root of roots) {
+    ordered.push(root);
+    ordered.push(...(byRoot.get(root.id) ?? []));
+  }
+  for (const message of messages) {
+    if (message.threadRootId && !seen.has(message.threadRootId)) {
+      ordered.push(message);
+    }
+  }
+  return ordered;
+}
+
 function renderMessage(message: MessageView, width: number, selected = false): string[] {
   const date = new Date(message.createdAt);
   const time = Number.isNaN(date.getTime())
     ? message.createdAt
     : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const isReply = Boolean(message.threadRootId);
+  const indent = isReply ? "    " : "";
   const marker = selected ? `${BOLD}>${RESET} ` : "  ";
   const thread = message.replyCount > 0 ? ` ${DIM}(${message.replyCount} replies)${RESET}` : "";
   const reactions = message.reactions.length > 0
     ? ` ${DIM}${message.reactions.map((reaction) => reaction.emoji).join(" ")}${RESET}`
     : "";
-  const prefix = `${marker}${DIM}${time}${RESET} ${BOLD}${message.author}${RESET}: `;
+  const branch = isReply ? `${DIM}└─${RESET} ` : "";
+  const prefix = `${indent}${marker}${branch}${DIM}${time}${RESET} ${BOLD}${message.author}${RESET}: `;
   const bodyWidth = Math.max(10, width - visibleLength(prefix));
   const lines = wrap(`${message.text}${thread}${reactions}`, bodyWidth);
   return lines.map((line, index) => (index === 0 ? `${prefix}${line}` : `${" ".repeat(visibleLength(prefix))}${line}`));
@@ -245,7 +277,7 @@ function renderScreen(inputText: string, state: {
   const contentRows = rows - 4;
   const active = state.store.findChannel(state.activeChannelId);
   const items = conversations(state.store, state.activeChannelId);
-  const messages = state.store.recent(state.activeChannelId, 200);
+  const messages = threadedMessages(state.store.recent(state.activeChannelId, 200));
   const targetMessage = state.targetMessageId ? messages.find((message) => message.id === state.targetMessageId) : undefined;
 
   const lines: string[] = [];
@@ -346,7 +378,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     } else {
       conversationIndex = Math.min(Math.max(0, conversationIndex), Math.max(0, items.length - 1));
     }
-    const messages = store.recent(activeChannel.id, 200);
+    const messages = threadedMessages(store.recent(activeChannel.id, 200));
     messageIndex = Math.min(Math.max(0, messageIndex), Math.max(0, messages.length - 1));
     if (targetMessageId && !messages.some((message) => message.id === targetMessageId)) {
       targetMessageId = undefined;
@@ -367,7 +399,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     });
   };
 
-  const switchTo = async (conversationId: string): Promise<void> => {
+  const switchTo = async (conversationId: string, nextFocus: ChatFocus = "messages"): Promise<void> => {
     const channel = store.findChannel(conversationId);
     if (!channel) {
       return;
@@ -375,8 +407,8 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     activeChannel = channel;
     showHelp = false;
     showMenu = false;
-    focus = "messages";
-    messageIndex = Math.max(0, store.recent(activeChannel.id, 200).length - 1);
+    focus = nextFocus;
+    messageIndex = Math.max(0, threadedMessages(store.recent(activeChannel.id, 200)).length - 1);
     status = `Switched to ${channelLabel(channel)}`;
     await store.markReadConversation(activeChannel.id);
     await refresh();
@@ -399,7 +431,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
   };
 
   const focusMessages = (): void => {
-    const messages = store.recent(activeChannel.id, 200);
+    const messages = threadedMessages(store.recent(activeChannel.id, 200));
     messageIndex = Math.max(0, messages.length - 1);
     focus = "messages";
     status = "";
@@ -411,7 +443,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
   };
 
   const selectedMessage = (): MessageView | undefined => {
-    return store.recent(activeChannel.id, 200)[messageIndex];
+    return threadedMessages(store.recent(activeChannel.id, 200))[messageIndex];
   };
 
   const startReply = (): void => {
@@ -494,7 +526,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       const sent = await store.reply(targetMessageId, trimmed);
       composerMode = "message";
       targetMessageId = undefined;
-      messageIndex = Math.max(0, store.recent(activeChannel.id, 200).findIndex((message) => message.id === sent.id));
+      messageIndex = Math.max(0, threadedMessages(store.recent(activeChannel.id, 200)).findIndex((message) => message.id === sent.id));
       status = "";
       await store.markReadConversation(activeChannel.id);
       return;
@@ -530,7 +562,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       showHelp = false;
       showMenu = false;
       focus = "messages";
-      messageIndex = Math.max(0, store.recent(activeChannel.id, 200).length - 1);
+      messageIndex = Math.max(0, threadedMessages(store.recent(activeChannel.id, 200)).length - 1);
       return;
     }
     if (trimmed.startsWith("/dm ")) {
@@ -540,7 +572,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       showHelp = false;
       showMenu = false;
       focus = "messages";
-      messageIndex = Math.max(0, store.recent(activeChannel.id, 200).length - 1);
+      messageIndex = Math.max(0, threadedMessages(store.recent(activeChannel.id, 200)).length - 1);
       return;
     }
     if (trimmed.startsWith("/workspace ")) {
@@ -556,7 +588,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       return;
     }
     const sent = await store.sendMessage(activeChannel.id, trimmed);
-    const messages = store.recent(activeChannel.id, 200);
+    const messages = threadedMessages(store.recent(activeChannel.id, 200));
     status = messages.some((message) => message.id === sent.id) ? "" : "";
     messageIndex = Math.max(0, messages.findIndex((message) => message.id === sent.id));
     showHelp = false;
@@ -653,7 +685,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
           } else if (key.name === "return") {
             const selected = items[conversationIndex];
             if (selected) {
-              await switchTo(selected.id);
+              await switchTo(selected.id, "sidebar");
               return;
             }
           } else if (key.name === "right") {
@@ -671,7 +703,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
           return;
         }
         if (focus === "messages") {
-          const messages = store.recent(activeChannel.id, 200);
+          const messages = threadedMessages(store.recent(activeChannel.id, 200));
           if (key.name === "up") {
             messageIndex = messageIndex === 0 ? Math.max(0, messages.length - 1) : messageIndex - 1;
           } else if (key.name === "down") {

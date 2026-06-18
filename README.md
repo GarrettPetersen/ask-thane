@@ -195,6 +195,8 @@ Tab                autocomplete slash commands, channels, workspaces, users, and
 Esc                close menu/help, cancel reply/react, or return to typing
 ```
 
+Thread replies render indented under their parent message, and selecting a channel or DM from the sidebar keeps focus in the sidebar so you can keep browsing.
+
 Create and switch workspaces:
 ```bash
 pnpm thane workspaces
