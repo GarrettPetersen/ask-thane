@@ -178,7 +178,8 @@ function renderMessage(message: MessageView, width: number, selected = false): s
     ? ` ${DIM}${message.reactions.map((reaction) => reaction.emoji).join(" ")}${RESET}`
     : "";
   const branch = isReply ? `${DIM}└─${RESET} ` : "";
-  const prefix = `${indent}${marker}${branch}${DIM}${time}${RESET} ${BOLD}${message.author}${RESET}: `;
+  const sourceMarker = message.source === "terminal" ? " 🤖" : "";
+  const prefix = `${indent}${marker}${branch}${DIM}${time}${RESET} ${BOLD}${message.author}${sourceMarker}${RESET}: `;
   const bodyWidth = Math.max(10, width - visibleLength(prefix));
   const lines = wrap(`${message.text}${thread}${reactions}`, bodyWidth);
   return lines.map((line, index) => (index === 0 ? `${prefix}${line}` : `${" ".repeat(visibleLength(prefix))}${line}`));
@@ -562,7 +563,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
         status = "No reply target selected.";
         return;
       }
-      const sent = await store.reply(targetMessageId, trimmed);
+      const sent = await store.reply(targetMessageId, trimmed, "chat");
       composerMode = "message";
       targetMessageId = undefined;
       messageIndex = Math.max(0, threadedMessages(store.recent(activeChannel.id, 200)).findIndex((message) => message.id === sent.id));
@@ -621,7 +622,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = "Unknown command. Type /help.";
       return;
     }
-    const sent = await store.sendMessage(activeChannel.id, trimmed);
+    const sent = await store.sendMessage(activeChannel.id, trimmed, undefined, "chat");
     const messages = threadedMessages(store.recent(activeChannel.id, 200));
     status = messages.some((message) => message.id === sent.id) ? "" : "";
     messageIndex = Math.max(0, messages.findIndex((message) => message.id === sent.id));

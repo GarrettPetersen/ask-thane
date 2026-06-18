@@ -1378,7 +1378,7 @@ export class ThaneStore {
     return channel;
   }
 
-  async sendMessage(channelName: string, text: string, threadRootId?: string): Promise<ThaneMessage> {
+  async sendMessage(channelName: string, text: string, threadRootId?: string, source: "chat" | "terminal" = "terminal"): Promise<ThaneMessage> {
     const channel = this.findChannel(channelName) ?? (await this.createChannel(channelName));
     if (!this.canReadChannel(channel)) {
       throw new Error(`Channel ${channelName} was not found.`);
@@ -1396,6 +1396,7 @@ export class ThaneStore {
       authorId: this.currentUser.id,
       text,
       createdAt: nowIso(),
+      source,
       ...(threadRootId ? { threadRootId } : {}),
       reactions: [],
       mentions: extractMentions(text)
@@ -1439,6 +1440,7 @@ export class ThaneStore {
       authorId: integration.botUserId,
       text: responseText,
       createdAt: nowIso(),
+      source: "terminal",
       ...(message.threadRootId ? { threadRootId: message.threadRootId } : { threadRootId: message.id }),
       reactions: [],
       mentions: []
@@ -1447,17 +1449,17 @@ export class ThaneStore {
     this.data.messages.push(response);
   }
 
-  async sendDm(handle: string, text: string): Promise<ThaneMessage> {
+  async sendDm(handle: string, text: string, source: "chat" | "terminal" = "terminal"): Promise<ThaneMessage> {
     const channel = await this.findOrCreateDm(handle);
-    return this.sendMessage(channel.id, text);
+    return this.sendMessage(channel.id, text, undefined, source);
   }
 
-  async reply(messageId: string, text: string): Promise<ThaneMessage> {
+  async reply(messageId: string, text: string, source: "chat" | "terminal" = "terminal"): Promise<ThaneMessage> {
     const root = this.data.messages.find((message) => message.workspaceId === this.activeWorkspace.id && message.id === messageId);
     if (!root) {
       throw new Error(`Message ${messageId} was not found.`);
     }
-    return this.sendMessage(root.channelId, text, root.threadRootId ?? root.id);
+    return this.sendMessage(root.channelId, text, root.threadRootId ?? root.id, source);
   }
 
   async react(messageId: string, emoji: string): Promise<ThaneMessage> {
@@ -1701,6 +1703,7 @@ export class ThaneStore {
       author: users.get(message.authorId) ?? message.authorId,
       text: message.text,
       createdAt: message.createdAt,
+      ...(message.source ? { source: message.source } : {}),
       ...(message.threadRootId ? { threadRootId: message.threadRootId } : {}),
       replyCount: repliesByRoot.get(message.id) ?? 0,
       reactions: message.reactions,

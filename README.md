@@ -196,6 +196,7 @@ Esc                close menu/help, cancel reply/react, or return to typing
 ```
 
 Thread replies render indented under their parent message, and selecting a channel or DM from the sidebar keeps focus in the sidebar so you can keep browsing. In the reaction picker, use arrows to choose a common reaction, Enter to apply it, or `c` to type a custom reaction.
+Messages sent through scriptable terminal commands render with a bot marker in chat, so teammates can distinguish likely automation from live typing.
 
 Create and switch workspaces:
 ```bash

@@ -1,5 +1,6 @@
 export type WorkspaceRole = "owner" | "admin" | "member";
 export type ChannelVisibility = "public" | "private";
+export type MessageSource = "chat" | "terminal";
 
 export interface ThaneAccount {
   id: string;
@@ -97,6 +98,7 @@ export interface ThaneMessage {
   authorId: string;
   text: string;
   createdAt: string;
+  source?: MessageSource;
   threadRootId?: string;
   reactions: ThaneReaction[];
   mentions: string[];
@@ -134,6 +136,7 @@ export interface MessageView {
   author: string;
   text: string;
   createdAt: string;
+  source?: MessageSource;
   threadRootId?: string;
   replyCount: number;
   reactions: ThaneReaction[];
