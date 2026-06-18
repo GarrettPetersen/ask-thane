@@ -181,7 +181,8 @@ function renderMessage(message: MessageView, width: number, selected = false): s
   const sourceMarker = message.source === "terminal" ? " 🤖" : "";
   const prefix = `${indent}${marker}${branch}${DIM}${time}${RESET} ${BOLD}${message.author}${sourceMarker}${RESET}: `;
   const bodyWidth = Math.max(10, width - visibleLength(prefix));
-  const lines = wrap(`${message.text}${thread}${reactions}`, bodyWidth);
+  const actionHint = selected ? ` ${DIM}r reply · e react${RESET}` : "";
+  const lines = wrap(`${message.text}${thread}${reactions}${actionHint}`, bodyWidth);
   return lines.map((line, index) => (index === 0 ? `${prefix}${line}` : `${" ".repeat(visibleLength(prefix))}${line}`));
 }
 
@@ -259,12 +260,12 @@ function renderMenuLines(selectedIndex: number, availableRows: number): string[]
 
 function renderReactionPickerLines(selectedIndex: number): string[] {
   const options = QUICK_REACTIONS.map((reaction, index) => {
-    const label = ` ${reaction} `;
+    const label = ` ${index + 1} ${reaction} `;
     return index === selectedIndex ? `${INVERSE}${label}${RESET}` : label;
   });
   return [
     `${BOLD}React${RESET}`,
-    `${DIM}Use arrows, Enter to apply, c for custom, Esc to close.${RESET}`,
+    `${DIM}Use arrows or 1-${QUICK_REACTIONS.length}, Enter to apply, c for custom, Esc to close.${RESET}`,
     "",
     options.join("  ")
   ];
@@ -723,6 +724,9 @@ export async function runChat(initialChannel = "general"): Promise<void> {
             reactionIndex = reactionIndex === QUICK_REACTIONS.length - 1 ? 0 : reactionIndex + 1;
           } else if (key.name === "return") {
             await applyReaction(QUICK_REACTIONS[reactionIndex] ?? "👍");
+          } else if (/^[1-8]$/.test(key.sequence ?? "")) {
+            const selectedIndex = Number(key.sequence) - 1;
+            await applyReaction(QUICK_REACTIONS[selectedIndex] ?? "👍");
           } else if (key.name === "c") {
             showReactionPicker = false;
             focus = "composer";

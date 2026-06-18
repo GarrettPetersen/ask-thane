@@ -191,11 +191,12 @@ Up / Down          navigate the focused sidebar/message list, or recall input wh
 Enter              open the selected channel/DM, reply to the selected message, or send typed text
 r                  reply to the selected message
 e                  open a reaction picker for the selected message
+1-8                apply the visible quick reaction while the picker is open
 Tab                autocomplete slash commands, channels, workspaces, users, and mentions
 Esc                close menu/help, cancel reply/react, or return to typing
 ```
 
-Thread replies render indented under their parent message, and selecting a channel or DM from the sidebar keeps focus in the sidebar so you can keep browsing. In the reaction picker, use arrows to choose a common reaction, Enter to apply it, or `c` to type a custom reaction.
+Thread replies render indented under their parent message, and selecting a channel or DM from the sidebar keeps focus in the sidebar so you can keep browsing. The selected message shows dim reply/react hints inline. In the reaction picker, use arrows or number keys to choose a common reaction, Enter to apply it, or `c` to type a custom reaction.
 Messages sent through scriptable terminal commands render with a bot marker in chat, so teammates can distinguish likely automation from live typing.
 
 Create and switch workspaces:
