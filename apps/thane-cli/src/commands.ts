@@ -20,21 +20,27 @@ export const cliCommands: CliCommand[] = [
   },
   {
     category: "Accounts",
+    command: "thane init [--email <email>] [--name \"...\"]",
+    description: "Start first-run setup, prompt for email, and verify the account.",
+    examples: ["thane init"]
+  },
+  {
+    category: "Accounts",
     command: "thane signup <email> [--name \"...\"]",
     description: "Create a local account and print a verification code.",
-    examples: ["thane signup you@example.com --name \"You\""]
+    examples: ["thane signup <email> --name \"Your Name\""]
   },
   {
     category: "Accounts",
     command: "thane login <email>",
     description: "Start email-code login for an existing or new account.",
-    examples: ["thane login you@example.com"]
+    examples: ["thane login <email>"]
   },
   {
     category: "Accounts",
     command: "thane verify <email> <code>",
     description: "Complete email-code login.",
-    examples: ["thane verify you@example.com 123456"]
+    examples: ["thane verify <email> 123456"]
   },
   {
     category: "Accounts",

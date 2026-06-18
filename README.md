@@ -193,9 +193,7 @@ pnpm thane workspace current --json
 
 Create and use accounts:
 ```bash
-pnpm thane signup garrett@example.com --name "Garrett"
-pnpm thane login garrett@example.com
-pnpm thane verify garrett@example.com 123456
+pnpm thane init
 pnpm thane whoami --json
 pnpm thane logout
 ```
@@ -270,8 +268,7 @@ pnpm thane dm-recent alex --json
 
 Enable the optional Ask Thane integration:
 ```bash
-pnpm thane login garrett@example.com
-pnpm thane verify garrett@example.com 123456
+pnpm thane init
 pnpm thane ask-thane enable
 pnpm thane notify location thane_cli
 pnpm thane send engineering "@thane can you track this review?"

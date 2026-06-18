@@ -67,6 +67,13 @@ declare module "node:process" {
 }
 
 declare module "node:readline" {
+  export function createInterface(options: {
+    input: unknown;
+    output: { write(chunk: string): void };
+  }): {
+    question(prompt: string, callback: (answer: string) => void): void;
+    close(): void;
+  };
   export function emitKeypressEvents(input: unknown): void;
 }
 

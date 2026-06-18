@@ -4,8 +4,7 @@ Terminal-native team chat for Thane workspaces.
 
 ```bash
 npm install -g @ask-thane/thane-cli
-thane commands
-thane signup you@example.com
+thane init
 thane chat general
 ```
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
+import { stdin, stdout } from "node:process";
+import { createInterface } from "node:readline";
 import { runChat } from "./chat.js";
 import { cliCommands, renderCliCommands } from "./commands.js";
 import { renderChannels, renderDms, renderInbox, renderMembers, renderMessages, printJson, renderUsers, renderWorkspaces } from "./render.js";
@@ -85,6 +87,22 @@ function readMessageText(args: ParsedArgs, startAt: number): string {
   return args.positionals.slice(startAt).join(" ").trim();
 }
 
+function createPrompter(): { ask(label: string): Promise<string>; close(): void } {
+  const terminal = createInterface({ input: stdin, output: stdout });
+  return {
+    ask(label: string): Promise<string> {
+      return new Promise((resolve) => {
+        terminal.question(label, (answer) => {
+          resolve(answer.trim());
+        });
+      });
+    },
+    close(): void {
+      terminal.close();
+    }
+  };
+}
+
 function slugFromSlackExportPath(path: string): string {
   const base = basename(path).replace(/\.zip$/i, "").replace(/slack[-_ ]?export/gi, "slack").replace(/[^a-z0-9._-]+/gi, "-");
   return base.toLowerCase().replace(/^-+|-+$/g, "") || "slack-import";
@@ -129,6 +147,7 @@ Interactive:
   thane dm <handle>
 
 Accounts:
+  thane init [--email <email>] [--name "..."]
   thane signup <email> [--name "..."]
   thane login <email>
   thane verify <email> <code>
@@ -226,6 +245,49 @@ async function main(): Promise<void> {
   }
 
   const store = await ThaneStore.open();
+
+  if (command === "init") {
+    const isDemoAccount = store.currentAccount?.email === "you@example.local";
+    if (store.currentAccount && !isDemoAccount && !args.flags.has("force")) {
+      const next = {
+        account: store.currentAccount,
+        workspace: store.activeWorkspace,
+        next: ["thane chat general", "thane commands"]
+      };
+      wantsJson(args)
+        ? printJson(next)
+        : process.stdout.write(`signed in as ${store.currentAccount.email}\nopen chat: thane chat general\n`);
+      return;
+    }
+
+    const prompts = wantsJson(args) ? undefined : createPrompter();
+    try {
+      const email = second ?? flagString(args, "email") ?? (prompts ? await prompts.ask("Email: ") : undefined);
+      if (!email) {
+        throw new Error("Usage: thane init --email <email> [--name \"...\"] --json");
+      }
+      const displayName = flagString(args, "name") ?? (prompts ? await prompts.ask("Name (optional): ") : undefined);
+      const { account, code } = await store.signup(email, displayName || undefined);
+      if (wantsJson(args)) {
+        printJson({
+          account,
+          verificationCode: code,
+          note: "Local MVP prints verification codes. Hosted Thane Chat should send this code by email."
+        });
+        return;
+      }
+      process.stdout.write(
+        `verification code for ${account.email}: ${code}\n` +
+          "Enter the code to finish setup.\n"
+      );
+      const enteredCode = await prompts?.ask("Code: ");
+      const verified = await store.verify(account.email, enteredCode ?? "");
+      process.stdout.write(`signed in as ${verified.email}\nopen chat: thane chat general\n`);
+    } finally {
+      prompts?.close();
+    }
+    return;
+  }
 
   if (command === "signup") {
     const email = second;
