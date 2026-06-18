@@ -67,8 +67,8 @@ function makeLoginCode(): string {
 }
 
 export const THANE_CLI_FREE_LIMITS = {
-  members: 10,
-  privateChannels: 3,
+  members: 100,
+  privateChannels: 10,
   historyDays: 90
 } as const;
 

@@ -243,7 +243,7 @@ THANE_PAYMENTS_BASE_URL=https://pay.askthane.com \
   pnpm thane billing checkout
 ```
 
-Free Thane CLI workspaces are intentionally useful: up to 10 members, 3 private channels, public channels, DMs, threads, mentions, inbox/search, and JSON-friendly commands. Thane CLI Team is `$8/member/mo` and removes the member/private-channel limits for larger hosted teams.
+Free Thane CLI workspaces are intentionally useful: up to 100 members, 10 private channels, public channels, DMs, threads, mentions, inbox/search, and JSON-friendly commands. Thane CLI Team is `$8/member/mo` and removes the member/private-channel limits for larger hosted teams.
 
 Use scriptable commands:
 ```bash
@@ -318,8 +318,8 @@ The CLI always scopes channels, messages, threads, unread state, mentions, and s
 - Push/PR CI (`.github/workflows/ci.yml`) also runs `pnpm test`.
 
 ## Pricing Defaults
-- Thane CLI Free: CLI-first team chat for up to 10 workspace members, 3 private channels, public channels, DMs, threads, mentions, inbox/search, JSON-friendly commands, and optional local Ask Thane integration.
-- Thane CLI Team: `$8/member/mo`, unlocks larger workspaces, unlimited private channels, and long-lived hosted history. Configure with `STRIPE_PRICE_CLI_TEAM_MONTHLY`.
+- Thane CLI Free: CLI-first team chat for up to 100 workspace members, 10 private channels, public channels, DMs, threads, mentions, inbox/search, JSON-friendly commands, and optional local Ask Thane integration.
+- Thane CLI Team: `$8/member/mo`, unlocks larger workspaces, unlimited private channels, long-lived hosted history, and org-scale admin controls. Configure with `STRIPE_PRICE_CLI_TEAM_MONTHLY`.
 - Ask Thane Free: 10 active participants max (hard cap), no AI credit.
   - Free tier also enforces a monthly AI spend safety cap (`FREE_TIER_MONTHLY_AI_CAP_USD`, default `$10`).
 - Ask Thane Team: `$99/mo`, includes 25 active participants, `+$3` per additional participant, `$20` included monthly AI cost credit, `1.35x` AI overage multiplier.
