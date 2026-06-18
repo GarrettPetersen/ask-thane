@@ -360,10 +360,10 @@ function renderScreen(inputText: string, state: {
     ? `Reacting to @${targetMessage.author}. `
     : "";
   const defaultStatus = state.focus === "sidebar"
-    ? `${DIM}Up/down chooses a channel or DM. Enter opens it. Right returns to messages.${RESET}`
+    ? `${DIM}Up/down chooses a channel or DM. Down at the bottom types. Enter opens.${RESET}`
     : state.focus === "messages"
-    ? `${DIM}Up/down chooses a message. Enter or r replies. e reacts. Left opens channels. Right types.${RESET}`
-    : `${active ? channelLabel(active) : "conversation"}  ${DIM}Left channels. Right messages. Up/down recalls input. /menu opens menu.${RESET}`;
+    ? `${DIM}Up/down chooses a message. Down at the bottom types. r replies. e reacts.${RESET}`
+    : `${active ? channelLabel(active) : "conversation"}  ${DIM}Up messages. Left channels. Right messages. /menu opens menu.${RESET}`;
   const status = modePrefix || suggestionStatus || state.status || defaultStatus;
   lines.push(`${"─".repeat(columns)}`);
   lines.push(fit(status, columns));
@@ -387,9 +387,6 @@ export async function runChat(initialChannel = "general"): Promise<void> {
   let messageIndex = 0;
   let composerMode: ComposerMode = "message";
   let targetMessageId: string | undefined;
-  const inputHistory: string[] = [];
-  let historyIndex: number | undefined;
-  let draftInput = "";
   let isOpen = true;
 
   const refresh = async (): Promise<void> => {
@@ -511,42 +508,6 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     showReactionPicker = false;
     focus = "messages";
     status = `Reacted ${emoji}`;
-  };
-
-  const rememberInput = (line: string): void => {
-    if (!line.trim()) {
-      return;
-    }
-    if (inputHistory[inputHistory.length - 1] !== line) {
-      inputHistory.push(line);
-    }
-    historyIndex = undefined;
-    draftInput = "";
-  };
-
-  const recallInput = (direction: 1 | -1): void => {
-    if (inputHistory.length === 0) {
-      return;
-    }
-    if (historyIndex === undefined) {
-      draftInput = inputText;
-      historyIndex = direction === -1 ? inputHistory.length - 1 : 0;
-    } else {
-      historyIndex += direction;
-    }
-    if (historyIndex < 0) {
-      historyIndex = undefined;
-      inputText = draftInput;
-      draftInput = "";
-      return;
-    }
-    if (historyIndex >= inputHistory.length) {
-      historyIndex = undefined;
-      inputText = draftInput;
-      draftInput = "";
-      return;
-    }
-    inputText = inputHistory[historyIndex] ?? "";
   };
 
   const runLine = async (line: string): Promise<void> => {
@@ -736,7 +697,6 @@ export async function runChat(initialChannel = "general"): Promise<void> {
             showReactionPicker = false;
             focus = "composer";
             inputText = key.sequence;
-            historyIndex = undefined;
             status = "Type a custom reaction, then Enter.";
           }
           if (!isOpen) {
@@ -748,9 +708,13 @@ export async function runChat(initialChannel = "general"): Promise<void> {
         if (focus === "sidebar") {
           const items = conversations(store, activeChannel.id);
           if (key.name === "up") {
-            conversationIndex = conversationIndex === 0 ? Math.max(0, items.length - 1) : conversationIndex - 1;
+            conversationIndex = Math.max(0, conversationIndex - 1);
           } else if (key.name === "down") {
-            conversationIndex = conversationIndex >= items.length - 1 ? 0 : conversationIndex + 1;
+            if (conversationIndex >= items.length - 1) {
+              focusComposer();
+            } else {
+              conversationIndex += 1;
+            }
           } else if (key.name === "return") {
             const selected = items[conversationIndex];
             if (selected) {
@@ -766,7 +730,6 @@ export async function runChat(initialChannel = "general"): Promise<void> {
           } else if (key.sequence && key.sequence >= " " && !key.ctrl) {
             inputText = key.sequence;
             focusComposer();
-            historyIndex = undefined;
           }
           await refresh();
           return;
@@ -774,9 +737,13 @@ export async function runChat(initialChannel = "general"): Promise<void> {
         if (focus === "messages") {
           const messages = threadedMessages(store.recent(activeChannel.id, 200));
           if (key.name === "up") {
-            messageIndex = messageIndex === 0 ? Math.max(0, messages.length - 1) : messageIndex - 1;
+            messageIndex = Math.max(0, messageIndex - 1);
           } else if (key.name === "down") {
-            messageIndex = messageIndex >= messages.length - 1 ? 0 : messageIndex + 1;
+            if (messageIndex >= messages.length - 1) {
+              focusComposer();
+            } else {
+              messageIndex += 1;
+            }
           } else if (key.name === "return" || key.name === "r") {
             startReply();
           } else if (key.name === "e" || key.name === "+") {
@@ -790,7 +757,6 @@ export async function runChat(initialChannel = "general"): Promise<void> {
           } else if (key.sequence && key.sequence >= " " && !key.ctrl) {
             inputText = key.sequence;
             focusComposer();
-            historyIndex = undefined;
           }
           await refresh();
           return;
@@ -798,23 +764,20 @@ export async function runChat(initialChannel = "general"): Promise<void> {
         if (key.name === "return") {
           const submitted = inputText;
           inputText = "";
-          rememberInput(submitted);
           await runLine(submitted);
         } else if (key.name === "backspace") {
           inputText = inputText.slice(0, -1);
-          historyIndex = undefined;
         } else if (key.name === "up") {
           if (key.ctrl || key.meta || key.sequence === "\u001b[1;5A" || key.sequence === "\u001b[1;3A") {
             await switchConversation(-1);
             return;
           }
-          recallInput(-1);
+          focusMessages();
         } else if (key.name === "down") {
           if (key.ctrl || key.meta || key.sequence === "\u001b[1;5B" || key.sequence === "\u001b[1;3B") {
             await switchConversation(1);
             return;
           }
-          recallInput(1);
         } else if (key.name === "tab") {
           if (completeInput()) {
             await refresh();
@@ -836,7 +799,6 @@ export async function runChat(initialChannel = "general"): Promise<void> {
           status = "";
         } else if (key.sequence && key.sequence >= " " && !key.ctrl) {
           inputText += key.sequence;
-          historyIndex = undefined;
         }
         if (!isOpen) {
           return;

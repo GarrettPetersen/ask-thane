@@ -187,7 +187,7 @@ Keyboard shortcuts in chat:
 ```text
 Left               focus the channel/DM sidebar
 Right              focus messages, then the typing box
-Up / Down          navigate the focused sidebar/message list, or recall input while typing
+Up / Down          move through visible panes; from typing, Up focuses messages
 Enter              open the selected channel/DM, reply to the selected message, or send typed text
 r                  reply to the selected message
 e                  open a reaction picker for the selected message
