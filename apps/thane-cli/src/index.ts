@@ -213,9 +213,34 @@ function renderHostedAuthStart(response: { email: string; delivery: "email" | "d
 function requireHostedAuthToken(store: ThaneStore): string {
   const token = store.currentAccount?.authToken;
   if (!token) {
-    throw new Error("Run `thane init` with THANE_API_BASE_URL set before managing MFA.");
+    throw new Error("Run `thane init` with hosted Thane Chat auth before using this command.");
   }
   return token;
+}
+
+function parseExpiresInHours(value: string | undefined): number {
+  if (!value) {
+    return 24 * 7;
+  }
+  const trimmed = value.trim().toLowerCase();
+  const match = /^(\d+)(h|d)?$/.exec(trimmed);
+  if (!match) {
+    throw new Error("--expires must be a duration like 24h or 7d.");
+  }
+  const amount = Number(match[1]);
+  const unit = match[2] ?? "h";
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("--expires must be positive.");
+  }
+  return unit === "d" ? amount * 24 : amount;
+}
+
+function flagMemberRole(args: ParsedArgs, fallback: "admin" | "member"): "admin" | "member" {
+  const value = flagString(args, "role") ?? fallback;
+  if (value !== "admin" && value !== "member") {
+    throw new Error("--role must be admin or member.");
+  }
+  return value;
 }
 
 function slugFromSlackExportPath(path: string): string {
@@ -303,6 +328,8 @@ Channels:
 Members, users, and DMs:
   thane members [--json]
   thane invite <email> [--role admin|member] [--handle "..."]
+  thane invite-link create [--role admin|member] [--expires 7d] [--max-uses 10] [--json]
+  thane invite-link accept <link-or-token> [--json]
   thane member role <handle-or-email> <admin|member>
   thane users [--json]
   thane user add <handle> [--name "..."]
@@ -719,6 +746,65 @@ async function main(): Promise<void> {
     }
     const member = await store.invite(email, flagRole(args, "member"), flagString(args, "handle"));
     wantsJson(args) ? printJson({ member }) : process.stdout.write(`invited ${email} as ${member.role}\n`);
+    return;
+  }
+
+  if (command === "invite-link" && second === "create") {
+    store.requireWorkspaceAdmin();
+    const token = requireHostedAuthToken(store);
+    const role = flagMemberRole(args, "member");
+    const expiresInHours = parseExpiresInHours(flagString(args, "expires"));
+    const maxUsesRaw = flagString(args, "max-uses");
+    const parsedMaxUses = maxUsesRaw ? Number(maxUsesRaw) : undefined;
+    if (parsedMaxUses !== undefined && (!Number.isFinite(parsedMaxUses) || parsedMaxUses <= 0)) {
+      throw new Error("--max-uses must be a positive number.");
+    }
+    const maxUses = parsedMaxUses ? Math.floor(parsedMaxUses) : undefined;
+    const response = await postThaneApiWithAuth<{
+      invite: {
+        url: string;
+        token: string;
+        workspace: { id: string; slug: string; name: string };
+        role: "admin" | "member";
+        expiresAt: string;
+        maxUses?: number | null;
+      };
+    }>("/v1/thane-cli/workspace-invites", token, {
+      workspaceId: store.activeWorkspace.id,
+      workspaceSlug: store.activeWorkspace.slug,
+      workspaceName: store.activeWorkspace.name,
+      role,
+      expiresInHours,
+      ...(maxUses ? { maxUses } : {})
+    });
+    wantsJson(args)
+      ? printJson(response)
+      : process.stdout.write(
+          `invite link for ${response.invite.workspace.slug}: ${response.invite.url}\n` +
+            `role: ${response.invite.role}\n` +
+            `expires: ${response.invite.expiresAt}\n`
+        );
+    return;
+  }
+
+  if (command === "invite-link" && second === "accept") {
+    const linkOrToken = args.positionals[2];
+    if (!linkOrToken) {
+      throw new Error("Usage: thane invite-link accept <link-or-token>");
+    }
+    const token = requireHostedAuthToken(store);
+    const response = await postThaneApiWithAuth<{
+      workspace: { id: string; slug: string; name: string; role: "admin" | "member"; expiresAt: string };
+    }>("/v1/thane-cli/workspace-invites/accept", token, { token: linkOrToken });
+    const joined = await store.joinWorkspaceFromInvite({
+      id: response.workspace.id,
+      slug: response.workspace.slug,
+      name: response.workspace.name,
+      role: response.workspace.role
+    });
+    wantsJson(args)
+      ? printJson({ workspace: joined.workspace, member: joined.member })
+      : process.stdout.write(`joined ${joined.workspace.slug} as ${joined.member.role}\nopen chat: thane chat general\n`);
     return;
   }
 

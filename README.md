@@ -212,10 +212,17 @@ Manage workspace members:
 ```bash
 pnpm thane members --json
 pnpm thane invite alex@example.com --role admin --handle alex
+pnpm thane invite-link create --expires 7d
+pnpm thane invite-link accept https://api.askthane.com/invite/...
 pnpm thane member role alex member
 ```
 
 Workspace owners and admins can add people to a workspace. Members can create channels.
+
+Invite links are the normal way to add someone who is not already set up. Owners/admins create an expiring link
+for the active workspace, send it to a teammate, and the teammate runs `thane invite-link accept <link>` after
+`thane init`. Invite links default to member access and expire after 7 days; use `--role admin`, `--expires 24h`,
+or `--max-uses 1` for narrower links.
 
 Import a one-time Slack export ZIP:
 ```bash

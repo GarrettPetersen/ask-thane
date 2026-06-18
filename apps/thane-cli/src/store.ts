@@ -1071,6 +1071,49 @@ export class ThaneStore {
     return workspace;
   }
 
+  async joinWorkspaceFromInvite(input: {
+    id: string;
+    slug: string;
+    name: string;
+    role: "admin" | "member";
+  }): Promise<{ workspace: ThaneWorkspace; member: ThaneWorkspaceMember }> {
+    const account = this.currentAccount;
+    if (!account || account.email === "you@example.local") {
+      throw new Error("Run `thane init` before accepting a workspace invite.");
+    }
+    const normalized = normalizeWorkspaceSlug(input.slug);
+    if (!normalized) {
+      throw new Error("Invite workspace slug is invalid.");
+    }
+    let workspace = this.findWorkspace(input.id) ?? this.findWorkspace(normalized);
+    if (!workspace) {
+      workspace = {
+        id: input.id || id("wsp"),
+        slug: normalized,
+        name: input.name.trim() || normalized,
+        createdAt: nowIso()
+      };
+      this.data.workspaces.push(workspace);
+    }
+    const member = this.ensureAccountMembership(account, workspace.id, input.role);
+    if (!this.data.channels.some((channel) => channel.workspaceId === workspace.id && channel.kind === "channel" && channel.name === "general")) {
+      this.data.channels.push({
+        id: id("chn"),
+        workspaceId: workspace.id,
+        name: "general",
+        kind: "channel",
+        visibility: "public",
+        memberIds: [member.userId],
+        topic: "Default team chat",
+        createdAt: nowIso()
+      });
+    }
+    this.data.activeWorkspaceId = workspace.id;
+    this.data.currentUserId = member.userId;
+    await saveData(this.data);
+    return { workspace, member };
+  }
+
   async useWorkspace(slugOrId: string): Promise<ThaneWorkspace> {
     const workspace = this.findWorkspace(slugOrId);
     if (!workspace) {

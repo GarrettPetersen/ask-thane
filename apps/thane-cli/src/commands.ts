@@ -140,6 +140,18 @@ export const cliCommands: CliCommand[] = [
   },
   {
     category: "Members",
+    command: "thane invite-link create [--role admin|member] [--expires 7d] [--max-uses 10] [--json]",
+    description: "Create an expiring workspace invite link.",
+    examples: ["thane invite-link create --expires 7d", "thane invite-link create --role admin --max-uses 1"]
+  },
+  {
+    category: "Members",
+    command: "thane invite-link accept <link-or-token> [--json]",
+    description: "Accept a workspace invite link and switch to that workspace.",
+    examples: ["thane invite-link accept https://api.askthane.com/invite/abc123"]
+  },
+  {
+    category: "Members",
     command: "thane member role <handle-or-email> <admin|member>",
     description: "Change a member role.",
     examples: ["thane member role alex member"]

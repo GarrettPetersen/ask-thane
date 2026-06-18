@@ -7,6 +7,7 @@ interface Env {
   THANE_CLI_AUTH_DEV_CODES?: string;
   THANE_CLI_AUTH_SECRET?: string;
   THANE_CLI_EMAIL_FROM?: string;
+  THANE_CLI_INVITE_BASE_URL?: string;
   BUILD_ENV?: string;
   BUILD_GIT_SHA?: string;
   BUILD_DEPLOYED_AT?: string;
@@ -34,6 +35,19 @@ interface MfaSetupVerifyPayload {
 
 interface MfaDisablePayload {
   code?: unknown;
+}
+
+interface WorkspaceInviteCreatePayload {
+  workspaceId?: unknown;
+  workspaceSlug?: unknown;
+  workspaceName?: unknown;
+  role?: unknown;
+  expiresInHours?: unknown;
+  maxUses?: unknown;
+}
+
+interface WorkspaceInviteAcceptPayload {
+  token?: unknown;
 }
 
 interface TokenPayload {
@@ -69,6 +83,26 @@ function normalizeCode(value: unknown): string | null {
   return /^\d{6}$/.test(code) ? code : null;
 }
 
+function normalizeWorkspaceSlug(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const slug = value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug ? slug.slice(0, 80) : null;
+}
+
+function normalizeWorkspaceRole(value: unknown): "admin" | "member" {
+  return value === "admin" ? "admin" : "member";
+}
+
+function normalizePositiveInteger(value: unknown, fallback: number, max: number): number {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.min(Math.floor(parsed), max);
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -90,6 +124,12 @@ function makeTotpSecret(): string {
   return Array.from(bytes)
     .map((byte) => alphabet[byte % alphabet.length])
     .join("");
+}
+
+function makeInviteToken(): string {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return base64UrlEncode(bytes);
 }
 
 function hex(bytes: ArrayBuffer): string {
@@ -292,6 +332,94 @@ async function requireAuthEmail(request: Request, env: Env): Promise<string | nu
   }
   const payload = await verifyToken(env, authHeader.slice("bearer ".length).trim(), "auth");
   return payload?.email ?? null;
+}
+
+function inviteBaseUrl(env: Env, request: Request): string {
+  const configured = env.THANE_CLI_INVITE_BASE_URL?.trim();
+  if (configured) {
+    return configured.replace(/\/+$/g, "");
+  }
+  const url = new URL(request.url);
+  return `${url.origin}/invite`;
+}
+
+function extractInviteToken(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const url = new URL(trimmed);
+    const token = url.pathname.split("/").filter(Boolean).at(-1);
+    return token || null;
+  } catch (_error) {
+    return trimmed;
+  }
+}
+
+async function hashInviteToken(token: string): Promise<string> {
+  return sha256Hex(`thane_cli_invite:${token}`);
+}
+
+async function inviteByToken(env: Env, token: string): Promise<{
+  id: string;
+  workspace_id: string;
+  workspace_slug: string;
+  workspace_name: string;
+  role: "admin" | "member";
+  expires_at: string;
+  revoked_at?: string | null;
+  accepted_count?: number | null;
+  max_uses?: number | null;
+} | null> {
+  return env.DB
+    .prepare(
+      `SELECT id, workspace_id, workspace_slug, workspace_name, role, expires_at, revoked_at, accepted_count, max_uses
+       FROM thane_cli_workspace_invites
+       WHERE token_hash = ?
+       LIMIT 1`
+    )
+    .bind(await hashInviteToken(token))
+    .first<{
+      id: string;
+      workspace_id: string;
+      workspace_slug: string;
+      workspace_name: string;
+      role: "admin" | "member";
+      expires_at: string;
+      revoked_at?: string | null;
+      accepted_count?: number | null;
+      max_uses?: number | null;
+    }>();
+}
+
+function validateInvite(row: Awaited<ReturnType<typeof inviteByToken>>): Response | null {
+  if (!row) {
+    return Response.json({ ok: false, error: "invite_not_found" }, { status: 404 });
+  }
+  if (row.revoked_at) {
+    return Response.json({ ok: false, error: "invite_revoked" }, { status: 410 });
+  }
+  if (new Date(row.expires_at).getTime() < Date.now()) {
+    return Response.json({ ok: false, error: "invite_expired" }, { status: 410 });
+  }
+  if (row.max_uses && Number(row.accepted_count ?? 0) >= row.max_uses) {
+    return Response.json({ ok: false, error: "invite_used_up" }, { status: 410 });
+  }
+  return null;
+}
+
+function renderInviteWorkspace(row: NonNullable<Awaited<ReturnType<typeof inviteByToken>>>): Record<string, unknown> {
+  return {
+    id: row.workspace_id,
+    slug: row.workspace_slug,
+    name: row.workspace_name,
+    role: row.role,
+    expiresAt: row.expires_at
+  };
 }
 
 function shouldReturnDevCodes(env: Env): boolean {
@@ -555,6 +683,102 @@ async function handleThaneCliMfaDisable(request: Request, env: Env): Promise<Res
   return Response.json({ ok: true, enabled: false });
 }
 
+async function handleThaneCliWorkspaceInviteCreate(request: Request, env: Env): Promise<Response> {
+  const email = await requireAuthEmail(request, env);
+  if (!email) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  const payload = await parseJsonObject<WorkspaceInviteCreatePayload>(request);
+  const workspaceId = typeof payload?.workspaceId === "string" && payload.workspaceId.trim() ? payload.workspaceId.trim().slice(0, 120) : null;
+  const workspaceSlug = normalizeWorkspaceSlug(payload?.workspaceSlug);
+  const workspaceName =
+    typeof payload?.workspaceName === "string" && payload.workspaceName.trim()
+      ? payload.workspaceName.trim().slice(0, 120)
+      : workspaceSlug;
+  if (!workspaceId || !workspaceSlug || !workspaceName) {
+    return Response.json({ ok: false, error: "workspace_id_slug_and_name_required" }, { status: 400 });
+  }
+
+  const role = normalizeWorkspaceRole(payload?.role);
+  const expiresInHours = normalizePositiveInteger(payload?.expiresInHours, 24 * 7, 24 * 30);
+  const maxUsesRaw = payload?.maxUses;
+  const maxUses =
+    maxUsesRaw === undefined || maxUsesRaw === null || maxUsesRaw === ""
+      ? null
+      : normalizePositiveInteger(maxUsesRaw, 0, 10_000);
+  if (maxUses === 0) {
+    return Response.json({ ok: false, error: "max_uses_must_be_positive" }, { status: 400 });
+  }
+
+  const token = makeInviteToken();
+  const createdAt = nowIso();
+  const expiresAt = new Date(Date.now() + expiresInHours * 60 * 60 * 1000).toISOString();
+  await env.DB
+    .prepare(
+      `INSERT INTO thane_cli_workspace_invites (
+         id, token_hash, workspace_id, workspace_slug, workspace_name, role,
+         created_by_email, created_at, expires_at, max_uses
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(makeId("inv"), await hashInviteToken(token), workspaceId, workspaceSlug, workspaceName, role, email, createdAt, expiresAt, maxUses)
+    .run();
+
+  const url = `${inviteBaseUrl(env, request)}/${token}`;
+  return Response.json({
+    ok: true,
+    invite: {
+      url,
+      token,
+      workspace: { id: workspaceId, slug: workspaceSlug, name: workspaceName },
+      role,
+      expiresAt,
+      maxUses
+    }
+  });
+}
+
+async function handleThaneCliWorkspaceInvitePreview(token: string, env: Env): Promise<Response> {
+  const row = await inviteByToken(env, token);
+  const invalid = validateInvite(row);
+  if (invalid) {
+    return invalid;
+  }
+  return Response.json({
+    ok: true,
+    invite: {
+      workspace: renderInviteWorkspace(row!),
+      role: row!.role,
+      expiresAt: row!.expires_at
+    }
+  });
+}
+
+async function handleThaneCliWorkspaceInviteAccept(request: Request, env: Env): Promise<Response> {
+  const email = await requireAuthEmail(request, env);
+  if (!email) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  const payload = await parseJsonObject<WorkspaceInviteAcceptPayload>(request);
+  const token = extractInviteToken(payload?.token);
+  if (!token) {
+    return Response.json({ ok: false, error: "invite_token_required" }, { status: 400 });
+  }
+  const row = await inviteByToken(env, token);
+  const invalid = validateInvite(row);
+  if (invalid) {
+    return invalid;
+  }
+  await env.DB
+    .prepare("UPDATE thane_cli_workspace_invites SET accepted_count = accepted_count + 1 WHERE id = ?")
+    .bind(row!.id)
+    .run();
+  return Response.json({
+    ok: true,
+    workspace: renderInviteWorkspace(row!),
+    acceptedBy: email
+  });
+}
+
 function isAuthorizedRequest(request: Request, env: Env): boolean {
   const expectedToken = env.INTERNAL_API_BEARER_TOKEN?.trim();
   if (!expectedToken) {
@@ -620,6 +844,28 @@ export default {
 
     if (url.pathname === "/v1/thane-cli/mfa/disable" && request.method === "POST") {
       return handleThaneCliMfaDisable(request, env);
+    }
+
+    if (url.pathname === "/v1/thane-cli/workspace-invites" && request.method === "POST") {
+      return handleThaneCliWorkspaceInviteCreate(request, env);
+    }
+
+    if (url.pathname === "/v1/thane-cli/workspace-invites/accept" && request.method === "POST") {
+      return handleThaneCliWorkspaceInviteAccept(request, env);
+    }
+
+    if (url.pathname.startsWith("/v1/thane-cli/workspace-invites/") && request.method === "GET") {
+      const token = url.pathname.split("/").filter(Boolean).at(-1);
+      return token
+        ? handleThaneCliWorkspaceInvitePreview(token, env)
+        : Response.json({ ok: false, error: "invite_token_required" }, { status: 400 });
+    }
+
+    if (url.pathname.startsWith("/invite/") && request.method === "GET") {
+      const token = url.pathname.split("/").filter(Boolean).at(-1);
+      return token
+        ? handleThaneCliWorkspaceInvitePreview(token, env)
+        : Response.json({ ok: false, error: "invite_token_required" }, { status: 400 });
     }
 
     if (url.pathname.startsWith("/v1/tasks/") && !isAuthorizedRequest(request, env)) {

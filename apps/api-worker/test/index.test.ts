@@ -11,6 +11,30 @@ vi.mock("@ask-thane/data", () => ({
   }
 }));
 
+function base64UrlEncode(value: string | ArrayBuffer): string {
+  const bytes = typeof value === "string" ? new TextEncoder().encode(value) : new Uint8Array(value);
+  return Buffer.from(bytes).toString("base64url");
+}
+
+async function signAuthToken(email: string): Promise<string> {
+  const payload = base64UrlEncode(
+    JSON.stringify({
+      email,
+      purpose: "auth",
+      exp: Math.floor(Date.now() / 1000) + 60
+    })
+  );
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode("test-secret"),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = base64UrlEncode(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload)));
+  return `${payload}.${signature}`;
+}
+
 describe("@ask-thane/api-worker", () => {
   const env = {
     DB: {},
@@ -164,6 +188,96 @@ describe("@ask-thane/api-worker", () => {
       }
     });
     expect(prepare).toHaveBeenCalledWith(expect.stringContaining("UPDATE thane_cli_auth_codes"));
+  });
+
+  it("creates Thane CLI workspace invite links", async () => {
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const bind = vi.fn(() => ({ run }));
+    const prepare = vi.fn(() => ({ bind }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret",
+      THANE_CLI_INVITE_BASE_URL: "https://api.askthane.com/invite"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/workspace-invites", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
+        body: JSON.stringify({
+          workspaceId: "wsp_1",
+          workspaceSlug: "Acme Inc",
+          workspaceName: "Acme Inc",
+          role: "member",
+          expiresInHours: 24,
+          maxUses: 10
+        })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      ok: true,
+      invite: {
+        workspace: { id: "wsp_1", slug: "acme-inc", name: "Acme Inc" },
+        role: "member",
+        maxUses: 10
+      }
+    });
+    expect(body.invite.url).toContain("https://api.askthane.com/invite/");
+    expect(prepare).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO thane_cli_workspace_invites"));
+    expect(bind.mock.calls[0]?.[2]).toBe("wsp_1");
+    expect(bind.mock.calls[0]?.[3]).toBe("acme-inc");
+    expect(bind.mock.calls[0]?.[6]).toBe("owner@example.com");
+  });
+
+  it("accepts valid Thane CLI workspace invite links", async () => {
+    const inviteRow = {
+      id: "inv_1",
+      workspace_id: "wsp_1",
+      workspace_slug: "acme",
+      workspace_name: "Acme Inc",
+      role: "member",
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      revoked_at: null,
+      accepted_count: 0,
+      max_uses: null
+    };
+    const first = vi.fn(async () => inviteRow);
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn(() => (sql.includes("SELECT id, workspace_id") ? { first } : { run }))
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/workspace-invites/accept", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("alex@example.com")}` },
+        body: JSON.stringify({ token: "https://api.askthane.com/invite/token_123" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      acceptedBy: "alex@example.com",
+      workspace: {
+        id: "wsp_1",
+        slug: "acme",
+        name: "Acme Inc",
+        role: "member"
+      }
+    });
+    expect(prepare).toHaveBeenCalledWith(expect.stringContaining("UPDATE thane_cli_workspace_invites"));
   });
 
   it("validates required params for open tasks endpoint", async () => {

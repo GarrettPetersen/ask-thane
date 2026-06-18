@@ -13,3 +13,10 @@ To migrate from Slack:
 ```bash
 thane workspace create-from-slack ./slack-export.zip --apply
 ```
+
+To invite a teammate:
+
+```bash
+thane invite-link create --expires 7d
+thane invite-link accept https://api.askthane.com/invite/...
+```

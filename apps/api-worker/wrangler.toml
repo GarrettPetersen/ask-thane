@@ -17,6 +17,7 @@ BUILD_GIT_SHA = "dev"
 BUILD_DEPLOYED_AT = "local"
 THANE_CLI_AUTH_DEV_CODES = "true"
 THANE_CLI_EMAIL_FROM = "Thane <noreply@askthane.com>"
+THANE_CLI_INVITE_BASE_URL = "http://localhost:8787/invite"
 
 [env.staging]
 name = "ask-thane-api-staging"
@@ -32,6 +33,7 @@ BUILD_GIT_SHA = "unknown"
 BUILD_DEPLOYED_AT = "unknown"
 THANE_CLI_AUTH_DEV_CODES = "true"
 THANE_CLI_EMAIL_FROM = "Thane <noreply@askthane.com>"
+THANE_CLI_INVITE_BASE_URL = "https://api-staging.askthane.com/invite"
 
 [env.production]
 name = "ask-thane-api"
@@ -47,3 +49,4 @@ BUILD_GIT_SHA = "unknown"
 BUILD_DEPLOYED_AT = "unknown"
 THANE_CLI_AUTH_DEV_CODES = "false"
 THANE_CLI_EMAIL_FROM = "Thane <noreply@askthane.com>"
+THANE_CLI_INVITE_BASE_URL = "https://api.askthane.com/invite"
