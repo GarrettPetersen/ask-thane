@@ -3,7 +3,7 @@ declare const process: {
   cwd(): string;
   env: Record<string, string | undefined>;
   exitCode?: number;
-  stdout: { write(chunk: string): void };
+  stdout: { columns?: number; rows?: number; write(chunk: string): void };
   stderr: { write(chunk: string): void };
 };
 
@@ -76,7 +76,7 @@ declare module "node:process" {
     on(event: "keypress", handler: (chunk: string, key: { name?: string; ctrl?: boolean }) => void): void;
     off(event: "keypress", handler: (chunk: string, key: { name?: string; ctrl?: boolean }) => void): void;
   };
-  export const stdout: { write(chunk: string): void };
+  export const stdout: { columns?: number; rows?: number; write(chunk: string): void };
 }
 
 declare module "node:readline" {
