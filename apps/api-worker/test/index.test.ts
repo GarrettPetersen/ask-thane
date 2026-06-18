@@ -280,6 +280,39 @@ describe("@ask-thane/api-worker", () => {
     expect(prepare).toHaveBeenCalledWith(expect.stringContaining("UPDATE thane_cli_workspace_invites"));
   });
 
+  it("renders browser-friendly Thane CLI invite pages", async () => {
+    const inviteRow = {
+      id: "inv_1",
+      workspace_id: "wsp_1",
+      workspace_slug: "acme",
+      workspace_name: "Acme Inc",
+      role: "member",
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      revoked_at: null,
+      accepted_count: 0,
+      max_uses: null
+    };
+    const first = vi.fn(async () => inviteRow);
+    const prepare = vi.fn(() => ({
+      bind: vi.fn(() => ({ first }))
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(new Request("https://api.askthane.com/invite/token_123"), authEnv);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const html = await res.text();
+    expect(html).toContain("Join Acme Inc");
+    expect(html).toContain("npm install -g @ask-thane/thane-cli");
+    expect(html).toContain("thane init");
+    expect(html).toContain("thane invite-link accept https://api.askthane.com/invite/token_123");
+  });
+
   it("validates required params for open tasks endpoint", async () => {
     const res = await worker.fetch(
       new Request("https://api.local/v1/tasks/open", { headers: authHeaders }),

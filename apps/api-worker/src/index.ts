@@ -422,6 +422,141 @@ function renderInviteWorkspace(row: NonNullable<Awaited<ReturnType<typeof invite
   };
 }
 
+function escapeHtml(value: unknown): string {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function inviteErrorHtml(title: string, message: string): Response {
+  return new Response(
+    `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(title)} | Thane Chat</title>
+  <style>
+    body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f5f2; color: #24211c; }
+    main { min-height: 100vh; display: grid; place-items: center; padding: 32px; box-sizing: border-box; }
+    section { max-width: 560px; width: 100%; background: #fff; border: 1px solid #ded9cf; border-radius: 8px; padding: 28px; box-shadow: 0 18px 50px rgba(30, 28, 24, 0.08); }
+    h1 { margin: 0 0 12px; font-size: 28px; line-height: 1.1; }
+    p { margin: 0; color: #6b6258; line-height: 1.55; }
+  </style>
+</head>
+<body>
+  <main>
+    <section>
+      <h1>${escapeHtml(title)}</h1>
+      <p>${escapeHtml(message)}</p>
+    </section>
+  </main>
+</body>
+</html>`,
+    { status: 410, headers: { "content-type": "text/html; charset=utf-8" } }
+  );
+}
+
+async function handleThaneCliWorkspaceInviteLanding(token: string, env: Env, request: Request): Promise<Response> {
+  const row = await inviteByToken(env, token);
+  const invalid = validateInvite(row);
+  if (invalid) {
+    const status = invalid.status;
+    const payload = (await invalid.json()) as { error?: string };
+    const messages: Record<string, string> = {
+      invite_not_found: "This invite link could not be found. Ask the workspace admin for a fresh link.",
+      invite_revoked: "This invite link has been revoked. Ask the workspace admin for a fresh link.",
+      invite_expired: "This invite link has expired. Ask the workspace admin for a fresh link.",
+      invite_used_up: "This invite link has already been used the maximum number of times."
+    };
+    return new Response(await inviteErrorHtml("Invite unavailable", messages[payload.error ?? ""] ?? "This invite link is not available.").text(), {
+      status,
+      headers: { "content-type": "text/html; charset=utf-8" }
+    });
+  }
+
+  const inviteUrl = new URL(request.url);
+  const inviteLink = `${inviteUrl.origin}/invite/${encodeURIComponent(token)}`;
+  const installCommand = "npm install -g @ask-thane/thane-cli";
+  const initCommand = "thane init";
+  const acceptCommand = `thane invite-link accept ${inviteLink}`;
+  const expires = new Date(row!.expires_at).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" });
+
+  return new Response(
+    `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Join ${escapeHtml(row!.workspace_name)} | Thane Chat</title>
+  <style>
+    :root { color-scheme: light; }
+    body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f5f2; color: #24211c; }
+    main { min-height: 100vh; display: grid; place-items: center; padding: 32px 18px; box-sizing: border-box; }
+    section { max-width: 760px; width: 100%; background: #fff; border: 1px solid #ded9cf; border-radius: 8px; padding: clamp(24px, 5vw, 44px); box-shadow: 0 18px 50px rgba(30, 28, 24, 0.08); }
+    .eyebrow { margin: 0 0 12px; color: #7a7166; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
+    h1 { margin: 0; font-size: clamp(32px, 6vw, 54px); line-height: 1.02; letter-spacing: 0; }
+    .sub { margin: 16px 0 26px; color: #625a51; font-size: 18px; line-height: 1.55; max-width: 58ch; }
+    .meta { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 28px; }
+    .pill { border: 1px solid #ded9cf; border-radius: 999px; padding: 7px 11px; color: #5b534a; background: #fbfaf8; font-size: 14px; }
+    .steps { display: grid; gap: 14px; }
+    .step { border-top: 1px solid #e8e4dd; padding-top: 16px; }
+    .step h2 { margin: 0 0 8px; font-size: 16px; }
+    .command-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: stretch; }
+    pre { margin: 0; overflow-x: auto; border-radius: 8px; background: #20201d; color: #f5f1e8; padding: 14px 16px; font-size: 14px; line-height: 1.4; }
+    button { border: 1px solid #2d2a26; border-radius: 8px; background: #2d2a26; color: white; padding: 0 14px; font: inherit; cursor: pointer; min-width: 76px; }
+    button:hover { background: #11100e; }
+    .note { margin: 24px 0 0; color: #6b6258; font-size: 14px; line-height: 1.5; }
+    a { color: #2d2a26; font-weight: 700; }
+    @media (max-width: 560px) { .command-row { grid-template-columns: 1fr; } button { min-height: 42px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <section>
+      <p class="eyebrow">Thane Chat Invite</p>
+      <h1>Join ${escapeHtml(row!.workspace_name)}</h1>
+      <p class="sub">You have been invited to the ${escapeHtml(row!.workspace_name)} workspace in Thane Chat, a team chat interface that runs in your terminal.</p>
+      <div class="meta">
+        <span class="pill">Workspace: ${escapeHtml(row!.workspace_slug)}</span>
+        <span class="pill">Role: ${escapeHtml(row!.role)}</span>
+        <span class="pill">Expires: ${escapeHtml(expires)} UTC</span>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <h2>1. Install the CLI</h2>
+          <div class="command-row"><pre><code>${escapeHtml(installCommand)}</code></pre><button data-copy="${escapeHtml(installCommand)}">Copy</button></div>
+        </div>
+        <div class="step">
+          <h2>2. Sign in or create your account</h2>
+          <div class="command-row"><pre><code>${escapeHtml(initCommand)}</code></pre><button data-copy="${escapeHtml(initCommand)}">Copy</button></div>
+        </div>
+        <div class="step">
+          <h2>3. Accept the invite</h2>
+          <div class="command-row"><pre><code>${escapeHtml(acceptCommand)}</code></pre><button data-copy="${escapeHtml(acceptCommand)}">Copy</button></div>
+        </div>
+      </div>
+      <p class="note">Already have Thane Chat installed? Run the accept command. Need the product page? Visit <a href="https://askthane.com/chat">askthane.com/chat</a>.</p>
+    </section>
+  </main>
+  <script>
+    for (const button of document.querySelectorAll("button[data-copy]")) {
+      button.addEventListener("click", async () => {
+        await navigator.clipboard.writeText(button.dataset.copy || "");
+        button.textContent = "Copied";
+        setTimeout(() => { button.textContent = "Copy"; }, 1400);
+      });
+    }
+  </script>
+</body>
+</html>`,
+    { headers: { "content-type": "text/html; charset=utf-8" } }
+  );
+}
+
 function shouldReturnDevCodes(env: Env): boolean {
   return env.THANE_CLI_AUTH_DEV_CODES === "true" || env.BUILD_ENV === "local";
 }
@@ -864,7 +999,7 @@ export default {
     if (url.pathname.startsWith("/invite/") && request.method === "GET") {
       const token = url.pathname.split("/").filter(Boolean).at(-1);
       return token
-        ? handleThaneCliWorkspaceInvitePreview(token, env)
+        ? handleThaneCliWorkspaceInviteLanding(token, env, request)
         : Response.json({ ok: false, error: "invite_token_required" }, { status: 400 });
     }
 
