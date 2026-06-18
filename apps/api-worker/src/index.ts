@@ -375,25 +375,32 @@ async function inviteByToken(env: Env, token: string): Promise<{
   accepted_count?: number | null;
   max_uses?: number | null;
 } | null> {
-  return env.DB
-    .prepare(
-      `SELECT id, workspace_id, workspace_slug, workspace_name, role, expires_at, revoked_at, accepted_count, max_uses
-       FROM thane_cli_workspace_invites
-       WHERE token_hash = ?
-       LIMIT 1`
-    )
-    .bind(await hashInviteToken(token))
-    .first<{
-      id: string;
-      workspace_id: string;
-      workspace_slug: string;
-      workspace_name: string;
-      role: "admin" | "member";
-      expires_at: string;
-      revoked_at?: string | null;
-      accepted_count?: number | null;
-      max_uses?: number | null;
-    }>();
+  try {
+    return await env.DB
+      .prepare(
+        `SELECT id, workspace_id, workspace_slug, workspace_name, role, expires_at, revoked_at, accepted_count, max_uses
+         FROM thane_cli_workspace_invites
+         WHERE token_hash = ?
+         LIMIT 1`
+      )
+      .bind(await hashInviteToken(token))
+      .first<{
+        id: string;
+        workspace_id: string;
+        workspace_slug: string;
+        workspace_name: string;
+        role: "admin" | "member";
+        expires_at: string;
+        revoked_at?: string | null;
+        accepted_count?: number | null;
+        max_uses?: number | null;
+      }>();
+  } catch (error) {
+    if (String(error).toLowerCase().includes("no such table")) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 function validateInvite(row: Awaited<ReturnType<typeof inviteByToken>>): Response | null {

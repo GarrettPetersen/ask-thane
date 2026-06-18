@@ -313,6 +313,26 @@ describe("@ask-thane/api-worker", () => {
     expect(html).toContain("thane invite-link accept https://api.askthane.com/invite/token_123");
   });
 
+  it("renders browser-friendly Thane CLI invite errors", async () => {
+    const first = vi.fn(async () => null);
+    const prepare = vi.fn(() => ({
+      bind: vi.fn(() => ({ first }))
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(new Request("https://api.askthane.com/invite/not-real-token"), authEnv);
+
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const html = await res.text();
+    expect(html).toContain("Invite unavailable");
+    expect(html).toContain("fresh link");
+  });
+
   it("validates required params for open tasks endpoint", async () => {
     const res = await worker.fetch(
       new Request("https://api.local/v1/tasks/open", { headers: authHeaders }),
