@@ -185,10 +185,14 @@ While chat is open, Thane keeps the current channel/DM focused. New messages in 
 
 Keyboard shortcuts in chat:
 ```text
-Up / Down          recall previous and next input
-Tab                autocomplete slash commands
-Alt+Up / Alt+Down  switch focused channel or DM
-Esc                close menu/help or clear transient UI
+Left               focus the channel/DM sidebar
+Right              focus messages, then the typing box
+Up / Down          navigate the focused sidebar/message list, or recall input while typing
+Enter              open the selected channel/DM, reply to the selected message, or send typed text
+r                  reply to the selected message
+e                  react to the selected message
+Tab                autocomplete slash commands, channels, workspaces, users, and mentions
+Esc                close menu/help, cancel reply/react, or return to typing
 ```
 
 Create and switch workspaces:
