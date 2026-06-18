@@ -334,9 +334,13 @@ pnpm thane:build
 node apps/thane-cli/dist/index.js recent engineering --json
 ```
 
-By default, MVP data is stored at `.thane/store.json` in the current working directory. Override it for tests or alternate workspaces:
+By default, MVP data is stored at `~/.thane/store.json`, so agents launched from arbitrary project directories read the same user chat store. Override it explicitly for tests, fixtures, or project-local stores:
 ```bash
+pnpm thane doctor --json
+pnpm thane agent context --json
+pnpm thane agent install-instructions
 THANE_STORE_PATH=/tmp/thane-store.json pnpm thane recent --json
+pnpm thane --store ./.thane/store.json recent --json
 ```
 
 The CLI always scopes channels, messages, threads, unread state, mentions, and search to the active workspace. That keeps `#engineering` in one workspace separate from `#engineering` in another.

@@ -25,7 +25,7 @@ import type {
 import type { ParsedSlackConversation, ParsedSlackExport, SlackExportMessage, SlackImportPreview } from "./slack-import.js";
 import { previewSlackExport } from "./slack-import.js";
 
-const fallbackStorePath = join(process.cwd(), ".thane", "store.json");
+const defaultStorePath = join(homedir(), ".thane", "store.json");
 
 export function resolveStorePath(): string {
   if (process.env.THANE_STORE_PATH) {
@@ -34,10 +34,7 @@ export function resolveStorePath(): string {
   if (process.env.THANE_HOME) {
     return join(process.env.THANE_HOME, "store.json");
   }
-  if (process.env.THANE_USE_USER_HOME === "1") {
-    return join(homedir(), ".thane", "store.json");
-  }
-  return fallbackStorePath;
+  return defaultStorePath;
 }
 
 function nowIso(): string {
@@ -406,6 +403,26 @@ export class ThaneStore {
 
   static async open(): Promise<ThaneStore> {
     return new ThaneStore(await loadData());
+  }
+
+  stats(): {
+    accountCount: number;
+    workspaceCount: number;
+    userCount: number;
+    channelCount: number;
+    dmCount: number;
+    messageCount: number;
+    unreadCount: number;
+  } {
+    return {
+      accountCount: this.data.accounts.length,
+      workspaceCount: this.data.workspaces.length,
+      userCount: this.data.users.length,
+      channelCount: this.listChannels().length,
+      dmCount: this.listDms().length,
+      messageCount: this.data.messages.filter((message) => message.workspaceId === this.activeWorkspace.id).length,
+      unreadCount: this.unread(10_000).length
+    };
   }
 
   get activeWorkspace(): ThaneWorkspace {
@@ -1272,6 +1289,26 @@ export class ThaneStore {
     return channel.workspaceId === this.activeWorkspace.id && (channel.visibility === "public" || channel.memberIds.includes(userId));
   }
 
+  private canReadWorkspaceChannel(channel: ThaneChannel, workspaceId: string, userId: string): boolean {
+    return channel.workspaceId === workspaceId && (channel.visibility === "public" || channel.memberIds.includes(userId));
+  }
+
+  private memberForWorkspace(workspaceId: string): ThaneWorkspaceMember | undefined {
+    return this.data.workspaceMembers.find(
+      (member) => member.workspaceId === workspaceId && member.accountId === this.data.currentAccountId
+    );
+  }
+
+  private findChannelInWorkspace(workspaceId: string, nameOrId: string, userId: string): ThaneChannel | undefined {
+    const normalized = normalizeChannelName(nameOrId);
+    return this.data.channels.find(
+      (channel) =>
+        channel.workspaceId === workspaceId &&
+        (channel.id === nameOrId || channel.name === normalized) &&
+        this.canReadWorkspaceChannel(channel, workspaceId, userId)
+    );
+  }
+
   private isJoinedChannel(channel: ThaneChannel, userId = this.currentUser.id): boolean {
     return channel.memberIds.includes(userId);
   }
@@ -1572,6 +1609,44 @@ export class ThaneStore {
     );
   }
 
+  exportMessages(options: {
+    channelName?: string;
+    allWorkspaces?: boolean;
+    limit?: number;
+    since?: Date;
+  } = {}): MessageView[] {
+    const limit = options.limit ?? 10_000;
+    const workspaces = options.allWorkspaces
+      ? this.data.workspaces.filter((workspace) => this.memberForWorkspace(workspace.id))
+      : [this.activeWorkspace];
+    const views: MessageView[] = [];
+
+    for (const workspace of workspaces) {
+      const member = this.memberForWorkspace(workspace.id);
+      const userId = member?.userId ?? this.currentUser.id;
+      const channel = options.channelName
+        ? this.findChannelInWorkspace(workspace.id, options.channelName, userId)
+        : undefined;
+      if (options.channelName && !channel) {
+        continue;
+      }
+      const messages = this.data.messages
+        .filter((message) => message.workspaceId === workspace.id)
+        .filter((message) => !channel || message.channelId === channel.id)
+        .filter((message) => {
+          const messageChannel = this.data.channels.find((candidate) => candidate.id === message.channelId);
+          return Boolean(messageChannel && this.canReadWorkspaceChannel(messageChannel, workspace.id, userId));
+        })
+        .filter((message) => !options.since || new Date(message.createdAt).getTime() >= options.since.getTime());
+      views.push(...this.toWorkspaceViews(messages, workspace.id, userId));
+    }
+
+    if (options.channelName && views.length === 0) {
+      throw new Error(`Channel ${options.channelName} was not found in readable exported workspaces.`);
+    }
+    return views.sort((a, b) => a.createdAt.localeCompare(b.createdAt)).slice(-limit);
+  }
+
   recentDm(handle: string, limit = 20, since?: Date): MessageView[] {
     const user = this.findUser(handle);
     if (!user) {
@@ -1680,24 +1755,29 @@ export class ThaneStore {
   }
 
   private toViews(messages: ThaneMessage[]): MessageView[] {
+    return this.toWorkspaceViews(messages, this.activeWorkspace.id, this.currentUser.id);
+  }
+
+  private toWorkspaceViews(messages: ThaneMessage[], workspaceId: string, userId: string): MessageView[] {
+    const workspace = this.data.workspaces.find((candidate) => candidate.id === workspaceId);
     const channels = new Map(
       this.data.channels
-        .filter((channel) => channel.workspaceId === this.activeWorkspace.id)
+        .filter((channel) => channel.workspaceId === workspaceId)
         .map((channel) => [channel.id, channel])
     );
     const users = new Map(
-      this.data.users.filter((user) => user.workspaceId === this.activeWorkspace.id).map((user) => [user.id, user.handle])
+      this.data.users.filter((user) => user.workspaceId === workspaceId).map((user) => [user.id, user.handle])
     );
     const repliesByRoot = new Map<string, number>();
     for (const message of this.data.messages) {
-      if (message.workspaceId === this.activeWorkspace.id && message.threadRootId) {
+      if (message.workspaceId === workspaceId && message.threadRootId) {
         repliesByRoot.set(message.threadRootId, (repliesByRoot.get(message.threadRootId) ?? 0) + 1);
       }
     }
-    const handle = this.currentUser.handle.toLowerCase();
+    const handle = this.data.users.find((user) => user.id === userId)?.handle.toLowerCase() ?? "";
     return messages.map((message) => ({
       id: message.id,
-      workspace: this.activeWorkspace.slug,
+      workspace: workspace?.slug ?? workspaceId,
       channel: channels.get(message.channelId)?.name ?? message.channelId,
       conversationKind: channels.get(message.channelId)?.kind ?? "channel",
       author: users.get(message.authorId) ?? message.authorId,

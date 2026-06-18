@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline";
@@ -7,11 +8,13 @@ import { runChat } from "./chat.js";
 import { cliCommands, renderCliCommands } from "./commands.js";
 import { renderChannels, renderDms, renderInbox, renderMembers, renderMessages, printJson, renderUsers, renderWorkspaces } from "./render.js";
 import { parseSlackExportZip } from "./slack-import.js";
-import { ThaneStore } from "./store.js";
+import { resolveStorePath, ThaneStore } from "./store.js";
 import { parseSince } from "./time.js";
 import type { SlackImportPreview } from "./slack-import.js";
 import type { SlackImportResult } from "./store.js";
 import type { PingLocation, ThaneAccount, WorkspaceRole } from "./model.js";
+
+const CLI_VERSION = "0.1.14";
 
 interface ParsedArgs {
   positionals: string[];
@@ -63,6 +66,13 @@ function flagNumber(args: ParsedArgs, key: string, fallback: number): number {
 
 function wantsJson(args: ParsedArgs): boolean {
   return args.flags.has("json");
+}
+
+function applyGlobalFlags(args: ParsedArgs): void {
+  const storePath = flagString(args, "store");
+  if (storePath) {
+    process.env.THANE_STORE_PATH = storePath;
+  }
 }
 
 function flagRole(args: ParsedArgs, fallback: WorkspaceRole): WorkspaceRole {
@@ -279,8 +289,15 @@ function help(): string {
   return `Thane CLI MVP
 
 Command discovery:
+  thane --version
   thane commands [--json]
   thane help
+  thane doctor [--json]
+
+Agent helpers:
+  thane agent context [--json]
+  thane agent install-instructions
+  thane export messages [--all] [--channel general] [--since "7 days ago"] [--jsonl]
 
 Interactive:
   thane chat [channel]
@@ -363,21 +380,89 @@ Messages:
 
 Environment:
   THANE_STORE_PATH=/path/to/store.json
+  thane --store /path/to/store.json recent --json
 
 All channels, messages, mentions, unread state, and search results are scoped to the active workspace.`;
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
-  const [command, second] = args.positionals;
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await readFile(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
 
-  if (command === "dm" && second && !wantsJson(args)) {
-    await runChat(`@${second}`);
+async function renderDoctor(args: ParsedArgs): Promise<void> {
+  const storePath = resolveStorePath();
+  const storeExists = await fileExists(storePath);
+  if (!storeExists) {
+    const response = {
+      version: CLI_VERSION,
+      resolvedStorePath: storePath,
+      storeExists,
+      hint: "Run `thane init` to create a user store, or pass --store/THANE_STORE_PATH for a project-local store."
+    };
+    wantsJson(args) ? printJson(response) : process.stdout.write(`${renderDoctorText(response)}\n`);
     return;
   }
+  const store = await ThaneStore.open();
+  const stats = store.stats();
+  const response = {
+    version: CLI_VERSION,
+    resolvedStorePath: storePath,
+    storeExists,
+    account: store.currentAccount?.email ?? null,
+    activeWorkspace: store.activeWorkspace.slug,
+    ...stats,
+    hint: "Use --store or THANE_STORE_PATH to opt into a project-local or fixture store."
+  };
+  wantsJson(args) ? printJson(response) : process.stdout.write(`${renderDoctorText(response)}\n`);
+}
 
-  if (!command || command === "chat") {
-    await runChat(command === "chat" ? second : command);
+function renderDoctorText(input: Record<string, unknown>): string {
+  return [
+    `version: ${input.version}`,
+    `store: ${input.resolvedStorePath}`,
+    `store exists: ${input.storeExists}`,
+    input.account ? `account: ${input.account}` : undefined,
+    input.activeWorkspace ? `workspace: ${input.activeWorkspace}` : undefined,
+    typeof input.messageCount === "number" ? `messages: ${input.messageCount}` : undefined,
+    typeof input.unreadCount === "number" ? `unread: ${input.unreadCount}` : undefined,
+    `hint: ${input.hint}`
+  ].filter((line): line is string => Boolean(line)).join("\n");
+}
+
+function agentInstructions(): string {
+  return `# Thane Chat agent instructions
+
+- Read from the user store by default: \`thane see-recent --json\`.
+- Check store/account/workspace first: \`thane doctor --json\`.
+- Get compact context: \`thane agent context --json\`.
+- List channels: \`thane channels --json\`.
+- Read recent messages: \`thane see-recent --json\`.
+- Read a thread: \`thane thread <message-id> --json\`.
+- Search messages: \`thane search <query> --json\`.
+- Do not send, reply, react, invite, or mark messages read unless explicitly asked.
+- For fixture/project stores, use \`thane --store ./fixture-store.json ...\` or \`THANE_STORE_PATH=./.thane/store.json thane ...\`.
+`;
+}
+
+function jsonl(messages: unknown[]): string {
+  return messages.map((message) => JSON.stringify(message)).join("\n") + (messages.length ? "\n" : "");
+}
+
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2));
+  applyGlobalFlags(args);
+  const [command, second] = args.positionals;
+
+  if (args.flags.has("version") || command === "version" || command === "--version" || command === "-v") {
+    process.stdout.write(`${CLI_VERSION}\n`);
     return;
   }
 
@@ -391,7 +476,135 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "doctor") {
+    await renderDoctor(args);
+    return;
+  }
+
+  if (command === "agent" && second === "install-instructions") {
+    process.stdout.write(agentInstructions());
+    return;
+  }
+
+  if (command === "dm" && second && !wantsJson(args)) {
+    await runChat(`@${second}`);
+    return;
+  }
+
+  if (!command || command === "chat") {
+    await runChat(command === "chat" ? second : command);
+    return;
+  }
+
   const store = await ThaneStore.open();
+
+  if (command === "agent" && second === "context") {
+    const recent = store.recent(undefined, flagNumber(args, "limit", 12));
+    const unread = store.unread(flagNumber(args, "unread-limit", 20));
+    const response = {
+      storePath: resolveStorePath(),
+      account: store.currentAccount?.email ?? null,
+      workspace: store.activeWorkspace,
+      currentUser: store.currentUser,
+      channels: store.listChannels(),
+      dms: store.listDms(),
+      unreadCount: unread.length,
+      unread,
+      recent
+    };
+    wantsJson(args) ? printJson(response) : process.stdout.write(JSON.stringify(response, null, 2) + "\n");
+    return;
+  }
+
+  if (command === "export" && second === "messages") {
+    const channel = flagString(args, "channel");
+    const limit = flagNumber(args, "limit", 10_000);
+    const since = parseSince(flagString(args, "since"));
+    const exportOptions: Parameters<ThaneStore["exportMessages"]>[0] = {
+      limit,
+      allWorkspaces: args.flags.has("all")
+    };
+    if (channel) {
+      exportOptions.channelName = channel;
+    }
+    if (since) {
+      exportOptions.since = since;
+    }
+    const messages = store.exportMessages(exportOptions);
+    if (args.flags.has("jsonl")) {
+      process.stdout.write(jsonl(messages));
+    } else {
+      wantsJson(args) ? printJson({ messages }) : process.stdout.write(`${renderMessages(messages)}\n`);
+    }
+    return;
+  }
+
+  if (command === "read") {
+    const readCommand = second;
+    const forwardedArgs: ParsedArgs = {
+      positionals: [readCommand ?? "", ...args.positionals.slice(2)].filter(Boolean),
+      flags: args.flags
+    };
+    if (readCommand === "recent") {
+      const messages = store.recent(args.positionals[2], flagNumber(forwardedArgs, "limit", 20), parseSince(flagString(forwardedArgs, "since")));
+      wantsJson(args) ? printJson({ messages }) : process.stdout.write(`${renderMessages(messages)}\n`);
+      return;
+    }
+    if (readCommand === "thread") {
+      const messageId = args.positionals[2];
+      if (!messageId) {
+        throw new Error("Usage: thane read thread <message-id>");
+      }
+      const messages = store.thread(messageId);
+      wantsJson(args) ? printJson({ messages }) : process.stdout.write(`${renderMessages(messages)}\n`);
+      return;
+    }
+    if (readCommand === "search") {
+      const query = args.positionals.slice(2).join(" ").trim();
+      if (!query) {
+        throw new Error("Usage: thane read search <query>");
+      }
+      const messages = store.search(query, flagNumber(args, "limit", 20));
+      wantsJson(args) ? printJson({ messages }) : process.stdout.write(`${renderMessages(messages)}\n`);
+      return;
+    }
+    throw new Error("Usage: thane read <recent|thread|search> ...");
+  }
+
+  if (command === "write") {
+    const writeCommand = second;
+    if (writeCommand === "send") {
+      const channel = args.positionals[2];
+      const text = readMessageText(args, 3);
+      if (!channel || !text) {
+        throw new Error("Usage: thane write send <channel> <message>");
+      }
+      const message = await store.sendMessage(channel, text);
+      wantsJson(args) ? printJson({ message }) : process.stdout.write(`sent ${message.id} to #${store.findChannel(channel)?.name ?? channel}\n`);
+      return;
+    }
+    if (writeCommand === "reply") {
+      const messageId = args.positionals[2];
+      const text = readMessageText(args, 3);
+      if (!messageId || !text) {
+        throw new Error("Usage: thane write reply <message-id> <message>");
+      }
+      const message = await store.reply(messageId, text);
+      wantsJson(args) ? printJson({ message }) : process.stdout.write(`sent ${message.id} in thread ${message.threadRootId}\n`);
+      return;
+    }
+    if (writeCommand === "react") {
+      const messageId = args.positionals[2];
+      const emoji = args.positionals[3];
+      if (!messageId || !emoji) {
+        throw new Error("Usage: thane write react <message-id> <emoji>");
+      }
+      const message = await store.react(messageId, emoji);
+      wantsJson(args) ? printJson({ message }) : process.stdout.write(`reacted to ${messageId}\n`);
+      return;
+    }
+    throw new Error("Usage: thane write <send|reply|react> ...");
+  }
 
   if (command === "init") {
     const isDemoAccount = store.currentAccount?.email === "you@example.local";
@@ -1000,6 +1213,10 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  process.stderr.write(`${(error as Error).message}\n`);
+  if (process.argv.includes("--json")) {
+    process.stdout.write(`${JSON.stringify({ ok: false, error: (error as Error).message })}\n`);
+  } else {
+    process.stderr.write(`${(error as Error).message}\n`);
+  }
   process.exitCode = 1;
 });

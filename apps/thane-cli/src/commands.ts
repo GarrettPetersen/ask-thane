@@ -296,6 +296,42 @@ export const cliCommands: CliCommand[] = [
   },
   {
     category: "Help",
+    command: "thane doctor [--json]",
+    description: "Show version, resolved store path, active workspace, and local store stats.",
+    examples: ["thane doctor", "thane doctor --json"]
+  },
+  {
+    category: "Agent",
+    command: "thane agent context [--json]",
+    description: "Show compact agent-readable context for the active account and workspace.",
+    examples: ["thane agent context --json"]
+  },
+  {
+    category: "Agent",
+    command: "thane agent install-instructions",
+    description: "Print an AGENTS.md-ready snippet for safe Thane Chat reads.",
+    examples: ["thane agent install-instructions"]
+  },
+  {
+    category: "Agent",
+    command: "thane export messages [--all] [--channel general] [--since \"7 days ago\"] [--jsonl]",
+    description: "Export readable messages as JSON or JSONL for agent or script analysis.",
+    examples: ["thane export messages --channel general --jsonl", "thane export messages --all --jsonl"]
+  },
+  {
+    category: "Agent",
+    command: "thane read <recent|thread|search> ...",
+    description: "Read-only aliases for agent-safe message inspection.",
+    examples: ["thane read recent --json", "thane read thread msg_123 --json"]
+  },
+  {
+    category: "Agent",
+    command: "thane write <send|reply|react> ...",
+    description: "Explicit write aliases for sending, replying, and reacting.",
+    examples: ["thane write send general \"Shipping now\""]
+  },
+  {
+    category: "Help",
     command: "thane commands [--json]",
     description: "Show the scriptable command registry.",
     examples: ["thane commands", "thane commands --json"]
