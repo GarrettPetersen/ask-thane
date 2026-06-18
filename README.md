@@ -190,12 +190,12 @@ Right              focus messages, then the typing box
 Up / Down          navigate the focused sidebar/message list, or recall input while typing
 Enter              open the selected channel/DM, reply to the selected message, or send typed text
 r                  reply to the selected message
-e                  react to the selected message
+e                  open a reaction picker for the selected message
 Tab                autocomplete slash commands, channels, workspaces, users, and mentions
 Esc                close menu/help, cancel reply/react, or return to typing
 ```
 
-Thread replies render indented under their parent message, and selecting a channel or DM from the sidebar keeps focus in the sidebar so you can keep browsing.
+Thread replies render indented under their parent message, and selecting a channel or DM from the sidebar keeps focus in the sidebar so you can keep browsing. In the reaction picker, use arrows to choose a common reaction, Enter to apply it, or `c` to type a custom reaction.
 
 Create and switch workspaces:
 ```bash

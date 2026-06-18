@@ -30,6 +30,8 @@ interface CompletionCandidate {
 type ChatFocus = "composer" | "sidebar" | "messages";
 type ComposerMode = "message" | "reply" | "react";
 
+const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉", "👀", "✅", "🙏", "🚀"];
+
 function size(): { columns: number; rows: number } {
   return {
     columns: Math.max(60, Number(output.columns ?? 100)),
@@ -254,6 +256,19 @@ function renderMenuLines(selectedIndex: number, availableRows: number): string[]
   ];
 }
 
+function renderReactionPickerLines(selectedIndex: number): string[] {
+  const options = QUICK_REACTIONS.map((reaction, index) => {
+    const label = ` ${reaction} `;
+    return index === selectedIndex ? `${INVERSE}${label}${RESET}` : label;
+  });
+  return [
+    `${BOLD}React${RESET}`,
+    `${DIM}Use arrows, Enter to apply, c for custom, Esc to close.${RESET}`,
+    "",
+    options.join("  ")
+  ];
+}
+
 function commandInput(command: SlashCommand): string {
   return command.needsArgument ? `${command.name} ` : command.name;
 }
@@ -265,6 +280,8 @@ function renderScreen(inputText: string, state: {
   showHelp: boolean;
   showMenu: boolean;
   menuIndex: number;
+  showReactionPicker: boolean;
+  reactionIndex: number;
   focus: ChatFocus;
   conversationIndex: number;
   messageIndex: number;
@@ -296,6 +313,8 @@ function renderScreen(inputText: string, state: {
     : 0;
   const helpLines = state.showMenu
     ? renderMenuLines(state.menuIndex, contentRows)
+    : state.showReactionPicker
+    ? renderReactionPickerLines(state.reactionIndex)
     : state.showHelp
     ? [
         `${BOLD}Commands${RESET}`,
@@ -329,7 +348,7 @@ function renderScreen(inputText: string, state: {
     lines.push(`${left}│${right}`);
   }
 
-  const matches = state.showMenu ? [] : completionCandidates(state.store, inputText).slice(0, 4);
+  const matches = state.showMenu || state.showReactionPicker ? [] : completionCandidates(state.store, inputText).slice(0, 4);
   const suggestionStatus = matches.length > 0
     ? `${DIM}Tab completes:${RESET} ${matches.map((candidate) => candidate.label).join("  ")}`
     : "";
@@ -359,6 +378,8 @@ export async function runChat(initialChannel = "general"): Promise<void> {
   let showHelp = false;
   let showMenu = false;
   let menuIndex = 0;
+  let showReactionPicker = false;
+  let reactionIndex = 0;
   let focus: ChatFocus = "composer";
   let conversationIndex = 0;
   let messageIndex = 0;
@@ -391,6 +412,8 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       showHelp,
       showMenu,
       menuIndex,
+      showReactionPicker,
+      reactionIndex,
       focus,
       conversationIndex,
       messageIndex,
@@ -407,6 +430,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     activeChannel = channel;
     showHelp = false;
     showMenu = false;
+    showReactionPicker = false;
     focus = nextFocus;
     messageIndex = Math.max(0, threadedMessages(store.recent(activeChannel.id, 200)).length - 1);
     status = `Switched to ${channelLabel(channel)}`;
@@ -468,8 +492,23 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     targetMessageId = message.id;
     composerMode = "react";
     inputText = "";
-    focus = "composer";
+    showReactionPicker = true;
     status = `Reacting to @${message.author}`;
+  };
+
+  const applyReaction = async (emoji: string): Promise<void> => {
+    if (!targetMessageId) {
+      composerMode = "message";
+      showReactionPicker = false;
+      status = "No reaction target selected.";
+      return;
+    }
+    await store.react(targetMessageId, emoji);
+    composerMode = "message";
+    targetMessageId = undefined;
+    showReactionPicker = false;
+    focus = "messages";
+    status = `Reacted ${emoji}`;
   };
 
   const rememberInput = (line: string): void => {
@@ -532,15 +571,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       return;
     }
     if (composerMode === "react") {
-      if (!targetMessageId) {
-        composerMode = "message";
-        status = "No reaction target selected.";
-        return;
-      }
-      await store.react(targetMessageId, trimmed);
-      composerMode = "message";
-      targetMessageId = undefined;
-      status = "Reaction added";
+      await applyReaction(trimmed);
       return;
     }
     if (trimmed === "/menu") {
@@ -561,6 +592,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = `Joined ${channelLabel(activeChannel)}`;
       showHelp = false;
       showMenu = false;
+      showReactionPicker = false;
       focus = "messages";
       messageIndex = Math.max(0, threadedMessages(store.recent(activeChannel.id, 200)).length - 1);
       return;
@@ -571,6 +603,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = `Opened ${channelLabel(activeChannel)}`;
       showHelp = false;
       showMenu = false;
+      showReactionPicker = false;
       focus = "messages";
       messageIndex = Math.max(0, threadedMessages(store.recent(activeChannel.id, 200)).length - 1);
       return;
@@ -581,6 +614,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = `Switched to workspace ${workspace.slug}`;
       showHelp = false;
       showMenu = false;
+      showReactionPicker = false;
       return;
     }
     if (trimmed.startsWith("/")) {
@@ -676,6 +710,36 @@ export async function runChat(initialChannel = "general"): Promise<void> {
           await refresh();
           return;
         }
+        if (showReactionPicker) {
+          if (key.name === "escape") {
+            showReactionPicker = false;
+            composerMode = "message";
+            targetMessageId = undefined;
+            status = "";
+          } else if (key.name === "left" || key.name === "up") {
+            reactionIndex = reactionIndex === 0 ? QUICK_REACTIONS.length - 1 : reactionIndex - 1;
+          } else if (key.name === "right" || key.name === "down" || key.name === "tab") {
+            reactionIndex = reactionIndex === QUICK_REACTIONS.length - 1 ? 0 : reactionIndex + 1;
+          } else if (key.name === "return") {
+            await applyReaction(QUICK_REACTIONS[reactionIndex] ?? "👍");
+          } else if (key.name === "c") {
+            showReactionPicker = false;
+            focus = "composer";
+            inputText = "";
+            status = "Type a custom reaction, then Enter.";
+          } else if (key.sequence && key.sequence >= " " && !key.ctrl) {
+            showReactionPicker = false;
+            focus = "composer";
+            inputText = key.sequence;
+            historyIndex = undefined;
+            status = "Type a custom reaction, then Enter.";
+          }
+          if (!isOpen) {
+            return;
+          }
+          await refresh();
+          return;
+        }
         if (focus === "sidebar") {
           const items = conversations(store, activeChannel.id);
           if (key.name === "up") {
@@ -758,6 +822,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
         } else if (key.name === "escape") {
           showHelp = false;
           showMenu = false;
+          showReactionPicker = false;
           if (composerMode !== "message") {
             composerMode = "message";
             targetMessageId = undefined;
