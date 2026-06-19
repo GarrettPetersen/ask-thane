@@ -147,6 +147,27 @@
         font-size: 12px;
         text-transform: uppercase;
       }
+      .section-toggle {
+        width: 100%;
+        border-color: transparent;
+        background: transparent;
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 8px;
+        align-items: center;
+        text-align: left;
+        padding: 0 4px;
+      }
+      .section-toggle .summary {
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        text-transform: none;
+      }
+      .menu-caret {
+        color: var(--amber);
+      }
       .list { display: grid; gap: 6px; }
       .item {
         width: 100%;
@@ -380,6 +401,8 @@
         replyToId: "",
         draftText: "",
         sidebarCollapsed: localStorage.getItem("thane.web.sidebarCollapsed") === "true",
+        workspaceMenuOpen: localStorage.getItem("thane.web.workspaceMenuOpen") === "true",
+        channelMenuOpen: localStorage.getItem("thane.web.channelMenuOpen") === "true",
         status: "",
         error: "",
         busy: false
@@ -487,6 +510,18 @@
       function toggleSidebar() {
         state.sidebarCollapsed = !state.sidebarCollapsed;
         localStorage.setItem("thane.web.sidebarCollapsed", String(state.sidebarCollapsed));
+        render();
+      }
+
+      function toggleMenu(name) {
+        if (name === "workspaces") {
+          state.workspaceMenuOpen = !state.workspaceMenuOpen;
+          localStorage.setItem("thane.web.workspaceMenuOpen", String(state.workspaceMenuOpen));
+        }
+        if (name === "channels") {
+          state.channelMenuOpen = !state.channelMenuOpen;
+          localStorage.setItem("thane.web.channelMenuOpen", String(state.channelMenuOpen));
+        }
         render();
       }
 
@@ -748,12 +783,12 @@
                 <p class="muted small">${esc(state.session.email)}</p>
               </div>
               <section class="section">
-                <div class="section-head"><span>Workspaces</span><button onclick="sync().then(render)">sync</button></div>
-                <div class="list">${snap.workspaces.map((item) => `<button class="item ${item.id === state.activeWorkspaceId ? "active" : ""}" onclick="chooseWorkspace(${jsString(item.id)})"><span class="cursor">${item.id === state.activeWorkspaceId ? ">" : " "}</span> ${esc(item.slug)}</button>`).join("") || `<div class="empty">No workspaces yet</div>`}</div>
+                <div class="section-head"><button class="section-toggle" onclick="toggleMenu('workspaces')"><span class="menu-caret">${state.workspaceMenuOpen ? "v" : ">"}</span><span>Workspaces</span><span class="summary">${esc(workspace?.slug || "none")}</span></button><button onclick="sync().then(render)">sync</button></div>
+                ${state.workspaceMenuOpen ? `<div class="list">${snap.workspaces.map((item) => `<button class="item ${item.id === state.activeWorkspaceId ? "active" : ""}" onclick="chooseWorkspace(${jsString(item.id)})"><span class="cursor">${item.id === state.activeWorkspaceId ? ">" : " "}</span> ${esc(item.slug)}</button>`).join("") || `<div class="empty">No workspaces yet</div>`}</div>` : ""}
               </section>
               <section class="section">
-                <div class="section-head"><span>Channels</span></div>
-                <div class="list">${snap.channels.map((item) => `<button class="item ${item.id === state.activeChannelId ? "active" : ""}" onclick="state.activeChannelId=${jsString(item.id)}; state.replyToId=''; render()"><span class="cursor">${item.id === state.activeChannelId ? ">" : " "}</span> #${esc(item.name)}</button>`).join("") || `<div class="empty">No channels yet</div>`}</div>
+                <div class="section-head"><button class="section-toggle" onclick="toggleMenu('channels')"><span class="menu-caret">${state.channelMenuOpen ? "v" : ">"}</span><span>Channels</span><span class="summary">#${esc(channel?.name || "general")}</span></button></div>
+                ${state.channelMenuOpen ? `<div class="list">${snap.channels.map((item) => `<button class="item ${item.id === state.activeChannelId ? "active" : ""}" onclick="state.activeChannelId=${jsString(item.id)}; state.replyToId=''; render()"><span class="cursor">${item.id === state.activeChannelId ? ">" : " "}</span> #${esc(item.name)}</button>`).join("") || `<div class="empty">No channels yet</div>`}</div>` : ""}
               </section>
             </aside>
             <main class="main">
@@ -833,6 +868,7 @@
       window.sendMessage = sendMessage;
       window.updateDraft = updateDraft;
       window.toggleSidebar = toggleSidebar;
+      window.toggleMenu = toggleMenu;
       window.replyTo = replyTo;
       window.reactTo = reactTo;
       window.customReaction = customReaction;
