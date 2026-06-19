@@ -537,6 +537,7 @@
       const API = "https://api.askthane.com";
       const freeLimits = { members: 100, privateChannels: 10 };
       const storageKey = "thane.web.session";
+      const realtimeEnabled = localStorage.getItem("thane.web.realtime") === "true";
       const root = document.querySelector("#root");
       const inviteMatch = location.pathname.match(/^\/invite\/([^/?#]+)/);
       const inviteEmail = new URLSearchParams(location.search).get("email") || "";
@@ -914,6 +915,10 @@
       }
 
       function connectRealtime() {
+        if (!realtimeEnabled) {
+          state.realtimeStatus = "polling";
+          return;
+        }
         if (!state.session?.authToken || !state.activeWorkspaceId || !("WebSocket" in window)) {
           state.realtimeStatus = "polling";
           return;

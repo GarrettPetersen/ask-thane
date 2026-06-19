@@ -52,6 +52,10 @@ function authToken(store: ThaneStore): string | undefined {
   return store.currentAccount?.authToken;
 }
 
+function realtimeEnabled(): boolean {
+  return process.env.THANE_ENABLE_REALTIME === "1";
+}
+
 function hostedEventsUrl(store: ThaneStore, workspaceId: string): string {
   const baseUrl = hostedBaseUrl();
   const token = authToken(store);
@@ -120,6 +124,10 @@ export function watchHostedWorkspaceEvents(
     onStatus?: (status: "connecting" | "live" | "closed" | "unavailable") => void;
   }
 ): { close: () => void } {
+  if (!realtimeEnabled()) {
+    input.onStatus?.("unavailable");
+    return { close: () => {} };
+  }
   if (!hasHostedChat(store) || typeof WebSocket === "undefined") {
     input.onStatus?.("unavailable");
     return { close: () => {} };
