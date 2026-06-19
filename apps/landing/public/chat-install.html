@@ -6,7 +6,7 @@
     <title>Install Thane Chat</title>
     <meta
       name="description"
-      content="Install Thane Chat, create a workspace, invite teammates, and open terminal-based team chat."
+      content="Install the Thane Chat CLI for terminal and coding-agent access."
     />
     <meta name="theme-color" content="#f7f3ea" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
@@ -262,11 +262,8 @@
       <section class="hero">
         <div>
           <div class="eyebrow">Thane Chat install</div>
-          <h1>Start terminal chat in a few commands.</h1>
-          <p class="lead">
-            Install the CLI, run the guided setup, and open a channel. The free tier supports 100 members and
-            10 private channels.
-          </p>
+          <h1>Add the terminal app.</h1>
+          <p class="lead">Use the same hosted workspace from your shell and local coding agents.</p>
         </div>
         <div class="command-wrap">
           <button class="copy-command" type="button" data-copy-target="chat-install-commands">Copy</button>
@@ -279,54 +276,46 @@ thane chat general</code></pre>
       <h2 class="section-title">Setup</h2>
       <section class="grid" aria-label="Thane Chat setup">
         <article class="card">
-          <h3>1. Install the CLI</h3>
-          <p>Install globally with npm, then run <code>thane init</code>. The setup asks for your email and verifies the account.</p>
+          <h3>Install</h3>
+          <p>Install globally with npm.</p>
         </article>
         <article class="card">
-          <h3>2. Create a workspace</h3>
-          <p>Create the first workspace for your organization or join one from an invite link.</p>
+          <h3>Sign in</h3>
+          <p>Run <code>thane init</code> and verify your email.</p>
         </article>
         <article class="card">
-          <h3>3. Open chat</h3>
-          <p>Run <code>thane chat general</code> for the live interface, or use scriptable commands for agents and automation.</p>
+          <h3>Chat</h3>
+          <p>Run <code>thane chat general</code> or script commands for agents.</p>
         </article>
       </section>
 
-      <h2 class="section-title">Common Next Steps</h2>
+      <h2 class="section-title">Useful Commands</h2>
       <section class="grid" aria-label="Thane Chat next steps">
         <article class="card">
-          <h3>Invite Teammates</h3>
+          <h3>Invite</h3>
           <p>Use <code>thane invite teammate@example.com</code> to send a workspace invite.</p>
         </article>
         <article class="card">
-          <h3>Import a Slack Export</h3>
-          <p>Workspace admins can run <code>thane workspace create-from-slack ./export.zip --apply</code>.</p>
+          <h3>Read</h3>
+          <p>Use <code>thane see-recent --json</code> for agent-readable context.</p>
         </article>
         <article class="card">
-          <h3>Connect Ask Thane</h3>
-          <p>Teams using the agent can enable the bridge with <code>thane ask-thane enable</code>.</p>
+          <h3>Reply</h3>
+          <p>Use <code>thane reply &lt;message-id&gt; "..."</code> from scripts or agents.</p>
         </article>
       </section>
 
-      <h2 class="section-title">Plans</h2>
+      <h2 class="section-title">Web App</h2>
       <section class="grid" aria-label="Thane Chat plans">
         <article class="card">
-          <h3>Free</h3>
-          <ul>
-            <li>100 workspace members</li>
-            <li>10 private channels</li>
-            <li>Public channels, DMs, threads, mentions</li>
-          </ul>
-          <a class="button secondary" href="/chat">View Overview</a>
+          <h3>No Install Required</h3>
+          <p>Use Thane Chat in the browser when you do not need terminal access.</p>
+          <a class="button secondary" href="https://chat.askthane.com">Open web app</a>
         </article>
         <article class="card featured">
-          <h3>Team</h3>
-          <ul>
-            <li>$8 per member per month</li>
-            <li>Unlimited workspace members</li>
-            <li>Unlimited private channels</li>
-          </ul>
-          <a class="button" href="https://payments.askthane.com/subscribe?plan_tier=cli_team">Choose Team</a>
+          <h3>Overview</h3>
+          <p>See how Thane Chat works across web, terminal, and agents.</p>
+          <a class="button" href="/chat">View overview</a>
         </article>
       </section>
     </main>

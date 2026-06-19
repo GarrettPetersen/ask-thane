@@ -497,7 +497,7 @@ describe("@ask-thane/api-worker", () => {
       from: "Thane <noreply@askthane.com>",
       to: "alex@example.com",
       subject: expect.stringContaining("invited you to Acme Inc"),
-      text: expect.stringContaining("Accept the invite in your browser:")
+      text: expect.stringContaining("Accept in the web app:")
     });
     expect(sendEmail.mock.calls[0]?.[0].text).toContain("https://chat.askthane.com/invite/");
     expect(sendEmail.mock.calls[0]?.[0].text).toContain("thane invite-link accept https://api.askthane.com/invite/");
@@ -558,6 +558,132 @@ describe("@ask-thane/api-worker", () => {
     await expect(res.json()).resolves.toMatchObject({ ok: false, error: "workspace_admin_required" });
     expect(sendEmail).not.toHaveBeenCalled();
     expect(prepare).not.toHaveBeenCalledWith(expect.stringContaining("INSERT INTO thane_cli_workspace_invites"));
+  });
+
+  it("rejects new private channels when a free Thane Chat workspace reaches the limit", async () => {
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members")) {
+        return {
+          id: "tcm_1",
+          account_id: "acct_1",
+          email: "owner@example.com",
+          display_name: "Owner",
+          handle: "owner",
+          role: "owner"
+        };
+      }
+      if (sql.includes("SELECT id, visibility FROM thane_cli_channels")) {
+        return null;
+      }
+      if (sql.includes("SELECT plan_tier FROM thane_cli_workspaces")) {
+        return { plan_tier: "free" };
+      }
+      if (sql.includes("COUNT(*) AS count FROM thane_cli_channels")) {
+        return { count: 10 };
+      }
+      return null;
+    });
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn(() => ({ run, first: first.bind({ sql }) }))
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/channels", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
+        body: JSON.stringify({
+          workspaceId: "wsp_1",
+          name: "private-plans",
+          private: true
+        })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(402);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: "thane_chat_private_channel_limit_reached",
+      limit: 10
+    });
+    expect(prepare).not.toHaveBeenCalledWith(expect.stringContaining("INSERT INTO thane_cli_channels"));
+  });
+
+  it("allows new private channels for cli_team Thane Chat workspaces", async () => {
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members")) {
+        return {
+          id: "tcm_1",
+          account_id: "acct_1",
+          email: "owner@example.com",
+          display_name: "Owner",
+          handle: "owner",
+          role: "owner"
+        };
+      }
+      if (sql.includes("SELECT id, visibility FROM thane_cli_channels")) {
+        return null;
+      }
+      if (sql.includes("SELECT plan_tier FROM thane_cli_workspaces")) {
+        return { plan_tier: "cli_team" };
+      }
+      if (sql.includes("COUNT(*) AS count FROM thane_cli_channels")) {
+        return { count: 10 };
+      }
+      if (sql.includes("SELECT id, workspace_id, name, visibility, topic, created_at")) {
+        return {
+          id: "tcc_2",
+          workspace_id: "wsp_1",
+          name: "private-plans",
+          visibility: "private",
+          topic: null,
+          created_at: "2026-06-18T00:00:00.000Z"
+        };
+      }
+      return null;
+    });
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn(() => ({ run, first: first.bind({ sql }) }))
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/channels", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
+        body: JSON.stringify({
+          workspaceId: "wsp_1",
+          name: "private-plans",
+          private: true
+        })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      channel: {
+        id: "tcc_2",
+        workspaceId: "wsp_1",
+        name: "private-plans",
+        visibility: "private"
+      }
+    });
+    expect(prepare).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO thane_cli_channels"));
   });
 
   it.each([
@@ -624,6 +750,358 @@ describe("@ask-thane/api-worker", () => {
       }
     });
     expect(prepare).toHaveBeenCalledWith(expect.stringContaining("UPDATE thane_cli_workspace_invites"));
+  });
+
+  it("rejects invite acceptance for new members when a free Thane Chat workspace reaches the limit", async () => {
+    const inviteRow = {
+      id: "inv_1",
+      workspace_id: "wsp_1",
+      workspace_slug: "acme",
+      workspace_name: "Acme Inc",
+      role: "member",
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      revoked_at: null,
+      accepted_count: 0,
+      max_uses: null
+    };
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("SELECT id, workspace_id")) {
+        return inviteRow;
+      }
+      if (sql.includes("COUNT(*) AS count FROM thane_cli_workspace_members")) {
+        return { count: 100 };
+      }
+      if (sql.includes("FROM thane_cli_workspace_members")) {
+        return null;
+      }
+      if (sql.includes("SELECT plan_tier FROM thane_cli_workspaces")) {
+        return { plan_tier: "free" };
+      }
+      return null;
+    });
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn(() => ({ run, first: first.bind({ sql }) }))
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/workspace-invites/accept", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("new@example.com")}` },
+        body: JSON.stringify({ token: "token_123" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(402);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: "thane_chat_member_limit_reached",
+      limit: 100
+    });
+    expect(prepare).not.toHaveBeenCalledWith(expect.stringContaining("UPDATE thane_cli_workspace_invites"));
+  });
+
+  it("creates Thane Chat billing links for workspace admins", async () => {
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members")) {
+        return {
+          id: "tcm_1",
+          account_id: "acct_1",
+          email: "owner@example.com",
+          display_name: "Owner",
+          handle: "owner",
+          role: "owner"
+        };
+      }
+      if (sql.includes("FROM thane_cli_workspaces")) {
+        return {
+          id: "wsp_1",
+          workspace_slug: "acme",
+          plan_tier: "free"
+        };
+      }
+      return null;
+    });
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn(() => ({ first: first.bind({ sql }) }))
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret",
+      BILLING_LINK_SIGNING_SECRET: "billing-secret",
+      THANE_PAYMENTS_BASE_URL: "https://payments.askthane.com"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/billing/link", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
+        body: JSON.stringify({ workspaceId: "wsp_1", returnUrl: "https://chat.askthane.com/" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      ok: true,
+      billing: {
+        workspaceId: "wsp_1",
+        planTier: "free",
+        targetPlanTier: "cli_team"
+      }
+    });
+    expect(body.billing.checkoutUrl).toContain("https://payments.askthane.com/subscribe?");
+    expect(body.billing.checkoutUrl).toContain("plan_tier=cli_team");
+    expect(body.billing.checkoutUrl).toContain("billing_token=");
+    expect(body.billing.portalUrl).toContain("billing_token=");
+  });
+
+  it("rejects Thane Chat billing links for non-admin members", async () => {
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members")) {
+        return {
+          id: "tcm_1",
+          account_id: "acct_1",
+          email: "member@example.com",
+          display_name: "Member",
+          handle: "member",
+          role: "member"
+        };
+      }
+      return null;
+    });
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn(() => ({ first: first.bind({ sql }) }))
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret",
+      BILLING_LINK_SIGNING_SECRET: "billing-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/billing/link", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("member@example.com")}` },
+        body: JSON.stringify({ workspaceId: "wsp_1" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({ ok: false, error: "workspace_admin_required" });
+  });
+
+  it("enables native Ask Thane for workspace admins", async () => {
+    const first = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members") && sql.includes("email = ?")) {
+        if (this.args?.[1] === "thane@askthane.com") {
+          return {
+            id: "tcm_thane",
+            account_id: "acct_thane",
+            email: "thane@askthane.com",
+            display_name: "Ask Thane",
+            handle: "thane",
+            role: "member"
+          };
+        }
+        return {
+          id: "tcm_owner",
+          account_id: "acct_owner",
+          email: "owner@example.com",
+          display_name: "Owner",
+          handle: "owner",
+          role: "owner"
+        };
+      }
+      if (sql.includes("FROM thane_cli_workspace_members") && sql.includes("id = ?")) {
+        return {
+          id: "tcm_thane",
+          account_id: "acct_thane",
+          email: "thane@askthane.com",
+          display_name: "Ask Thane",
+          handle: "thane",
+          role: "member"
+        };
+      }
+      if (sql.includes("FROM thane_cli_ask_thane_integrations")) {
+        return {
+          workspace_id: "wsp_1",
+          enabled: 1,
+          bot_member_id: "tcm_thane",
+          linked_account_email: "owner@example.com",
+          connected_at: "2026-06-18T00:00:00.000Z",
+          updated_at: "2026-06-18T00:00:00.000Z",
+          last_event_at: "2026-06-18T00:00:00.000Z"
+        };
+      }
+      return null;
+    });
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => ({ run, first: first.bind({ sql, args }) }))
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/ask-thane/enable", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
+        body: JSON.stringify({ workspaceId: "wsp_1" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      integration: {
+        workspaceId: "wsp_1",
+        enabled: true,
+        botUserId: "tcm_thane",
+        linkedAccountEmail: "owner@example.com"
+      }
+    });
+    expect(prepare).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO thane_cli_ask_thane_integrations"));
+  });
+
+  it("posts a native Ask Thane reply when mentioned in Thane Chat", async () => {
+    const insertedMessages: Array<{ args: unknown[] }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "Native Ask Thane reply." } }]
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      )
+    );
+    const first = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members") && sql.includes("email = ?")) {
+        if (this.args?.[1] === "thane@askthane.com") {
+          return {
+            id: "tcm_thane",
+            account_id: "acct_thane",
+            email: "thane@askthane.com",
+            display_name: "Ask Thane",
+            handle: "thane",
+            role: "member"
+          };
+        }
+        return {
+          id: "tcm_owner",
+          account_id: "acct_owner",
+          email: "owner@example.com",
+          display_name: "Owner",
+          handle: "owner",
+          role: "owner"
+        };
+      }
+      if (sql.includes("SELECT id, workspace_name, workspace_slug")) {
+        return { id: "wsp_1", workspace_name: "Acme", workspace_slug: "acme" };
+      }
+      if (sql.includes("SELECT id, name FROM thane_cli_channels")) {
+        return { id: "tcc_1", name: "general" };
+      }
+      if (sql.includes("FROM thane_cli_ask_thane_integrations")) {
+        return {
+          workspace_id: "wsp_1",
+          enabled: 1,
+          bot_member_id: "tcm_thane",
+          linked_account_email: "owner@example.com",
+          connected_at: "2026-06-18T00:00:00.000Z",
+          updated_at: "2026-06-18T00:00:00.000Z",
+          last_event_at: null
+        };
+      }
+      if (sql.includes("FROM thane_cli_workspace_members") && sql.includes("id = ?")) {
+        return {
+          id: "tcm_thane",
+          account_id: "acct_thane",
+          email: "thane@askthane.com",
+          display_name: "Ask Thane",
+          handle: "thane",
+          role: "member"
+        };
+      }
+      return null;
+    });
+    const all = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_chat_messages")) {
+        return {
+          results: [
+            {
+              id: "tmsg_user",
+              text: "hello @thane",
+              created_at: "2026-06-18T00:00:00.000Z",
+              thread_root_id: null,
+              handle: "owner"
+            }
+          ]
+        };
+      }
+      return { results: [] };
+    });
+    const run = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
+      if ((this.sql ?? "").includes("INSERT INTO thane_cli_chat_messages")) {
+        insertedMessages.push({ args: this.args ?? [] });
+      }
+      return { meta: { changes: 1 } };
+    });
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => ({
+        run: run.bind({ sql, args }),
+        first: first.bind({ sql }),
+        all: all.bind({ sql })
+      }))
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret",
+      OPENAI_API_KEY: "sk-test",
+      DEFAULT_LLM_MODEL: "gpt-4.1-mini"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/messages", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
+        body: JSON.stringify({ workspaceId: "wsp_1", channelId: "tcc_1", text: "hello @thane", source: "chat" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.askThaneReply).toMatchObject({ text: "Native Ask Thane reply." });
+    expect(insertedMessages).toHaveLength(2);
+    expect(insertedMessages[1]?.args[4]).toBe("Native Ask Thane reply.");
+    expect(fetch).toHaveBeenCalledWith(
+      "https://api.openai.com/v1/chat/completions",
+      expect.objectContaining({ method: "POST" })
+    );
   });
 
   it("renders browser-friendly Thane CLI invite pages", async () => {

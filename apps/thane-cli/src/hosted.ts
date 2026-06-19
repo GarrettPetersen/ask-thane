@@ -1,11 +1,13 @@
 import { ThaneStore } from "./store.js";
 import type {
+  AskThaneIntegration,
   ThaneAccount,
   ThaneChannel,
   ThaneMessage,
   ThaneUser,
   ThaneWorkspace,
-  ThaneWorkspaceMember
+  ThaneWorkspaceMember,
+  WorkspaceBillingPlan
 } from "./model.js";
 
 export interface HostedSyncSnapshot {
@@ -17,6 +19,17 @@ export interface HostedSyncSnapshot {
   users: ThaneUser[];
   channels: ThaneChannel[];
   messages: ThaneMessage[];
+  askThaneIntegrations?: AskThaneIntegration[];
+  billingPlans?: WorkspaceBillingPlan[];
+}
+
+export interface HostedBillingLink {
+  workspaceId: string;
+  planTier: "free" | "cli_team";
+  targetPlanTier: "cli_team";
+  checkoutUrl: string;
+  portalUrl: string;
+  expiresAt: string;
 }
 
 function hostedBaseUrl(): string | undefined {
@@ -74,10 +87,24 @@ export async function syncHostedStore(store: ThaneStore, options: { workspaceId?
   if (!hasHostedChat(store)) {
     return false;
   }
-  const workspaceId = encodeURIComponent(options.workspaceId ?? store.activeWorkspace.id);
-  const snapshot = await getHosted<HostedSyncSnapshot>(store, `/v1/thane-cli/sync?workspaceId=${workspaceId}`);
+  const workspaceId = options.workspaceId ?? store.activeWorkspaceId;
+  const path = workspaceId ? `/v1/thane-cli/sync?workspaceId=${encodeURIComponent(workspaceId)}` : "/v1/thane-cli/sync";
+  const snapshot = await getHosted<HostedSyncSnapshot>(store, path);
   await store.applyHostedSnapshot(snapshot);
   return true;
+}
+
+export async function createHostedWorkspace(
+  store: ThaneStore,
+  input: { workspaceId: string; slug: string; name?: string; asciiArt?: string }
+): Promise<void> {
+  await postHosted(store, "/v1/thane-cli/workspaces", {
+    workspaceId: input.workspaceId,
+    workspaceSlug: input.slug,
+    workspaceName: input.name ?? input.slug,
+    ...(input.asciiArt ? { asciiArt: input.asciiArt } : {})
+  });
+  await syncHostedStore(store, { workspaceId: input.workspaceId });
 }
 
 export async function ensureHostedWorkspace(store: ThaneStore): Promise<void> {
@@ -102,6 +129,14 @@ export async function createHostedChannel(store: ThaneStore, input: { name: stri
     ...(input.private ? { private: true } : {})
   });
   await syncHostedStore(store);
+}
+
+export async function createHostedBillingLink(store: ThaneStore, input: { returnUrl?: string } = {}): Promise<HostedBillingLink> {
+  const response = await postHosted<{ ok: true; billing: HostedBillingLink }>(store, "/v1/thane-cli/billing/link", {
+    workspaceId: store.activeWorkspace.id,
+    ...(input.returnUrl ? { returnUrl: input.returnUrl } : {})
+  });
+  return response.billing;
 }
 
 export async function sendHostedMessage(

@@ -411,12 +411,64 @@
         padding: 10px;
         color: var(--green);
         overflow-wrap: anywhere;
+        white-space: pre-wrap;
       }
       .empty {
         border: 0;
         color: var(--muted);
         padding: 0;
         text-align: left;
+      }
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        display: grid;
+        place-items: center;
+        padding: 18px;
+        background: rgba(2, 5, 3, 0.76);
+      }
+      .modal {
+        width: min(720px, 100%);
+        max-height: min(760px, calc(100vh - 36px));
+        overflow: auto;
+        border: 1px solid var(--green);
+        background: #070a08;
+        box-shadow: 0 30px 90px var(--shadow);
+      }
+      .modal-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: start;
+        gap: 14px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+      }
+      .modal-title { display: grid; gap: 5px; }
+      .modal h2 { font-size: 16px; color: var(--green); }
+      .modal-body { padding: 16px; display: grid; gap: 14px; }
+      .terminal-lines {
+        border: 1px solid var(--line);
+        background: var(--field);
+        padding: 12px;
+        display: grid;
+        gap: 7px;
+      }
+      .terminal-lines code {
+        color: var(--green);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .modal-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .note-grid {
+        display: grid;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 12px;
       }
 
       @media (max-width: 980px) {
@@ -441,6 +493,7 @@
     <div id="root"></div>
     <script>
       const API = "https://api.askthane.com";
+      const freeLimits = { members: 100, privateChannels: 10 };
       const storageKey = "thane.web.session";
       const root = document.querySelector("#root");
       const inviteMatch = location.pathname.match(/^\/invite\/([^/?#]+)/);
@@ -462,11 +515,13 @@
         longPressTimer: null,
         touchMoved: false,
         inviteLinkResult: null,
+        billingBusy: false,
         searchQuery: "",
         draftText: "",
         sidebarCollapsed: localStorage.getItem("thane.web.sidebarCollapsed") === "true",
         workspaceMenuOpen: localStorage.getItem("thane.web.workspaceMenuOpen") === "true",
         channelMenuOpen: localStorage.getItem("thane.web.channelMenuOpen") === "true",
+        cliInstallOpen: false,
         status: "",
         error: "",
         busy: false
@@ -546,12 +601,30 @@
 
       function currentWorkspaceRole() {
         const snap = currentSnapshot();
-        return (snap.workspaceMembers || []).find((member) => member.email === state.session?.email)?.role || "";
+        const user = (snap.users || []).find((candidate) => candidate.email === state.session?.email);
+        return (snap.workspaceMembers || []).find((member) => member.userId === user?.id)?.role || "";
       }
 
       function canAdminWorkspace() {
         const role = currentWorkspaceRole();
         return role === "owner" || role === "admin";
+      }
+
+      function currentBillingPlan(workspaceId) {
+        const snap = currentSnapshot();
+        return (snap.billingPlans || []).find((plan) => plan.workspaceId === workspaceId) || {
+          workspaceId,
+          planTier: "free",
+          status: "active"
+        };
+      }
+
+      function currentAskThaneIntegration(workspaceId) {
+        return (currentSnapshot().askThaneIntegrations || []).find((integration) => integration.workspaceId === workspaceId) || null;
+      }
+
+      function privateChannelCount() {
+        return (currentSnapshot().channels || []).filter((channel) => channel.kind === "channel" && channel.visibility === "private").length;
       }
 
       function messageById(id) {
@@ -912,6 +985,50 @@
         }
       }
 
+      async function openBilling(target) {
+        const workspace = state.snapshot?.workspaces?.find((item) => item.id === state.activeWorkspaceId);
+        if (!workspace || state.billingBusy) return;
+        state.billingBusy = true;
+        state.error = "";
+        state.status = target === "portal" ? "Opening billing..." : "Starting checkout...";
+        render();
+        try {
+          const body = await api("/v1/thane-cli/billing/link", {
+            method: "POST",
+            body: JSON.stringify({
+              workspaceId: workspace.id,
+              returnUrl: location.href
+            })
+          });
+          const url = target === "portal" ? body.billing?.portalUrl : body.billing?.checkoutUrl;
+          if (!url) throw new Error("billing_link_missing");
+          location.href = url;
+        } catch (error) {
+          state.error = error.message;
+          state.status = "";
+          state.billingBusy = false;
+          render();
+        }
+      }
+
+      async function setAskThaneEnabled(enabled) {
+        const workspace = state.snapshot?.workspaces?.find((item) => item.id === state.activeWorkspaceId);
+        if (!workspace) return;
+        try {
+          await api(`/v1/thane-cli/ask-thane/${enabled ? "enable" : "disable"}`, {
+            method: "POST",
+            body: JSON.stringify({ workspaceId: workspace.id })
+          });
+          state.status = enabled ? "Ask Thane enabled. Mention @thane." : "Ask Thane disabled";
+          state.error = "";
+          await sync();
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
       async function updateDisplayName(event) {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
@@ -1017,6 +1134,55 @@
         render();
       }
 
+      function openCliInstall() {
+        state.cliInstallOpen = true;
+        render();
+      }
+
+      function closeCliInstall() {
+        state.cliInstallOpen = false;
+        render();
+      }
+
+      function renderCliInstallModal() {
+        if (!state.cliInstallOpen) return "";
+        const installCommand = "npm install -g @ask-thane/thane-cli";
+        const signInCommand = "thane init";
+        const inviteCommand = state.inviteToken
+          ? `thane invite-link accept https://api.askthane.com/invite/${state.inviteToken}`
+          : "";
+        const allCommands = [installCommand, signInCommand, inviteCommand].filter(Boolean).join("\n");
+        return `
+          <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="cli-install-title" onclick="if(event.target===this) closeCliInstall()">
+            <section class="modal">
+              <div class="modal-head">
+                <div class="modal-title">
+                  <h2 id="cli-install-title">Terminal app</h2>
+                  <p class="muted small">Use Thane Chat from your shell and from coding agents on your machine.</p>
+                </div>
+                <button class="icon-button" onclick="closeCliInstall()" aria-label="Close terminal app install">x</button>
+              </div>
+              <div class="modal-body">
+                <div class="note-grid">
+                  <div>The web app is enough for everyday chat.</div>
+                  <div>The terminal app adds local-machine access: you can read, send, reply, react, invite, and let a coding agent use Thane Chat with the same hosted account.</div>
+                </div>
+                <div class="terminal-lines">
+                  <code>${esc(installCommand)}</code>
+                  <code>${esc(signInCommand)}</code>
+                  ${inviteCommand ? `<code>${esc(inviteCommand)}</code>` : ""}
+                </div>
+                <div class="modal-actions">
+                  <button onclick="copyText(${jsString(allCommands)}, 'Install commands')">Copy commands</button>
+                  <button onclick="copyText(${jsString(installCommand)}, 'Install command')">Copy install</button>
+                  ${inviteCommand ? `<button onclick="copyText(${jsString(inviteCommand)}, 'Invite command')">Copy invite command</button>` : ""}
+                </div>
+                <p class="muted small">After installing, run <span class="ok">thane chat general</span> to open the terminal client.</p>
+              </div>
+            </section>
+          </div>`;
+      }
+
       function renderLogin() {
         const codeForm = state.authStep === "code" || state.authStep === "mfa";
         const invite = state.invitePreview;
@@ -1082,6 +1248,10 @@
         const isAdmin = canAdminWorkspace();
         const role = currentWorkspaceRole();
         const inviteResult = state.inviteLinkResult;
+        const billingPlan = currentBillingPlan(workspace?.id);
+        const isTeamPlan = billingPlan.planTier === "cli_team" && billingPlan.status === "active";
+        const privateChannels = privateChannelCount();
+        const askThane = currentAskThaneIntegration(workspace?.id);
         root.innerHTML = `
           <div class="app ${state.sidebarCollapsed ? "sidebar-collapsed" : ""}">
             <aside class="rail">
@@ -1176,6 +1346,35 @@
                 </div>
               </section>
               <section class="section">
+                <div class="section-head"><span>Terminal app</span></div>
+                <div class="kv">
+                  <div>Use Thane Chat from your shell and local coding agents.</div>
+                  <button onclick="openCliInstall()">Install CLI</button>
+                </div>
+              </section>
+              <section class="section">
+                <div class="section-head"><span>Ask Thane</span></div>
+                <div class="kv">
+                  <div>status: ${askThane?.enabled ? "enabled" : "disabled"}</div>
+                  <div>mention: @thane</div>
+                  ${isAdmin ? `
+                    <button onclick="setAskThaneEnabled(${askThane?.enabled ? "false" : "true"})">${askThane?.enabled ? "Disable" : "Enable"} Ask Thane</button>
+                  ` : `<div class="muted small">admin required</div>`}
+                </div>
+              </section>
+              <section class="section">
+                <div class="section-head"><span>Billing</span></div>
+                <div class="kv">
+                  <div>plan: ${esc(billingPlan.planTier || "free")}</div>
+                  <div>status: ${esc(billingPlan.status || "active")}</div>
+                  <div>members: ${snap.users.length}/${isTeamPlan ? "unlimited" : freeLimits.members}</div>
+                  <div>private channels: ${privateChannels}/${isTeamPlan ? "unlimited" : freeLimits.privateChannels}</div>
+                  ${isAdmin ? `
+                    ${isTeamPlan ? `<button onclick="openBilling('portal')" ${state.billingBusy ? "disabled" : ""}>Manage billing</button>` : `<button onclick="openBilling('checkout')" ${state.billingBusy ? "disabled" : ""}>Upgrade workspace</button>`}
+                  ` : `<div class="muted small">admin required</div>`}
+                </div>
+              </section>
+              <section class="section">
                 <div class="section-head"><span>New workspace</span></div>
                 <form class="list" onsubmit="createWorkspace(event)">
                   <input name="name" placeholder="Thane Internal" />
@@ -1214,7 +1413,8 @@
                 ` : `<div class="muted small">admin required</div>`}
               </section>
             </aside>
-          </div>`;
+          </div>
+          ${renderCliInstallModal()}`;
         requestAnimationFrame(() => {
           const scroller = document.querySelector(".messages");
           if (scroller) scroller.scrollTop = scroller.scrollHeight;
@@ -1248,15 +1448,25 @@
       window.createChannel = createChannel;
       window.invite = invite;
       window.createInviteLink = createInviteLink;
+      window.openBilling = openBilling;
+      window.setAskThaneEnabled = setAskThaneEnabled;
       window.updateDisplayName = updateDisplayName;
       window.refreshMfaStatus = refreshMfaStatus;
       window.startMfaSetup = startMfaSetup;
       window.verifyMfaSetup = verifyMfaSetup;
       window.disableMfa = disableMfa;
       window.copyText = copyText;
+      window.openCliInstall = openCliInstall;
+      window.closeCliInstall = closeCliInstall;
       window.sync = sync;
       window.render = render;
       window.state = state;
+
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && state.cliInstallOpen) {
+          closeCliInstall();
+        }
+      });
 
       if (state.session?.authToken) {
         Promise.resolve()

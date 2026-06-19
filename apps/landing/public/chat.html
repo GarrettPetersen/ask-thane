@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Thane Chat | Team Chat in the Terminal</title>
+    <title>Thane Chat | Agent-First Chat Application</title>
     <meta
       name="description"
-      content="Thane Chat gives teams channels, DMs, threads, mentions, and scriptable commands in the terminal."
+      content="Thane Chat is an agent-first chat application for web, terminal, and coding agents."
     />
     <meta name="theme-color" content="#f7f3ea" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
@@ -270,67 +270,51 @@
       <section class="hero">
         <div>
           <div class="eyebrow">Thane Chat</div>
-          <h1>Team chat in the terminal.</h1>
-          <p class="lead">
-            Thane Chat gives teams workspaces, public and private channels, DMs, threads, mentions, unread
-            summaries, and scriptable commands that people and agents can both use.
-          </p>
+          <h1>agent-first chat application.</h1>
+          <p class="lead">Chat on the web. Work from the terminal. Let coding agents read, reply, and react from the same hosted workspace.</p>
           <div class="actions">
-            <a class="button" href="/chat/install">Install the CLI</a>
-            <a class="button secondary" href="/ask-thane">Switch to Ask Thane</a>
+            <a class="button" href="https://chat.askthane.com">Open web app</a>
+            <a class="button secondary" href="/chat/install">Install CLI</a>
           </div>
         </div>
 
         <div class="terminal" aria-label="Thane Chat terminal preview">
-          <div><span class="prompt">$</span> thane chat engineering</div>
-          <div><span class="ok">#engineering</span> alex: can someone review the release note?</div>
-          <div>you: pushing the final copy pass now</div>
-          <div><span class="dim">thread</span> mia: +1, ship it after tests</div>
+          <div><span class="prompt">$</span> thane chat general</div>
+          <div><span class="ok">#general</span> alex: can the agent read this thread?</div>
+          <div>you: yes, same workspace, same permissions</div>
           <br />
           <div><span class="prompt">$</span> thane see-recent --json</div>
-          <div>{"mentions":1,"unread_channels":["engineering"]}</div>
+          <div>{"workspace":"thane-internal","messages":4}</div>
         </div>
       </section>
 
-      <h2 class="section-title">What You Get</h2>
+      <h2 class="section-title">Built For</h2>
       <section class="grid" aria-label="Thane Chat features">
         <article class="card">
-          <h3>Chat Workspaces</h3>
-          <p class="meta">Workspaces with channels, private channels, DMs, threads, mentions, reactions, and history.</p>
+          <h3>People</h3>
+          <p class="meta">Channels, replies, reactions, invites, and workspaces in a focused chat UI.</p>
         </article>
         <article class="card">
-          <h3>Agent-Friendly Commands</h3>
-          <p class="meta">Every interactive action also has a command-line path with JSON output.</p>
+          <h3>Terminals</h3>
+          <p class="meta">Scriptable commands for reading, sending, searching, and exporting messages.</p>
         </article>
         <article class="card">
-          <h3>Ask Thane Ready</h3>
-          <p class="meta">Connect Ask Thane when your team wants task capture, reminders, and progress summaries.</p>
+          <h3>Agents</h3>
+          <p class="meta">Coding agents can use the same chat actions from your local machine.</p>
         </article>
       </section>
 
-      <h2 class="section-title">Pricing</h2>
-      <section class="grid" aria-label="Thane Chat pricing">
+      <h2 class="section-title">Start</h2>
+      <section class="grid" aria-label="Thane Chat start options">
         <article class="card">
-          <h3>Free</h3>
-          <p class="price">$0<span>/mo</span></p>
-          <ul>
-            <li>100 workspace members</li>
-            <li>10 private channels</li>
-            <li>Public channels, DMs, threads, mentions</li>
-            <li>Scriptable commands and JSON output</li>
-          </ul>
-          <a class="button" href="/chat/install">Install Thane Chat</a>
+          <h3>Web</h3>
+          <p class="meta">Sign in and chat from the browser.</p>
+          <a class="button" href="https://chat.askthane.com">Open web app</a>
         </article>
         <article class="card featured">
-          <h3>Team</h3>
-          <p class="price">$8<span>/member/mo</span></p>
-          <ul>
-            <li>Unlimited workspace members</li>
-            <li>Unlimited private channels</li>
-            <li>Hosted history</li>
-            <li>Org-scale billing and admin controls</li>
-          </ul>
-          <a class="button" href="https://payments.askthane.com/subscribe?plan_tier=cli_team">Choose Team</a>
+          <h3>CLI</h3>
+          <p class="meta">Install the terminal app for local agent access.</p>
+          <a class="button" href="/chat/install">Install CLI</a>
         </article>
       </section>
     </main>

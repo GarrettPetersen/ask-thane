@@ -83,73 +83,19 @@ export interface SlackImportResult extends SlackImportPreview {
 }
 
 function defaultData(): ThaneStoreData {
-  const createdAt = nowIso();
-  const workspace: ThaneWorkspace = {
-    id: "wsp_local",
-    slug: "local",
-    name: "Local Workspace",
-    createdAt
-  };
-  const account: ThaneAccount = {
-    id: "acct_local",
-    email: "you@example.local",
-    displayName: "You",
-    createdAt
-  };
-  const user: ThaneUser = {
-    id: "usr_local",
-    workspaceId: workspace.id,
-    accountId: account.id,
-    handle: "you",
-    displayName: "You",
-    email: account.email
-  };
-  const member: ThaneWorkspaceMember = {
-    id: "mbr_local",
-    workspaceId: workspace.id,
-    accountId: account.id,
-    userId: user.id,
-    role: "owner",
-    joinedAt: createdAt
-  };
-  const channels: ThaneChannel[] = [
-    {
-      id: "chn_general",
-      workspaceId: workspace.id,
-      name: "general",
-      kind: "channel",
-      visibility: "public",
-      memberIds: [user.id],
-      topic: "Community-wide conversation",
-      createdAt
-    }
-  ];
-
   return {
-    currentAccountId: account.id,
-    accounts: [account],
-    workspaceMembers: [member],
+    accounts: [],
+    workspaceMembers: [],
     askThaneIntegrations: [],
     notificationPreferences: [],
     billingPlans: [],
     pendingLogins: [],
-    activeWorkspaceId: workspace.id,
-    workspaces: [workspace],
-    currentUserId: user.id,
-    users: [user],
-    channels,
-    messages: [
-      {
-        id: "msg_welcome",
-        workspaceId: workspace.id,
-        channelId: "chn_general",
-        authorId: user.id,
-        text: "Welcome to Thane CLI. Try `thane send general \"hello\"` or `thane chat general`.",
-        createdAt,
-        reactions: [],
-        mentions: []
-      }
-    ],
+    activeWorkspaceId: "",
+    workspaces: [],
+    currentUserId: "",
+    users: [],
+    channels: [],
+    messages: [],
     readStates: []
   };
 }
@@ -191,27 +137,31 @@ function migrateData(
       activeWorkspaceId: string;
     }>
 ): ThaneStoreData {
+  const localAccountIds = new Set(rawData.accounts?.filter((account) => account.id === "acct_local" || account.email === "you@example.local").map((account) => account.id) ?? []);
+  const localWorkspaceIds = new Set(
+    rawData.workspaces
+      ?.filter((workspace) => workspace.id === "wsp_local" || workspace.slug === "local")
+      .map((workspace) => workspace.id) ?? []
+  );
+  const keepWorkspace = (workspaceId: string | undefined): workspaceId is string => Boolean(workspaceId && !localWorkspaceIds.has(workspaceId));
+  const keepAccount = (accountId: string | undefined): accountId is string => Boolean(accountId && !localAccountIds.has(accountId));
+
   if (rawData.workspaces?.length && rawData.activeWorkspaceId) {
     const createdAt = nowIso();
-    const accounts = rawData.accounts?.length
-      ? rawData.accounts
-      : [
-          {
-            id: "acct_local",
-            email: "you@example.local",
-            displayName: "You",
-            createdAt
-          }
-        ];
-    const currentAccountId = rawData.currentAccountId ?? accounts[0]?.id;
-    const users = rawData.users.map((user) => ({
-      ...user,
-      accountId: user.accountId ?? (user.handle === "you" ? currentAccountId : undefined),
-      email: user.email ?? (user.handle === "you" ? accounts.find((account) => account.id === currentAccountId)?.email : undefined)
-    }));
+    const accounts = (rawData.accounts ?? []).filter((account) => keepAccount(account.id));
+    const currentAccountId = keepAccount(rawData.currentAccountId) ? rawData.currentAccountId : accounts[0]?.id;
+    const workspaces = rawData.workspaces.filter((workspace) => keepWorkspace(workspace.id));
+    const workspaceIds = new Set(workspaces.map((workspace) => workspace.id));
+    const users = rawData.users
+      .filter((user) => workspaceIds.has(user.workspaceId) && keepAccount(user.accountId))
+      .map((user) => ({
+        ...user,
+        accountId: user.accountId ?? undefined,
+        email: user.email ?? undefined
+      }));
     const workspaceMembers =
       rawData.workspaceMembers?.length
-        ? rawData.workspaceMembers
+        ? rawData.workspaceMembers.filter((member) => workspaceIds.has(member.workspaceId) && keepAccount(member.accountId))
         : users
             .filter((user) => user.accountId)
             .map((user) => ({
@@ -222,6 +172,10 @@ function migrateData(
               role: user.handle === "you" ? "owner" : "member",
               joinedAt: createdAt
             }));
+    const activeWorkspaceId = keepWorkspace(rawData.activeWorkspaceId)
+      ? rawData.activeWorkspaceId
+      : workspaces[0]?.id ?? "";
+    const currentUserId = users.some((user) => user.id === rawData.currentUserId) ? rawData.currentUserId : users[0]?.id ?? "";
     return {
       ...rawData,
       currentAccountId,
@@ -231,72 +185,41 @@ function migrateData(
       notificationPreferences: rawData.notificationPreferences ?? [],
       billingPlans: rawData.billingPlans ?? [],
       pendingLogins: rawData.pendingLogins ?? [],
+      activeWorkspaceId,
+      workspaces,
+      currentUserId,
       users,
-      channels: rawData.channels.map((channel) => ({
-        ...channel,
-        kind: channel.kind ?? "channel",
-        visibility: channel.visibility ?? "public",
-        memberIds:
-          channel.memberIds ??
-          rawData.users.filter((user) => user.workspaceId === channel.workspaceId).map((user) => user.id)
-      })),
-      messages: rawData.messages,
-      readStates: rawData.readStates
+      channels: rawData.channels
+        .filter((channel) => workspaceIds.has(channel.workspaceId))
+        .map((channel) => ({
+          ...channel,
+          kind: channel.kind ?? "channel",
+          visibility: channel.visibility ?? "public",
+          memberIds:
+            channel.memberIds ??
+            users.filter((user) => user.workspaceId === channel.workspaceId).map((user) => user.id)
+        })),
+      messages: rawData.messages.filter((message) => workspaceIds.has(message.workspaceId)),
+      readStates: rawData.readStates.filter((state) => workspaceIds.has(state.workspaceId))
     } as ThaneStoreData;
   }
-  const createdAt = nowIso();
-  const workspace: ThaneWorkspace = {
-    id: "wsp_local",
-    slug: "local",
-    name: "Local Workspace",
-    createdAt
-  };
-  const account: ThaneAccount = {
-    id: "acct_local",
-    email: "you@example.local",
-    displayName: "You",
-    createdAt
-  };
+  const { currentAccountId: _legacyCurrentAccountId, ...rawDataWithoutCurrentAccount } = rawData;
+  void _legacyCurrentAccountId;
   return {
-    ...rawData,
-    currentAccountId: account.id,
-    accounts: [account],
-    workspaceMembers: rawData.users.map((user) => ({
-      id: id("mbr"),
-      workspaceId: user.workspaceId ?? workspace.id,
-      accountId: account.id,
-      userId: user.id,
-      role: user.handle === "you" ? "owner" : "member",
-      joinedAt: createdAt
-    })),
-    askThaneIntegrations: [],
-    notificationPreferences: [],
-    billingPlans: [],
-    pendingLogins: [],
-    activeWorkspaceId: workspace.id,
-    workspaces: [workspace],
-    users: rawData.users.map((user) => {
-      const migratedUser: ThaneUser = {
-        ...user,
-        workspaceId: user.workspaceId ?? workspace.id
-      };
-      if (user.accountId || user.handle === "you") {
-        migratedUser.accountId = user.accountId ?? account.id;
-      }
-      if (user.email || user.handle === "you") {
-        migratedUser.email = user.email ?? account.email;
-      }
-      return migratedUser;
-    }),
-    channels: rawData.channels.map((channel) => ({
-      ...channel,
-      workspaceId: channel.workspaceId ?? workspace.id,
-      kind: channel.kind ?? "channel",
-      visibility: channel.visibility ?? "public",
-      memberIds: channel.memberIds ?? rawData.users.map((user) => user.id)
-    })),
-    messages: rawData.messages.map((message) => ({ ...message, workspaceId: message.workspaceId ?? workspace.id })),
-    readStates: rawData.readStates.map((state) => ({ ...state, workspaceId: state.workspaceId ?? workspace.id }))
+    ...rawDataWithoutCurrentAccount,
+    accounts: [],
+    workspaceMembers: [],
+    askThaneIntegrations: rawData.askThaneIntegrations ?? [],
+    notificationPreferences: rawData.notificationPreferences ?? [],
+    billingPlans: rawData.billingPlans ?? [],
+    pendingLogins: rawData.pendingLogins ?? [],
+    activeWorkspaceId: "",
+    workspaces: [],
+    currentUserId: "",
+    users: [],
+    channels: [],
+    messages: [],
+    readStates: []
   };
 }
 
@@ -423,21 +346,43 @@ export class ThaneStore {
     messageCount: number;
     unreadCount: number;
   } {
+    const activeWorkspace = this.data.workspaces.find((candidate) => candidate.id === this.data.activeWorkspaceId);
+    if (!activeWorkspace) {
+      return {
+        accountCount: this.data.accounts.length,
+        workspaceCount: this.data.workspaces.length,
+        userCount: this.data.users.length,
+        channelCount: 0,
+        dmCount: 0,
+        messageCount: 0,
+        unreadCount: 0
+      };
+    }
     return {
       accountCount: this.data.accounts.length,
       workspaceCount: this.data.workspaces.length,
       userCount: this.data.users.length,
       channelCount: this.listChannels().length,
       dmCount: this.listDms().length,
-      messageCount: this.data.messages.filter((message) => message.workspaceId === this.activeWorkspace.id).length,
+      messageCount: this.data.messages.filter((message) => message.workspaceId === activeWorkspace.id).length,
       unreadCount: this.unread(10_000).length
     };
+  }
+
+  get activeWorkspaceId(): string | undefined {
+    return this.data.workspaces.some((workspace) => workspace.id === this.data.activeWorkspaceId)
+      ? this.data.activeWorkspaceId
+      : undefined;
+  }
+
+  hasActiveWorkspace(): boolean {
+    return Boolean(this.activeWorkspaceId);
   }
 
   get activeWorkspace(): ThaneWorkspace {
     const workspace = this.data.workspaces.find((candidate) => candidate.id === this.data.activeWorkspaceId);
     if (!workspace) {
-      throw new Error("Active workspace is missing from the local Thane store.");
+      throw new Error("No hosted workspace is cached. Run `thane init` to sign in, or accept/create a hosted workspace.");
     }
     return workspace;
   }
@@ -454,6 +399,8 @@ export class ThaneStore {
     users: ThaneUser[];
     channels: ThaneChannel[];
     messages: ThaneMessage[];
+    askThaneIntegrations?: AskThaneIntegration[];
+    billingPlans?: WorkspaceBillingPlan[];
   }): Promise<void> {
     if (snapshot.account) {
       const existing = this.data.accounts.find((account) => account.id === snapshot.account?.id || account.email === snapshot.account?.email);
@@ -494,6 +441,16 @@ export class ThaneStore {
       this.data.users = this.data.users.filter((user) => user.workspaceId !== activeWorkspaceId).concat(snapshot.users);
       this.data.channels = this.data.channels.filter((channel) => channel.workspaceId !== activeWorkspaceId).concat(snapshot.channels);
       this.data.messages = this.data.messages.filter((message) => message.workspaceId !== activeWorkspaceId).concat(snapshot.messages);
+      if (snapshot.askThaneIntegrations) {
+        this.data.askThaneIntegrations = this.data.askThaneIntegrations
+          .filter((integration) => integration.workspaceId !== activeWorkspaceId)
+          .concat(snapshot.askThaneIntegrations);
+      }
+      if (snapshot.billingPlans) {
+        this.data.billingPlans = this.data.billingPlans
+          .filter((plan) => !snapshot.billingPlans?.some((snapshotPlan) => snapshotPlan.workspaceId === plan.workspaceId))
+          .concat(snapshot.billingPlans);
+      }
 
       const currentAccountId = this.data.currentAccountId;
       const hostedUser =
@@ -509,12 +466,11 @@ export class ThaneStore {
   }
 
   get currentUser(): ThaneUser {
-    const user =
-      this.data.users.find(
+    const user = this.data.users.find(
       (candidate) => candidate.id === this.data.currentUserId && candidate.workspaceId === this.activeWorkspace.id
-      ) ?? this.data.users.find((candidate) => candidate.workspaceId === this.activeWorkspace.id && candidate.handle === "you");
+    );
     if (!user) {
-      throw new Error("Current user is missing from the local Thane store.");
+      throw new Error("Current user is missing from the hosted workspace cache. Run `thane init` or `thane workspaces` to refresh.");
     }
     return user;
   }
@@ -1019,33 +975,14 @@ export class ThaneStore {
   }
 
   async signup(email: string, displayName?: string): Promise<{ account: ThaneAccount; code: string }> {
-    const normalized = normalizeEmail(email);
-    if (!normalized.includes("@")) {
-      throw new Error("Usage: thane signup <email>");
-    }
-    const existing = this.data.accounts.find((account) => account.email === normalized);
-    const account =
-      existing ??
-      ({
-        id: id("acct"),
-        email: normalized,
-        displayName: displayName?.trim() || displayNameFromEmail(normalized),
-        createdAt: nowIso()
-      } satisfies ThaneAccount);
-    if (!existing) {
-      this.data.accounts.push(account);
-    }
-    const code = this.createPendingLogin(normalized);
-    await saveData(this.data);
-    return { account, code };
+    void email;
+    void displayName;
+    throw new Error("Local signup is no longer supported. Use hosted auth with `thane init`.");
   }
 
   async login(email: string): Promise<{ account?: ThaneAccount; code: string }> {
-    const normalized = normalizeEmail(email);
-    const account = this.data.accounts.find((candidate) => candidate.email === normalized);
-    const code = this.createPendingLogin(normalized);
-    await saveData(this.data);
-    return account ? { account, code } : { code };
+    void email;
+    throw new Error("Local login is no longer supported. Use hosted auth with `thane init`.");
   }
 
   async acceptVerifiedAccount(account: ThaneAccount): Promise<ThaneAccount> {
@@ -1068,36 +1005,17 @@ export class ThaneStore {
       }
     }
     this.data.currentAccountId = stored.id;
-    this.ensureAccountMembership(stored, this.activeWorkspace.id, this.data.workspaceMembers.length === 0 ? "owner" : "member");
+    if (this.hasActiveWorkspace()) {
+      this.ensureAccountMembership(stored, this.activeWorkspace.id, this.data.workspaceMembers.length === 0 ? "owner" : "member");
+    }
     await saveData(this.data);
     return stored;
   }
 
   async verify(email: string, code: string): Promise<ThaneAccount> {
-    const normalized = normalizeEmail(email);
-    const pending = this.data.pendingLogins.find((candidate) => candidate.email === normalized && candidate.code === code.trim());
-    if (!pending) {
-      throw new Error("Invalid verification code.");
-    }
-    if (new Date(pending.expiresAt).getTime() < Date.now()) {
-      throw new Error("Verification code expired.");
-    }
-    const account =
-      this.data.accounts.find((candidate) => candidate.email === normalized) ??
-      ({
-        id: id("acct"),
-        email: normalized,
-        displayName: displayNameFromEmail(normalized),
-        createdAt: nowIso()
-      } satisfies ThaneAccount);
-    if (!this.data.accounts.some((candidate) => candidate.id === account.id)) {
-      this.data.accounts.push(account);
-    }
-    this.data.currentAccountId = account.id;
-    this.ensureAccountMembership(account, this.activeWorkspace.id, this.data.workspaceMembers.length === 0 ? "owner" : "member");
-    this.data.pendingLogins = this.data.pendingLogins.filter((candidate) => candidate !== pending);
-    await saveData(this.data);
-    return account;
+    void email;
+    void code;
+    throw new Error("Local verification is no longer supported. Use hosted auth with `thane init`.");
   }
 
   async logout(): Promise<void> {
@@ -1106,15 +1024,8 @@ export class ThaneStore {
   }
 
   private createPendingLogin(email: string): string {
-    const code = makeLoginCode();
-    this.data.pendingLogins = this.data.pendingLogins.filter((pending) => pending.email !== email);
-    this.data.pendingLogins.push({
-      email,
-      code,
-      createdAt: nowIso(),
-      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString()
-    });
-    return code;
+    void email;
+    throw new Error("Local verification codes are no longer supported.");
   }
 
   private ensureAccountMembership(account: ThaneAccount, workspaceId: string, role: WorkspaceRole): ThaneWorkspaceMember {
@@ -1144,7 +1055,7 @@ export class ThaneStore {
       };
       this.data.workspaceMembers.push(member);
     }
-    if (workspaceId === this.activeWorkspace.id && account.id === this.data.currentAccountId) {
+    if (workspaceId === this.data.activeWorkspaceId && account.id === this.data.currentAccountId) {
       this.data.currentUserId = user.id;
     }
     return member;
@@ -1160,6 +1071,10 @@ export class ThaneStore {
   }
 
   async createWorkspace(slug: string, name?: string): Promise<ThaneWorkspace> {
+    const account = this.currentAccount;
+    if (!account) {
+      throw new Error("Run `thane init` before creating a workspace.");
+    }
     const normalized = normalizeWorkspaceSlug(slug);
     if (!normalized) {
       throw new Error("Workspace slug must contain at least one letter or number.");
@@ -1175,25 +1090,7 @@ export class ThaneStore {
       createdAt: nowIso()
     };
     this.data.workspaces.push(workspace);
-    if (this.currentAccount) {
-      this.ensureAccountMembership(this.currentAccount, workspace.id, "owner");
-    } else {
-      const user = {
-        id: id("usr"),
-        workspaceId: workspace.id,
-        handle: "you",
-        displayName: "You"
-      };
-      this.data.users.push(user);
-      this.data.workspaceMembers.push({
-        id: id("mbr"),
-        workspaceId: workspace.id,
-        accountId: "acct_local",
-        userId: user.id,
-        role: "owner",
-        joinedAt: nowIso()
-      });
-    }
+    this.ensureAccountMembership(account, workspace.id, "owner");
     await saveData(this.data);
     return workspace;
   }
@@ -1205,7 +1102,7 @@ export class ThaneStore {
     role: "admin" | "member";
   }): Promise<{ workspace: ThaneWorkspace; member: ThaneWorkspaceMember }> {
     const account = this.currentAccount;
-    if (!account || account.email === "you@example.local") {
+    if (!account) {
       throw new Error("Run `thane init` before accepting a workspace invite.");
     }
     const normalized = normalizeWorkspaceSlug(input.slug);
@@ -1404,9 +1301,21 @@ export class ThaneStore {
   }
 
   private memberForWorkspace(workspaceId: string): ThaneWorkspaceMember | undefined {
-    return this.data.workspaceMembers.find(
-      (member) => member.workspaceId === workspaceId && member.accountId === this.data.currentAccountId
-    );
+    const currentAccountId = this.data.currentAccountId;
+    const currentEmail = this.currentAccount?.email;
+    return this.data.workspaceMembers.find((member) => {
+      if (member.workspaceId !== workspaceId) {
+        return false;
+      }
+      if (currentAccountId && member.accountId === currentAccountId) {
+        return true;
+      }
+      if (!currentEmail) {
+        return false;
+      }
+      const user = this.data.users.find((candidate) => candidate.id === member.userId);
+      return user?.email === currentEmail;
+    });
   }
 
   private findChannelInWorkspace(workspaceId: string, nameOrId: string, userId: string): ThaneChannel | undefined {

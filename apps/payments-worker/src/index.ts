@@ -4,6 +4,7 @@ interface Env {
   STRIPE_WEBHOOK_SECRET?: string;
   BILLING_LINK_SIGNING_SECRET?: string;
   BILLING_PORTAL_RETURN_URL?: string;
+  THANE_CHAT_BASE_URL?: string;
   THANE_BASE_URL?: string;
   STRIPE_PRICE_TEAM_MONTHLY?: string;
   STRIPE_PRICE_CLI_TEAM_MONTHLY?: string;
@@ -205,7 +206,7 @@ function planCatalog(env: Env): PlanConfig[] {
   return [
     {
       planTier: "cli_team",
-      label: "Thane CLI Team",
+      label: "Thane Chat Team",
       monthlyPriceUsd: 8,
       includedUsers: 1,
       perUserOverageUsd: 8,
@@ -380,7 +381,16 @@ function allowedRedirectOrigins(input: { env: Env; requestUrl: URL }): Set<strin
       // ignore invalid THANE_BASE_URL
     }
   }
+  const chatBase = input.env.THANE_CHAT_BASE_URL?.trim();
+  if (chatBase) {
+    try {
+      origins.add(new URL(chatBase).origin);
+    } catch {
+      // ignore invalid THANE_CHAT_BASE_URL
+    }
+  }
   origins.add("https://askthane.com");
+  origins.add("https://chat.askthane.com");
   origins.add("https://payments.askthane.com");
   origins.add("https://payments-staging.askthane.com");
   return origins;
@@ -432,8 +442,12 @@ async function renderSubscribePage(env: Env, requestUrl: URL): Promise<string> {
     )
     .join("");
 
-  const defaultBase = (env.THANE_BASE_URL?.trim().replace(/\/$/, "") ?? "https://askthane.com").replace(/"/g, "");
   const currentOrigin = requestUrl.origin.replace(/"/g, "");
+  const requestedReturnUrl = sanitizeRedirectUrl({
+    raw: requestUrl.searchParams.get("return_url"),
+    fallback: `${currentOrigin}/subscribe`,
+    allowedOrigins: allowedRedirectOrigins({ env, requestUrl })
+  }).replace(/"/g, "");
   const billingToken = asNonEmptyString(requestUrl.searchParams.get("billing_token")) ?? "";
   const contextNotice = hasBillingContext
     ? "Plan changes will apply to this workspace subscription."
@@ -480,16 +494,16 @@ async function renderSubscribePage(env: Env, requestUrl: URL): Promise<string> {
         const hasBillingContext = ${JSON.stringify(hasBillingContext)};
         const requestedPlan = ${JSON.stringify(requestedPlanTier)};
         const autoStart = ${JSON.stringify(autoStart)};
-        const successUrl = "${defaultBase}/billing/success?session_id={CHECKOUT_SESSION_ID}";
-        const cancelUrl = "${currentOrigin}/subscribe?canceled=1";
-        const returnUrl = "${currentOrigin}/subscribe";
+        const successUrl = "${requestedReturnUrl}";
+        const cancelUrl = "${requestedReturnUrl}";
+        const returnUrl = "${requestedReturnUrl}";
         const setStatus = (text, isError) => {
           if (!statusEl) return;
           statusEl.textContent = text;
           statusEl.className = isError ? "status error" : "status";
         };
         if (!hasBillingContext) {
-          setStatus("Billing link is missing or expired. Please open a new billing link from Thane in Slack.", true);
+          setStatus("Billing link is missing or expired. Please open a new billing link from Thane Chat.", true);
         }
         const startCheckout = async (plan) => {
           if (!plan || !hasBillingContext) return;
@@ -847,6 +861,14 @@ async function applyStripeEntitlementFromCheckoutSession(input: {
     .bind(planTierForOrganization(planTier), nowIso, workspaceId, organizationId)
     .run();
 
+  if (planTier === "cli_team") {
+    await updateThaneCliWorkspacePlanTier({
+      env: input.env,
+      workspaceId,
+      planTier
+    });
+  }
+
   if (customerId) {
     await upsertStripeExternalAccount({
       env: input.env,
@@ -911,6 +933,20 @@ async function updateWorkspacePlanTier(input: {
     .run();
 }
 
+async function updateThaneCliWorkspacePlanTier(input: { env: Env; workspaceId: string; planTier: "free" | "cli_team" }): Promise<void> {
+  if (!input.env.DB) {
+    return;
+  }
+  await input.env.DB
+    .prepare(
+      `UPDATE thane_cli_workspaces
+       SET plan_tier = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .bind(input.planTier, new Date().toISOString(), input.workspaceId)
+    .run();
+}
+
 async function applyStripeSubscriptionLifecycleEvent(input: {
   env: Env;
   subscription: Record<string, unknown>;
@@ -956,6 +992,11 @@ async function applyStripeSubscriptionLifecycleEvent(input: {
       workspaceId: linked.workspaceId,
       planTier: "free"
     });
+    await updateThaneCliWorkspacePlanTier({
+      env: input.env,
+      workspaceId: linked.workspaceId,
+      planTier: "free"
+    });
     return { linked: true };
   }
 
@@ -974,6 +1015,13 @@ async function applyStripeSubscriptionLifecycleEvent(input: {
     workspaceId: linked.workspaceId,
     planTier: planTierForOrganization(planTier)
   });
+  if (planTier === "cli_team") {
+    await updateThaneCliWorkspacePlanTier({
+      env: input.env,
+      workspaceId: linked.workspaceId,
+      planTier
+    });
+  }
   return { linked: true };
 }
 

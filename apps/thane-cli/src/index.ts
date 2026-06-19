@@ -7,7 +7,16 @@ import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline";
 import { runChat } from "./chat.js";
 import { cliCommands, renderCliCommands } from "./commands.js";
-import { createHostedChannel, ensureHostedWorkspace, hasHostedChat, reactHostedMessage, sendHostedMessage, syncHostedStore } from "./hosted.js";
+import {
+  createHostedBillingLink,
+  createHostedChannel,
+  createHostedWorkspace,
+  ensureHostedWorkspace,
+  hasHostedChat,
+  reactHostedMessage,
+  sendHostedMessage,
+  syncHostedStore
+} from "./hosted.js";
 import { renderChannels, renderDms, renderInbox, renderMembers, renderMessages, printJson, renderUsers, renderWorkspaces } from "./render.js";
 import { parseSlackExportZip } from "./slack-import.js";
 import { resolveStorePath, ThaneStore } from "./store.js";
@@ -218,12 +227,16 @@ async function finishHostedAuth(input: {
   prompts?: { ask(label: string): Promise<string>; close(): void } | undefined;
 }): Promise<ThaneAccount> {
   const verified = await verifyHostedAuth(input.email, input.code);
+  let account: ThaneAccount;
   if ("mfaRequired" in verified && verified.mfaRequired) {
     const mfaCode = await input.prompts?.ask("Authenticator code: ");
-    const hostedAccount = await verifyHostedMfa(verified.mfaChallengeToken, mfaCode ?? "");
-    return input.store.acceptVerifiedAccount(hostedAccount);
+    account = await verifyHostedMfa(verified.mfaChallengeToken, mfaCode ?? "");
+  } else {
+    account = verified.account;
   }
-  return input.store.acceptVerifiedAccount(verified.account);
+  const stored = await input.store.acceptVerifiedAccount(account);
+  await syncHostedStore(input.store);
+  return stored;
 }
 
 function renderHostedAuthStart(response: { email: string; delivery: "email" | "dev_code"; verificationCode?: string }): string {
@@ -302,6 +315,11 @@ function slugFromSlackExportPath(path: string): string {
   return base.toLowerCase().replace(/^-+|-+$/g, "") || "slack-import";
 }
 
+function hostedWorkspaceId(): string {
+  const random = Math.random().toString(36).slice(2, 10);
+  return `wsp_${Date.now().toString(36)}${random}`;
+}
+
 function renderSlackImportSummary(summary: SlackImportPreview | SlackImportResult, mode: "preview" | "apply"): string {
   const lines = [
     mode === "preview" ? "Slack export preview" : "Slack export imported",
@@ -374,6 +392,7 @@ Notifications:
 Billing:
   thane billing status [--json]
   thane billing checkout
+  thane billing portal
   thane billing activate-team-dev
 
 Imports:
@@ -431,7 +450,7 @@ Environment:
   THANE_STORE_PATH=/path/to/store.json
   thane --store /path/to/store.json recent --json
 
-All channels, messages, mentions, unread state, and search results are scoped to the active workspace.`;
+The store is a hosted Thane Chat cache. All channels, messages, mentions, unread state, and search results are scoped to the active workspace.`;
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -454,7 +473,7 @@ async function renderDoctor(args: ParsedArgs): Promise<void> {
       version: CLI_VERSION,
       resolvedStorePath: storePath,
       storeExists,
-      hint: "Run `thane init` to create a user store, or pass --store/THANE_STORE_PATH for a project-local store."
+      hint: "Run `thane init` to sign in to hosted Thane Chat."
     };
     wantsJson(args) ? printJson(response) : process.stdout.write(`${renderDoctorText(response)}\n`);
     return;
@@ -466,9 +485,9 @@ async function renderDoctor(args: ParsedArgs): Promise<void> {
     resolvedStorePath: storePath,
     storeExists,
     account: store.currentAccount?.email ?? null,
-    activeWorkspace: store.activeWorkspace.slug,
+    activeWorkspace: store.hasActiveWorkspace() ? store.activeWorkspace.slug : null,
     ...stats,
-    hint: "Use --store or THANE_STORE_PATH to opt into a project-local or fixture store."
+    hint: "The store is a hosted Thane Chat cache. Run `thane init` to sign in or refresh auth."
   };
   wantsJson(args) ? printJson(response) : process.stdout.write(`${renderDoctorText(response)}\n`);
 }
@@ -497,7 +516,7 @@ function agentInstructions(): string {
 - Read a thread: \`thane thread <message-id> --json\`.
 - Search messages: \`thane search <query> --json\`.
 - Do not send, reply, react, invite, or mark messages read unless explicitly asked.
-- For fixture/project stores, use \`thane --store ./fixture-store.json ...\` or \`THANE_STORE_PATH=./.thane/store.json thane ...\`.
+- For fixture cache files, use \`thane --store ./fixture-store.json ...\` or \`THANE_STORE_PATH=./.thane/store.json thane ...\`.
 `;
 }
 
@@ -649,7 +668,17 @@ async function main(): Promise<void> {
       if (!channel || !text) {
         throw new Error("Usage: thane write send <channel> <message>");
       }
-      const message = await store.sendMessage(channel, text);
+      requireHostedAuthToken(store);
+      const target = store.findChannel(channel);
+      if (!target) {
+        throw new Error(`Channel ${channel} was not found.`);
+      }
+      await sendHostedMessage(store, { channelId: target.id, text, source: "terminal" });
+      store = await ThaneStore.open();
+      const message = store.recent(target.id, 1).at(-1);
+      if (!message) {
+        throw new Error("Message was sent but did not sync back.");
+      }
       wantsJson(args) ? printJson({ message }) : process.stdout.write(`sent ${message.id} to #${store.findChannel(channel)?.name ?? channel}\n`);
       return;
     }
@@ -659,7 +688,21 @@ async function main(): Promise<void> {
       if (!messageId || !text) {
         throw new Error("Usage: thane write reply <message-id> <message>");
       }
-      const message = await store.reply(messageId, text);
+      requireHostedAuthToken(store);
+      const root = store.thread(messageId)[0];
+      if (!root) {
+        throw new Error(`Message ${messageId} was not found.`);
+      }
+      const target = store.findChannel(root.channel);
+      if (!target) {
+        throw new Error(`Channel ${root.channel} was not found.`);
+      }
+      await sendHostedMessage(store, { channelId: target.id, text, source: "terminal", threadRootId: root.threadRootId ?? root.id });
+      store = await ThaneStore.open();
+      const message = store.thread(messageId).at(-1);
+      if (!message) {
+        throw new Error("Reply was sent but did not sync back.");
+      }
       wantsJson(args) ? printJson({ message }) : process.stdout.write(`sent ${message.id} in thread ${message.threadRootId}\n`);
       return;
     }
@@ -669,7 +712,13 @@ async function main(): Promise<void> {
       if (!messageId || !emoji) {
         throw new Error("Usage: thane write react <message-id> <emoji>");
       }
-      const message = await store.react(messageId, emoji);
+      requireHostedAuthToken(store);
+      await reactHostedMessage(store, { messageId, emoji });
+      store = await ThaneStore.open();
+      const message = store.thread(messageId)[0];
+      if (!message) {
+        throw new Error("Reaction was saved but the message did not sync back.");
+      }
       wantsJson(args) ? printJson({ message }) : process.stdout.write(`reacted to ${messageId}\n`);
       return;
     }
@@ -677,11 +726,10 @@ async function main(): Promise<void> {
   }
 
   if (command === "init") {
-    const isDemoAccount = store.currentAccount?.email === "you@example.local";
-    if (store.currentAccount && !isDemoAccount && !args.flags.has("force")) {
+    if (store.currentAccount && !args.flags.has("force")) {
       const next = {
         account: store.currentAccount,
-        workspace: store.activeWorkspace,
+        workspace: store.hasActiveWorkspace() ? store.activeWorkspace : null,
         next: ["thane chat general", "thane commands"]
       };
       wantsJson(args)
@@ -697,33 +745,14 @@ async function main(): Promise<void> {
         throw new Error("Usage: thane init --email <email> [--name \"...\"] --json");
       }
       const displayName = flagString(args, "name") ?? (prompts ? await prompts.ask("Name (optional): ") : undefined);
-      if (thaneApiBaseUrl()) {
-        const started = await startHostedAuth(email, displayName || undefined);
-        if (wantsJson(args)) {
-          printJson(started);
-          return;
-        }
-        process.stdout.write(`${renderHostedAuthStart(started)}Enter the code to finish setup.\n`);
-        const enteredCode = await prompts?.ask("Code: ");
-        const verified = await finishHostedAuth({ store, email: started.email, code: enteredCode ?? "", prompts });
-        process.stdout.write(`signed in as ${verified.email}\nopen chat: thane chat general\n`);
-        return;
-      }
-      const { account, code } = await store.signup(email, displayName || undefined);
+      const started = await startHostedAuth(email, displayName || undefined);
       if (wantsJson(args)) {
-        printJson({
-          account,
-          verificationCode: code,
-          note: "Local MVP prints verification codes. Hosted Thane Chat should send this code by email."
-        });
+        printJson(started);
         return;
       }
-      process.stdout.write(
-        `verification code for ${account.email}: ${code}\n` +
-          "Enter the code to finish setup.\n"
-      );
+      process.stdout.write(`${renderHostedAuthStart(started)}Enter the code to finish setup.\n`);
       const enteredCode = await prompts?.ask("Code: ");
-      const verified = await store.verify(account.email, enteredCode ?? "");
+      const verified = await finishHostedAuth({ store, email: started.email, code: enteredCode ?? "", prompts });
       process.stdout.write(`signed in as ${verified.email}\nopen chat: thane chat general\n`);
     } finally {
       prompts?.close();
@@ -736,15 +765,8 @@ async function main(): Promise<void> {
     if (!email) {
       throw new Error("Usage: thane signup <email>");
     }
-    if (thaneApiBaseUrl()) {
-      const started = await startHostedAuth(email, flagString(args, "name"));
-      wantsJson(args) ? printJson(started) : process.stdout.write(renderHostedAuthStart(started));
-      return;
-    }
-    const { account, code } = await store.signup(email, flagString(args, "name"));
-    wantsJson(args)
-      ? printJson({ account, verificationCode: code })
-      : process.stdout.write(`created account ${account.email}\nverification code: ${code}\n`);
+    const started = await startHostedAuth(email, flagString(args, "name"));
+    wantsJson(args) ? printJson(started) : process.stdout.write(renderHostedAuthStart(started));
     return;
   }
 
@@ -753,15 +775,8 @@ async function main(): Promise<void> {
     if (!email) {
       throw new Error("Usage: thane login <email>");
     }
-    if (thaneApiBaseUrl()) {
-      const started = await startHostedAuth(email);
-      wantsJson(args) ? printJson(started) : process.stdout.write(renderHostedAuthStart(started));
-      return;
-    }
-    const { account, code } = await store.login(email);
-    wantsJson(args)
-      ? printJson({ account, verificationCode: code })
-      : process.stdout.write(`${account ? `login code for ${account.email}` : `account will be created for ${email}`}\nverification code: ${code}\n`);
+    const started = await startHostedAuth(email);
+    wantsJson(args) ? printJson(started) : process.stdout.write(renderHostedAuthStart(started));
     return;
   }
 
@@ -771,18 +786,13 @@ async function main(): Promise<void> {
     if (!email || !code) {
       throw new Error("Usage: thane verify <email> <code>");
     }
-    if (thaneApiBaseUrl()) {
-      const prompts = wantsJson(args) ? undefined : createPrompter();
-      try {
-        const account = await finishHostedAuth({ store, email, code, prompts });
-        wantsJson(args) ? printJson({ account }) : process.stdout.write(`signed in as ${account.email}\n`);
-      } finally {
-        prompts?.close();
-      }
-      return;
+    const prompts = wantsJson(args) ? undefined : createPrompter();
+    try {
+      const account = await finishHostedAuth({ store, email, code, prompts });
+      wantsJson(args) ? printJson({ account }) : process.stdout.write(`signed in as ${account.email}\n`);
+    } finally {
+      prompts?.close();
     }
-    const account = await store.verify(email, code);
-    wantsJson(args) ? printJson({ account }) : process.stdout.write(`signed in as ${account.email}\n`);
     return;
   }
 
@@ -801,18 +811,13 @@ async function main(): Promise<void> {
     if (!displayName) {
       throw new Error("Usage: thane profile name <display-name>");
     }
-    if (hasHostedChat(store)) {
-      const token = requireHostedAuthToken(store);
-      const response = await postThaneApiWithAuth<{ account: ThaneAccount; displayName: string }>("/v1/thane-cli/profile", token, {
-        displayName
-      });
-      await store.setDisplayName(response.displayName);
-      await syncHostedStore(store);
-      wantsJson(args) ? printJson({ account: response.account }) : process.stdout.write(`display name: ${response.displayName}\n`);
-      return;
-    }
-    const updated = await store.setDisplayName(displayName);
-    wantsJson(args) ? printJson(updated) : process.stdout.write(`display name: ${updated.user.displayName}\n`);
+    const token = requireHostedAuthToken(store);
+    const response = await postThaneApiWithAuth<{ account: ThaneAccount; displayName: string }>("/v1/thane-cli/profile", token, {
+      displayName
+    });
+    await store.setDisplayName(response.displayName);
+    await syncHostedStore(store);
+    wantsJson(args) ? printJson({ account: response.account }) : process.stdout.write(`display name: ${response.displayName}\n`);
     return;
   }
 
@@ -870,7 +875,14 @@ async function main(): Promise<void> {
   }
 
   if (command === "ask-thane" && second === "status") {
-    const integration = store.askThaneStatus();
+    const token = requireHostedAuthToken(store);
+    await syncHostedStore(store).catch(() => false);
+    const workspaceId = store.activeWorkspace.id;
+    const response = await getThaneApi<{ integration: ReturnType<ThaneStore["askThaneStatus"]> }>(
+      `/v1/thane-cli/ask-thane/status?workspaceId=${encodeURIComponent(workspaceId)}`,
+      token
+    );
+    const integration = response.integration ?? store.askThaneStatus();
     wantsJson(args)
       ? printJson({ integration })
       : process.stdout.write(
@@ -882,7 +894,15 @@ async function main(): Promise<void> {
   }
 
   if (command === "ask-thane" && second === "enable") {
-    const integration = await store.enableAskThane();
+    const token = requireHostedAuthToken(store);
+    await syncHostedStore(store).catch(() => false);
+    const response = await postThaneApiWithAuth<{ integration: Awaited<ReturnType<ThaneStore["enableAskThane"]>> }>(
+      "/v1/thane-cli/ask-thane/enable",
+      token,
+      { workspaceId: store.activeWorkspace.id }
+    );
+    await syncHostedStore(store).catch(() => false);
+    const integration = response.integration;
     wantsJson(args)
       ? printJson({ integration })
       : process.stdout.write(`Ask Thane enabled. Mention @thane in any joined/readable conversation.\n`);
@@ -890,7 +910,10 @@ async function main(): Promise<void> {
   }
 
   if (command === "ask-thane" && second === "disable") {
-    await store.disableAskThane();
+    const token = requireHostedAuthToken(store);
+    await syncHostedStore(store).catch(() => false);
+    await postThaneApiWithAuth("/v1/thane-cli/ask-thane/disable", token, { workspaceId: store.activeWorkspace.id });
+    await syncHostedStore(store).catch(() => false);
     process.stdout.write("Ask Thane disabled\n");
     return;
   }
@@ -912,6 +935,7 @@ async function main(): Promise<void> {
   }
 
   if (command === "billing" && second === "status") {
+    await syncHostedStore(store).catch(() => false);
     const billing = store.billingSummary();
     wantsJson(args)
       ? printJson(billing)
@@ -922,18 +946,16 @@ async function main(): Promise<void> {
   }
 
   if (command === "billing" && second === "checkout") {
-    const checkoutOptions: { paymentsBaseUrl?: string; signingSecret?: string; email?: string } = {};
-    if (process.env.THANE_PAYMENTS_BASE_URL) {
-      checkoutOptions.paymentsBaseUrl = process.env.THANE_PAYMENTS_BASE_URL;
-    }
-    if (process.env.THANE_BILLING_LINK_SIGNING_SECRET) {
-      checkoutOptions.signingSecret = process.env.THANE_BILLING_LINK_SIGNING_SECRET;
-    }
-    if (store.currentAccount?.email) {
-      checkoutOptions.email = store.currentAccount.email;
-    }
-    const checkoutUrl = store.createBillingCheckoutUrl(checkoutOptions);
-    process.stdout.write(`${checkoutUrl}\n`);
+    await syncHostedStore(store).catch(() => false);
+    const link = await createHostedBillingLink(store);
+    wantsJson(args) ? printJson({ billing: link }) : process.stdout.write(`${link.checkoutUrl}\n`);
+    return;
+  }
+
+  if (command === "billing" && (second === "portal" || second === "manage")) {
+    await syncHostedStore(store).catch(() => false);
+    const link = await createHostedBillingLink(store);
+    wantsJson(args) ? printJson({ billing: link }) : process.stdout.write(`${link.portalUrl}\n`);
     return;
   }
 
@@ -953,9 +975,7 @@ async function main(): Promise<void> {
     }
     const exportData = await parseSlackExportZip(zipPath);
     if (args.flags.has("apply")) {
-      const result = await store.importSlackExport(exportData);
-      wantsJson(args) ? printJson({ result }) : process.stdout.write(renderSlackImportSummary(result, "apply"));
-      return;
+      throw new Error("Slack import apply is not available until hosted import is wired up. Preview is still available without creating local data.");
     }
     const preview = store.previewSlackImport(exportData);
     wantsJson(args) ? printJson({ preview }) : process.stdout.write(renderSlackImportSummary(preview, "preview"));
@@ -982,13 +1002,15 @@ async function main(): Promise<void> {
     if (!slug) {
       throw new Error("Usage: thane workspace create <slug>");
     }
-    let workspace = await store.createWorkspace(slug, flagString(args, "name"));
-    await store.useWorkspace(workspace.slug);
-    if (hasHostedChat(store)) {
-      await ensureHostedWorkspace(store);
-      store = await ThaneStore.open();
-      workspace = store.activeWorkspace;
-    }
+    requireHostedAuthToken(store);
+    const workspaceName = flagString(args, "name");
+    await createHostedWorkspace(store, {
+      workspaceId: hostedWorkspaceId(),
+      slug,
+      ...(workspaceName ? { name: workspaceName } : {})
+    });
+    store = await ThaneStore.open();
+    const workspace = store.activeWorkspace;
     wantsJson(args) ? printJson({ workspace }) : process.stdout.write(`created workspace ${workspace.slug}\n`);
     return;
   }
@@ -1055,12 +1077,7 @@ async function main(): Promise<void> {
           );
       return;
     }
-    const workspace = await store.createWorkspace(slug, name);
-    await store.useWorkspace(workspace.slug);
-    const result = await store.importSlackExport(exportData);
-    wantsJson(args)
-      ? printJson({ workspace, result })
-      : process.stdout.write(`created workspace ${workspace.slug}\n${renderSlackImportSummary(result, "apply")}`);
+    throw new Error("Slack import apply is not available until hosted import is wired up. Preview is still available without creating local data.");
     return;
   }
 
@@ -1088,43 +1105,38 @@ async function main(): Promise<void> {
       throw new Error("Usage: thane invite <email>");
     }
     const role = flagMemberRole(args, "member");
-    if (hasHostedChat(store)) {
-      store.requireWorkspaceAdmin();
-      const token = requireHostedAuthToken(store);
-      const response = await postThaneApiWithAuth<{
-        invite: {
-          url: string;
-          webUrl?: string;
-          token: string;
-          workspace: { id: string; slug: string; name: string };
-          role: "admin" | "member";
-          expiresAt: string;
-          maxUses?: number | null;
-          inviteeEmail?: string;
-          emailSent?: boolean;
-        };
-      }>("/v1/thane-cli/workspace-invites", token, {
-        workspaceId: store.activeWorkspace.id,
-        workspaceSlug: store.activeWorkspace.slug,
-        workspaceName: store.activeWorkspace.name,
-        inviteeEmail: email,
-        role,
-        expiresInHours: parseExpiresInHours(flagString(args, "expires")),
-        maxUses: 1
-      });
-      wantsJson(args)
-        ? printJson(response)
-        : process.stdout.write(
-            `sent invite to ${email} for ${response.invite.workspace.slug}\n` +
-              `web link: ${response.invite.webUrl ?? response.invite.url}\n` +
-              `cli link: ${response.invite.url}\n` +
-              `role: ${response.invite.role}\n` +
-              `expires: ${response.invite.expiresAt}\n`
-          );
-      return;
-    }
-    const member = await store.invite(email, role, flagString(args, "handle"));
-    wantsJson(args) ? printJson({ member }) : process.stdout.write(`invited ${email} as ${member.role}\n`);
+    store.requireWorkspaceAdmin();
+    const token = requireHostedAuthToken(store);
+    const response = await postThaneApiWithAuth<{
+      invite: {
+        url: string;
+        webUrl?: string;
+        token: string;
+        workspace: { id: string; slug: string; name: string };
+        role: "admin" | "member";
+        expiresAt: string;
+        maxUses?: number | null;
+        inviteeEmail?: string;
+        emailSent?: boolean;
+      };
+    }>("/v1/thane-cli/workspace-invites", token, {
+      workspaceId: store.activeWorkspace.id,
+      workspaceSlug: store.activeWorkspace.slug,
+      workspaceName: store.activeWorkspace.name,
+      inviteeEmail: email,
+      role,
+      expiresInHours: parseExpiresInHours(flagString(args, "expires")),
+      maxUses: 1
+    });
+    wantsJson(args)
+      ? printJson(response)
+      : process.stdout.write(
+          `sent invite to ${email} for ${response.invite.workspace.slug}\n` +
+            `web link: ${response.invite.webUrl ?? response.invite.url}\n` +
+            `cli link: ${response.invite.url}\n` +
+            `role: ${response.invite.role}\n` +
+            `expires: ${response.invite.expiresAt}\n`
+        );
     return;
   }
 
@@ -1199,8 +1211,7 @@ async function main(): Promise<void> {
     if (role !== "admin" && role !== "member") {
       throw new Error("Role must be admin or member.");
     }
-    const member = await store.setMemberRole(target, role);
-    wantsJson(args) ? printJson({ member }) : process.stdout.write(`updated ${target} to ${role}\n`);
+    throw new Error("Changing member roles from the CLI requires a hosted endpoint and is not available yet.");
     return;
   }
 
@@ -1209,8 +1220,7 @@ async function main(): Promise<void> {
     if (!handle) {
       throw new Error("Usage: thane user add <handle>");
     }
-    const user = await store.addUser(handle, flagString(args, "name"));
-    wantsJson(args) ? printJson({ user }) : process.stdout.write(`added @${user.handle}\n`);
+    throw new Error("Local-only users are no longer supported. Invite a real account with `thane invite <email>`.");
     return;
   }
 
@@ -1236,11 +1246,12 @@ async function main(): Promise<void> {
       throw new Error("Usage: thane channel create <name>");
     }
     const topic = flagString(args, "topic");
-    let channel = await store.createChannel(name, topic, args.flags.has("private") ? "private" : "public");
-    if (hasHostedChat(store)) {
-      await createHostedChannel(store, { name, ...(topic ? { topic } : {}), private: args.flags.has("private") });
-      store = await ThaneStore.open();
-      channel = store.findChannel(name) ?? channel;
+    requireHostedAuthToken(store);
+    await createHostedChannel(store, { name, ...(topic ? { topic } : {}), private: args.flags.has("private") });
+    store = await ThaneStore.open();
+    const channel = store.findChannel(name);
+    if (!channel) {
+      throw new Error(`Hosted channel ${name} was created but did not sync back.`);
     }
     wantsJson(args) ? printJson({ channel }) : process.stdout.write(`created #${channel.name}\n`);
     return;
@@ -1252,8 +1263,7 @@ async function main(): Promise<void> {
     if (!channelName || !target) {
       throw new Error("Usage: thane channel invite <channel> <handle-or-email>");
     }
-    const channel = await store.inviteToChannel(channelName, target);
-    wantsJson(args) ? printJson({ channel }) : process.stdout.write(`added ${target} to #${channel.name}\n`);
+    throw new Error("Channel membership changes from the CLI require a hosted endpoint and are not available yet.");
     return;
   }
 
@@ -1262,8 +1272,7 @@ async function main(): Promise<void> {
     if (!channelName) {
       throw new Error("Usage: thane channel join <channel>");
     }
-    const channel = await store.joinChannel(channelName);
-    wantsJson(args) ? printJson({ channel }) : process.stdout.write(`joined #${channel.name}\n`);
+    throw new Error("Joining channels from the CLI requires a hosted endpoint and is not available yet.");
     return;
   }
 
@@ -1272,8 +1281,7 @@ async function main(): Promise<void> {
     if (!channelName) {
       throw new Error("Usage: thane channel leave <channel>");
     }
-    const channel = await store.leaveChannel(channelName);
-    wantsJson(args) ? printJson({ channel }) : process.stdout.write(`left #${channel.name}\n`);
+    throw new Error("Leaving channels from the CLI requires a hosted endpoint and is not available yet.");
     return;
   }
 
@@ -1293,16 +1301,16 @@ async function main(): Promise<void> {
     if (!channel || !text) {
       throw new Error("Usage: thane send <channel> <message>");
     }
-    const localMessage = await store.sendMessage(channel, text);
-    let outputMessage: { id: string } = localMessage;
-    if (hasHostedChat(store)) {
-      const target = store.findChannel(channel);
-      if (!target) {
-        throw new Error(`Channel ${channel} was not found.`);
-      }
-      await sendHostedMessage(store, { channelId: target.id, text, source: "terminal" });
-      store = await ThaneStore.open();
-      outputMessage = store.recent(target.id, 1).at(-1) ?? localMessage;
+    requireHostedAuthToken(store);
+    const target = store.findChannel(channel);
+    if (!target) {
+      throw new Error(`Channel ${channel} was not found.`);
+    }
+    await sendHostedMessage(store, { channelId: target.id, text, source: "terminal" });
+    store = await ThaneStore.open();
+    const outputMessage = store.recent(target.id, 1).at(-1);
+    if (!outputMessage) {
+      throw new Error("Message was sent but did not sync back.");
     }
     wantsJson(args) ? printJson({ message: outputMessage }) : process.stdout.write(`sent ${outputMessage.id} to #${store.findChannel(channel)?.name ?? channel}\n`);
     return;
@@ -1314,8 +1322,7 @@ async function main(): Promise<void> {
     if (!handle || !text) {
       throw new Error("Usage: thane dm-send <handle> <message>");
     }
-    const message = await store.sendDm(handle, text);
-    wantsJson(args) ? printJson({ message }) : process.stdout.write(`sent ${message.id} to @${handle.replace(/^@/, "")}\n`);
+    throw new Error("DM sending from the CLI requires hosted DM support and is not available yet.");
     return;
   }
 
@@ -1370,20 +1377,20 @@ async function main(): Promise<void> {
     if (!second || !text) {
       throw new Error("Usage: thane reply <message-id> <message>");
     }
+    requireHostedAuthToken(store);
     const root = store.thread(second)[0];
     if (!root) {
       throw new Error(`Message ${second} was not found.`);
     }
-    const localMessage = await store.reply(second, text);
-    let outputMessage: { id: string; threadRootId?: string } = localMessage;
-    if (hasHostedChat(store)) {
-      const target = store.findChannel(root.channel);
-      if (!target) {
-        throw new Error(`Channel ${root.channel} was not found.`);
-      }
-      await sendHostedMessage(store, { channelId: target.id, text, source: "terminal", threadRootId: root.threadRootId ?? root.id });
-      store = await ThaneStore.open();
-      outputMessage = store.thread(second).at(-1) ?? localMessage;
+    const target = store.findChannel(root.channel);
+    if (!target) {
+      throw new Error(`Channel ${root.channel} was not found.`);
+    }
+    await sendHostedMessage(store, { channelId: target.id, text, source: "terminal", threadRootId: root.threadRootId ?? root.id });
+    store = await ThaneStore.open();
+    const outputMessage = store.thread(second).at(-1);
+    if (!outputMessage) {
+      throw new Error("Reply was sent but did not sync back.");
     }
     wantsJson(args) ? printJson({ message: outputMessage }) : process.stdout.write(`sent ${outputMessage.id} in thread ${outputMessage.threadRootId ?? second}\n`);
     return;
@@ -1394,12 +1401,12 @@ async function main(): Promise<void> {
     if (!second || !emoji) {
       throw new Error("Usage: thane react <message-id> <emoji>");
     }
-    const localMessage = await store.react(second, emoji);
-    let outputMessage: { id: string } = localMessage;
-    if (hasHostedChat(store)) {
-      await reactHostedMessage(store, { messageId: second, emoji });
-      store = await ThaneStore.open();
-      outputMessage = store.thread(second)[0] ?? localMessage;
+    requireHostedAuthToken(store);
+    await reactHostedMessage(store, { messageId: second, emoji });
+    store = await ThaneStore.open();
+    const outputMessage = store.thread(second)[0];
+    if (!outputMessage) {
+      throw new Error("Reaction was saved but the message did not sync back.");
     }
     wantsJson(args) ? printJson({ message: outputMessage }) : process.stdout.write(`reacted to ${second}\n`);
     return;

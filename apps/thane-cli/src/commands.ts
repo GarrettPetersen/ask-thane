@@ -27,7 +27,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Accounts",
     command: "thane signup <email> [--name \"...\"]",
-    description: "Create a local account and print a verification code.",
+    description: "Start hosted email-code signup.",
     examples: ["thane signup <email> --name \"Your Name\""]
   },
   {
@@ -57,7 +57,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Accounts",
     command: "thane logout",
-    description: "Sign out locally.",
+    description: "Remove the local hosted-auth token.",
     examples: ["thane logout"]
   },
   {
@@ -105,13 +105,13 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Workspaces",
     command: "thane workspace create-from-slack <export.zip> [--slug \"...\"] [--name \"...\"] [--apply] [--json]",
-    description: "Create or reuse a workspace from a Slack export ZIP, then import it when --apply is set.",
+    description: "Preview Slack export workspace creation. Hosted import apply is not available yet.",
     examples: ["thane workspace create-from-slack ./slack-export.zip --slug acme --apply"]
   },
   {
     category: "Imports",
     command: "thane import slack-export <export.zip> [--preview] [--apply] [--json]",
-    description: "Preview or import a Slack export ZIP into the active workspace.",
+    description: "Preview a Slack export ZIP. Hosted import apply is not available yet.",
     examples: ["thane import slack-export ./slack-export.zip --preview --json"]
   },
   {
@@ -129,19 +129,19 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Channels",
     command: "thane channel join <channel>",
-    description: "Join or subscribe to a public channel.",
+    description: "Reserved for hosted channel join support.",
     examples: ["thane channel join design"]
   },
   {
     category: "Channels",
     command: "thane channel leave <channel>",
-    description: "Leave or unsubscribe from a channel.",
+    description: "Reserved for hosted channel leave support.",
     examples: ["thane channel leave design"]
   },
   {
     category: "Channels",
     command: "thane channel invite <channel> <handle-or-email>",
-    description: "Add a workspace user to a channel.",
+    description: "Reserved for hosted channel membership support.",
     examples: ["thane channel invite leadership alex"]
   },
   {
@@ -159,7 +159,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Members",
     command: "thane invite <email> [--role admin|member] [--expires 7d] [--handle \"...\"]",
-    description: "Email a hosted workspace invite, or add a local workspace member when offline.",
+    description: "Email a hosted workspace invite.",
     examples: ["thane invite alex@example.com", "thane invite alex@example.com --role admin --expires 24h"]
   },
   {
@@ -177,7 +177,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Members",
     command: "thane member role <handle-or-email> <admin|member>",
-    description: "Change a member role.",
+    description: "Reserved for hosted member-role support.",
     examples: ["thane member role alex member"]
   },
   {
@@ -189,7 +189,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Users and DMs",
     command: "thane user add <handle> [--name \"...\"]",
-    description: "Add a local workspace user without an account.",
+    description: "Removed. Invite real accounts with `thane invite <email>`.",
     examples: ["thane user add alex --name \"Alex\""]
   },
   {
@@ -207,7 +207,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Users and DMs",
     command: "thane dm-send <handle> <message>",
-    description: "Send a DM.",
+    description: "Reserved for hosted DM support.",
     examples: ["thane dm-send alex \"Can you review this?\""]
   },
   {
@@ -285,13 +285,13 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Ask Thane",
     command: "thane ask-thane enable [--json]",
-    description: "Enable the local Ask Thane bridge.",
+    description: "Enable Ask Thane for the active hosted workspace.",
     examples: ["thane ask-thane enable"]
   },
   {
     category: "Ask Thane",
     command: "thane ask-thane disable",
-    description: "Disable the local Ask Thane bridge.",
+    description: "Disable Ask Thane for the active hosted workspace.",
     examples: ["thane ask-thane disable"]
   },
   {
@@ -314,8 +314,14 @@ export const cliCommands: CliCommand[] = [
   },
   {
     category: "Billing",
+    command: "thane billing portal",
+    description: "Create a signed Stripe billing portal URL for the active workspace.",
+    examples: ["thane billing portal"]
+  },
+  {
+    category: "Billing",
     command: "thane billing activate-team-dev",
-    description: "Activate Thane Chat Team locally when dev activation is enabled.",
+    description: "Activate Thane Chat Team in development when explicitly enabled.",
     examples: ["THANE_ALLOW_DEV_BILLING_ACTIVATION=1 thane billing activate-team-dev"]
   },
   {
@@ -327,7 +333,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Help",
     command: "thane doctor [--json]",
-    description: "Show version, resolved store path, active workspace, and local store stats.",
+    description: "Show version, cache path, active workspace, and hosted-cache stats.",
     examples: ["thane doctor", "thane doctor --json"]
   },
   {

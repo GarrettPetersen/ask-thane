@@ -1,6 +1,6 @@
 import { stdin as input, stdout as output } from "node:process";
 import { emitKeypressEvents } from "node:readline";
-import { createHostedChannel, ensureHostedWorkspace, hasHostedChat, reactHostedMessage, sendHostedMessage, syncHostedStore } from "./hosted.js";
+import { createHostedChannel, createHostedWorkspace, ensureHostedWorkspace, hasHostedChat, reactHostedMessage, sendHostedMessage, syncHostedStore } from "./hosted.js";
 import { renderChannels, renderInbox, renderMessages, renderUsers } from "./render.js";
 import { completeSlashCommand, renderSlashCommands, slashCommands } from "./slash-commands.js";
 import { ThaneStore } from "./store.js";
@@ -15,6 +15,11 @@ const RESET = "\x1b[0m";
 const DIM = "\x1b[2m";
 const INVERSE = "\x1b[7m";
 const BOLD = "\x1b[1m";
+
+function hostedWorkspaceId(): string {
+  const random = Math.random().toString(36).slice(2, 10);
+  return `wsp_${Date.now().toString(36)}${random}`;
+}
 
 interface ChatConversation {
   id: string;
@@ -197,9 +202,18 @@ function conversations(store: ThaneStore, activeId: string): ChatConversation[] 
 
 async function selectConversation(store: ThaneStore, target: string): Promise<ThaneChannel> {
   if (target.startsWith("@")) {
-    return store.findOrCreateDm(target.slice(1));
+    const normalized = target.slice(1).trim().toLowerCase();
+    const dm = store.listDms().find((candidate) => candidate.name === normalized);
+    if (!dm) {
+      throw new Error(`DM ${target} was not found.`);
+    }
+    return dm;
   }
-  return store.createChannel(target.replace(/^#/, ""));
+  const channel = store.findChannel(target.replace(/^#/, ""));
+  if (!channel) {
+    throw new Error(`Channel ${target} was not found.`);
+  }
+  return channel;
 }
 
 function threadedMessages(messages: MessageView[]): MessageView[] {
@@ -460,15 +474,11 @@ async function updateDisplayName(store: ThaneStore, displayName: string): Promis
   if (!cleaned) {
     return "Usage: /name <display-name>";
   }
-  if (hasHostedChat(store)) {
-    const token = requireHostedAuthToken(store);
-    const response = await postThaneApiWithAuth<{ displayName: string }>("/v1/thane-cli/profile", token, { displayName: cleaned });
-    await store.setDisplayName(response.displayName);
-    await syncHostedStore(store);
-    return `Display name: ${response.displayName}`;
-  }
-  const updated = await store.setDisplayName(cleaned);
-  return `Display name: ${updated.user.displayName}`;
+  const token = requireHostedAuthToken(store);
+  const response = await postThaneApiWithAuth<{ displayName: string }>("/v1/thane-cli/profile", token, { displayName: cleaned });
+  await store.setDisplayName(response.displayName);
+  await syncHostedStore(store);
+  return `Display name: ${response.displayName}`;
 }
 
 async function mfaStatus(store: ThaneStore): Promise<string> {
@@ -763,12 +773,9 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = "No reaction target selected.";
       return;
     }
-    if (hasHostedChat(store)) {
-      await reactHostedMessage(store, { messageId: targetMessageId, emoji });
-      store = await ThaneStore.open();
-    } else {
-      await store.react(targetMessageId, emoji);
-    }
+    requireHostedAuthToken(store);
+    await reactHostedMessage(store, { messageId: targetMessageId, emoji });
+    store = await ThaneStore.open();
     composerMode = "message";
     targetMessageId = undefined;
     showReactionPicker = false;
@@ -793,13 +800,10 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       }
       const root = selectedMessage();
       const threadRootId = root?.threadRootId ?? root?.id ?? targetMessageId;
-      if (hasHostedChat(store)) {
-        await sendHostedMessage(store, { channelId: activeChannel.id, text: trimmed, source: "chat", threadRootId });
-        store = await ThaneStore.open();
-      }
-      const sent = hasHostedChat(store)
-        ? threadedMessages(store.recent(activeChannel.id, 200)).at(-1)
-        : await store.reply(targetMessageId, trimmed, "chat");
+      requireHostedAuthToken(store);
+      await sendHostedMessage(store, { channelId: activeChannel.id, text: trimmed, source: "chat", threadRootId });
+      store = await ThaneStore.open();
+      const sent = threadedMessages(store.recent(activeChannel.id, 200)).at(-1);
       composerMode = "message";
       targetMessageId = undefined;
       messageIndex = Math.max(0, threadedMessages(store.recent(activeChannel.id, 200)).findIndex((message) => message.id === sent?.id));
@@ -996,12 +1000,9 @@ export async function runChat(initialChannel = "general"): Promise<void> {
         status = `Channel ${root.channel} was not found.`;
         return;
       }
-      if (hasHostedChat(store)) {
-        await sendHostedMessage(store, { channelId: target.id, text, source: "chat", threadRootId: root.threadRootId ?? root.id });
-        store = await ThaneStore.open();
-      } else {
-        await store.reply(messageId, text, "chat");
-      }
+      requireHostedAuthToken(store);
+      await sendHostedMessage(store, { channelId: target.id, text, source: "chat", threadRootId: root.threadRootId ?? root.id });
+      store = await ThaneStore.open();
       activeChannel = target;
       sidePanelLines = [`${BOLD}Thread${RESET}`, "", ...renderMessages(store.thread(messageId)).split("\n")];
       workspacePickerOpen = false;
@@ -1019,12 +1020,9 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       }
       const messageId = match[1];
       const emoji = match[2].trim();
-      if (hasHostedChat(store)) {
-        await reactHostedMessage(store, { messageId, emoji });
-        store = await ThaneStore.open();
-      } else {
-        await store.react(messageId, emoji);
-      }
+      requireHostedAuthToken(store);
+      await reactHostedMessage(store, { messageId, emoji });
+      store = await ThaneStore.open();
       status = `Reacted ${emoji}`;
       return;
     }
@@ -1111,13 +1109,14 @@ export async function runChat(initialChannel = "general"): Promise<void> {
         status = "Usage: /workspace-create <slug> [name]";
         return;
       }
-      let workspace = await store.createWorkspace(slug, name || undefined);
-      await store.useWorkspace(workspace.slug);
-      if (hasHostedChat(store)) {
-        await ensureHostedWorkspace(store);
-        store = await ThaneStore.open();
-        workspace = store.activeWorkspace;
-      }
+      requireHostedAuthToken(store);
+      await createHostedWorkspace(store, {
+        workspaceId: hostedWorkspaceId(),
+        slug,
+        ...(name ? { name } : {})
+      });
+      store = await ThaneStore.open();
+      const workspace = store.activeWorkspace;
       activeChannel = await selectConversation(store, "general");
       status = `Created workspace ${workspace.slug}`;
       showHelp = false;
@@ -1131,13 +1130,10 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = "Unknown command. Type /help.";
       return;
     }
-    if (hasHostedChat(store)) {
-      await sendHostedMessage(store, { channelId: activeChannel.id, text: trimmed, source: "chat" });
-      store = await ThaneStore.open();
-    }
-    const sent = hasHostedChat(store)
-      ? threadedMessages(store.recent(activeChannel.id, 200)).at(-1)
-      : await store.sendMessage(activeChannel.id, trimmed, undefined, "chat");
+    requireHostedAuthToken(store);
+    await sendHostedMessage(store, { channelId: activeChannel.id, text: trimmed, source: "chat" });
+    store = await ThaneStore.open();
+    const sent = threadedMessages(store.recent(activeChannel.id, 200)).at(-1);
     const messages = threadedMessages(store.recent(activeChannel.id, 200));
     status = sent && messages.some((message) => message.id === sent.id) ? "" : "";
     messageIndex = Math.max(0, sent ? messages.findIndex((message) => message.id === sent.id) : messages.length - 1);

@@ -20,9 +20,12 @@ allowed_sender_addresses = ["noreply@askthane.com"]
 BUILD_ENV = "local"
 BUILD_GIT_SHA = "dev"
 BUILD_DEPLOYED_AT = "local"
+DEFAULT_LLM_PROVIDER = "openai"
+DEFAULT_LLM_MODEL = "gpt-4.1-mini"
 THANE_CLI_AUTH_DEV_CODES = "true"
 THANE_CLI_EMAIL_FROM = "Thane <noreply@askthane.com>"
 THANE_CLI_INVITE_BASE_URL = "http://localhost:8787/invite"
+THANE_PAYMENTS_BASE_URL = "http://localhost:8789"
 
 [env.staging]
 name = "ask-thane-api-staging"
@@ -41,9 +44,12 @@ allowed_sender_addresses = ["noreply@askthane.com"]
 BUILD_ENV = "staging"
 BUILD_GIT_SHA = "unknown"
 BUILD_DEPLOYED_AT = "unknown"
+DEFAULT_LLM_PROVIDER = "openai"
+DEFAULT_LLM_MODEL = "gpt-4.1-mini"
 THANE_CLI_AUTH_DEV_CODES = "true"
 THANE_CLI_EMAIL_FROM = "Thane <noreply@askthane.com>"
 THANE_CLI_INVITE_BASE_URL = "https://api-staging.askthane.com/invite"
+THANE_PAYMENTS_BASE_URL = "https://payments-staging.askthane.com"
 
 [[env.staging.routes]]
 pattern = "api-staging.askthane.com"
@@ -66,9 +72,12 @@ allowed_sender_addresses = ["noreply@askthane.com"]
 BUILD_ENV = "production"
 BUILD_GIT_SHA = "unknown"
 BUILD_DEPLOYED_AT = "unknown"
+DEFAULT_LLM_PROVIDER = "openai"
+DEFAULT_LLM_MODEL = "gpt-4.1-mini"
 THANE_CLI_AUTH_DEV_CODES = "false"
 THANE_CLI_EMAIL_FROM = "Thane <noreply@askthane.com>"
 THANE_CLI_INVITE_BASE_URL = "https://api.askthane.com/invite"
+THANE_PAYMENTS_BASE_URL = "https://payments.askthane.com"
 
 [[env.production.routes]]
 pattern = "api.askthane.com"

@@ -145,13 +145,21 @@ describe("@ask-thane/payments-worker", () => {
       secret: "billing_secret",
       organizationId: "org_1",
       workspaceId: "ws_1",
-      planTier: "team"
+      planTier: "cli_team"
     });
-    const res = await worker.fetch(new Request(`https://pay.local/subscribe?billing_token=${billingToken}`), {
-      BILLING_LINK_SIGNING_SECRET: "billing_secret"
-    });
+    const res = await worker.fetch(
+      new Request(`https://pay.local/subscribe?billing_token=${billingToken}&return_url=${encodeURIComponent("https://chat.askthane.com/")}`),
+      {
+        BILLING_LINK_SIGNING_SECRET: "billing_secret",
+        THANE_CHAT_BASE_URL: "https://chat.askthane.com"
+      }
+    );
     expect(res.status).toBe(200);
-    await expect(res.text()).resolves.toContain("Choose a Thane plan");
+    const html = await res.text();
+    expect(html).toContain("Choose a Thane plan");
+    expect(html).toContain("Thane Chat Team");
+    expect(html).toContain('const successUrl = "https://chat.askthane.com/";');
+    expect(html).toContain('const returnUrl = "https://chat.askthane.com/";');
   });
 
   it("returns config error when checkout is not wired", async () => {
@@ -346,7 +354,64 @@ describe("@ask-thane/payments-worker", () => {
     });
     expect(operations.some((op) => op.sql.includes("UPDATE organizations"))).toBe(true);
     expect(operations.some((op) => op.sql.includes("UPDATE workspaces"))).toBe(true);
+    expect(operations.some((op) => op.sql.includes("UPDATE thane_cli_workspaces"))).toBe(false);
     expect(operations.some((op) => op.sql.includes("INSERT INTO organization_external_accounts"))).toBe(true);
+  });
+
+  it("links Thane Chat cli_team entitlement on checkout.session.completed webhook", async () => {
+    const operations: Array<{ sql: string; bind: unknown[] }> = [];
+    const db = {
+      prepare(sql: string) {
+        return {
+          bind(...args: unknown[]) {
+            return {
+              run: async () => {
+                operations.push({ sql, bind: args });
+                return {};
+              }
+            };
+          }
+        };
+      }
+    };
+
+    const payload = JSON.stringify({
+      id: "evt_1",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_1",
+          customer: "cus_1",
+          customer_email: "owner@example.com",
+          subscription: "sub_1",
+          metadata: {
+            organization_id: "wsp_1",
+            workspace_id: "wsp_1",
+            plan_tier: "cli_team"
+          }
+        }
+      }
+    });
+    const timestamp = Math.floor(Date.now() / 1000);
+    const secret = "whsec_test_123";
+    const signature = await signStripeWebhookPayload({ secret, payload, timestamp });
+    const res = await worker.fetch(
+      new Request("https://pay.local/webhooks/stripe", {
+        method: "POST",
+        body: payload,
+        headers: {
+          "content-type": "application/json",
+          "stripe-signature": signature
+        }
+      }),
+      {
+        STRIPE_WEBHOOK_SECRET: secret,
+        DB: db as unknown as D1Database
+      }
+    );
+
+    expect(res.status).toBe(200);
+    expect(operations.some((op) => op.sql.includes("UPDATE thane_cli_workspaces") && op.bind[0] === "cli_team" && op.bind[2] === "wsp_1")).toBe(true);
   });
 
   it("rejects checkout when billing token is invalid", async () => {
