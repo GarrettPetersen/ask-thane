@@ -50,6 +50,24 @@ export const cliCommands: CliCommand[] = [
   },
   {
     category: "Accounts",
+    command: "thane mfa status [--json]",
+    description: "Show MFA (2FA) status.",
+    examples: ["thane mfa status --json"]
+  },
+  {
+    category: "Accounts",
+    command: "thane mfa setup",
+    description: "Start MFA (2FA) setup with an authenticator app QR code.",
+    examples: ["thane mfa setup"]
+  },
+  {
+    category: "Accounts",
+    command: "thane mfa disable <code>",
+    description: "Disable MFA (2FA) using an authenticator app code.",
+    examples: ["thane mfa disable 123456"]
+  },
+  {
+    category: "Accounts",
     command: "thane profile name <display-name> [--json]",
     description: "Change your display name in the active workspace.",
     examples: ["thane profile name \"Garrett Petersen\"", "thane profile name GP --json"]

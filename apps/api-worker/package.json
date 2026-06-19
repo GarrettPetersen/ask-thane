@@ -13,11 +13,13 @@
   },
   "dependencies": {
     "@ask-thane/ai": "workspace:*",
+    "@ask-thane/data": "workspace:*",
     "@ask-thane/domain": "workspace:*",
     "@ask-thane/workflows": "workspace:*",
-    "@ask-thane/data": "workspace:*"
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
+    "@types/qrcode": "^1.5.6",
     "wrangler": "^4.17.0"
   }
 }

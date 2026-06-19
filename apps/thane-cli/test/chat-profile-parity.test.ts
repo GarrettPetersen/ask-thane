@@ -42,4 +42,21 @@ describe("chat profile action parity", () => {
     expect(chatAppHtml).toContain('scope: "account"');
     expect(chatAppHtml).toContain("Account default name");
   });
+
+  it("exposes MFA setup guidance across web, terminal, and CLI", () => {
+    const mfaSetupCli = findCliCommand("thane mfa setup");
+    expect(mfaSetupCli?.description).toContain("MFA (2FA)");
+    expect(mfaSetupCli?.description).toContain("QR code");
+
+    expect(findSlashCommand("/mfa-setup")).toMatchObject({
+      usage: "/mfa-setup",
+      description: expect.stringContaining("MFA (2FA)"),
+      needsArgument: false
+    });
+
+    expect(chatAppHtml).toContain("Start MFA (2FA) setup");
+    expect(chatAppHtml).toContain("Scan this QR code with your authenticator app.");
+    expect(chatAppHtml).toContain("Google Authenticator");
+    expect(chatAppHtml).toContain("qr-card");
+  });
 });

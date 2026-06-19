@@ -421,6 +421,18 @@
         overflow-wrap: anywhere;
         white-space: pre-wrap;
       }
+      .qr-card {
+        width: fit-content;
+        max-width: 100%;
+        border: 1px solid var(--line);
+        background: #ffffff;
+        padding: 10px;
+      }
+      .qr-card svg {
+        display: block;
+        width: min(220px, 100%);
+        height: auto;
+      }
       .empty {
         border: 0;
         color: var(--muted);
@@ -1594,10 +1606,15 @@
                     <button>Update account default</button>
                   </form>
                   <div class="kv">
-                    <div>MFA: ${esc(state.mfaStatus || "unknown")}</div>
+                    <div>MFA (2FA): ${esc(state.mfaStatus || "unknown")}</div>
                     <button onclick="refreshMfaStatus()">Check MFA</button>
-                    <button onclick="startMfaSetup()">Start MFA setup</button>
-                    ${state.mfaSetup ? `<div class="cmdline">${esc(`secret: ${state.mfaSetup.secret}\notpauth: ${state.mfaSetup.otpauthUrl}`)}</div>
+                    <button onclick="startMfaSetup()">Start MFA (2FA) setup</button>
+                    ${state.mfaSetup ? `<div class="note-grid">
+                        <div>Scan this QR code with your authenticator app.</div>
+                        <div>Examples: 1Password, Google Authenticator, Authy, Microsoft Authenticator, Apple Passwords.</div>
+                      </div>
+                      ${state.mfaSetup.qrSvg ? `<div class="qr-card">${state.mfaSetup.qrSvg}</div>` : ""}
+                      <div class="cmdline">${esc(`Manual setup fallback:\nsecret: ${state.mfaSetup.secret}\notpauth: ${state.mfaSetup.otpauthUrl}`)}</div>
                       <form class="list" onsubmit="verifyMfaSetup(event)">
                         <input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" />
                         <button>Verify MFA</button>

@@ -3,6 +3,7 @@ import { D1TaskRepository } from "@ask-thane/data";
 import type { MessageEvent } from "@ask-thane/domain";
 import { ingestMessageForTasks } from "@ask-thane/workflows";
 import { DurableObject } from "cloudflare:workers";
+import * as QRCode from "qrcode";
 
 interface Env {
   DB: D1Database;
@@ -60,6 +61,11 @@ interface MfaSetupVerifyPayload {
 
 interface MfaDisablePayload {
   code?: unknown;
+}
+
+interface MfaSetupQrCodes {
+  qrSvg: string;
+  qrTerminal: string;
 }
 
 interface WorkspaceInviteCreatePayload {
@@ -491,6 +497,42 @@ function makeTotpSecret(): string {
   return Array.from(bytes)
     .map((byte) => alphabet[byte % alphabet.length])
     .join("");
+}
+
+function renderTerminalQr(qr: QRCode.QRCode): string {
+  const quietZone = 1;
+  const size = qr.modules.size;
+  const isDark = (x: number, y: number): boolean =>
+    x >= 0 && y >= 0 && x < size && y < size && qr.modules.get(y, x) === 1;
+  const lines: string[] = [];
+  for (let y = -quietZone; y < size + quietZone; y += 2) {
+    let line = "";
+    for (let x = -quietZone; x < size + quietZone; x += 1) {
+      const top = isDark(x, y);
+      const bottom = isDark(x, y + 1);
+      line += top && bottom ? "█" : top ? "▀" : bottom ? "▄" : " ";
+    }
+    lines.push(line.trimEnd());
+  }
+  return lines.join("\n");
+}
+
+async function mfaSetupQrCodes(otpauthUrl: string): Promise<MfaSetupQrCodes> {
+  const qrOptions = { errorCorrectionLevel: "L" } satisfies QRCode.QRCodeOptions;
+  const qrSvg = await QRCode.toString(otpauthUrl, {
+    ...qrOptions,
+    type: "svg",
+    margin: 2,
+    scale: 5,
+    color: {
+      dark: "#0a0f0cff",
+      light: "#ffffffff"
+    }
+  });
+  return {
+    qrSvg,
+    qrTerminal: renderTerminalQr(QRCode.create(otpauthUrl, qrOptions))
+  };
 }
 
 function makeInviteToken(): string {
@@ -1794,11 +1836,13 @@ async function handleThaneCliMfaSetupStart(request: Request, env: Env): Promise<
     )
     .bind(factorId, email, await encryptSecret(env, secret), nowIso())
     .run();
+  const otpauthUrl = `otpauth://totp/Thane%20Chat:${encodeURIComponent(email)}?secret=${secret}&issuer=Thane%20Chat&algorithm=SHA1&digits=6&period=30`;
   return Response.json({
     ok: true,
     factorId,
     secret,
-    otpauthUrl: `otpauth://totp/Thane%20Chat:${encodeURIComponent(email)}?secret=${secret}&issuer=Thane%20Chat&algorithm=SHA1&digits=6&period=30`
+    otpauthUrl,
+    ...(await mfaSetupQrCodes(otpauthUrl))
   });
 }
 

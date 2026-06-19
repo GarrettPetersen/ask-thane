@@ -885,7 +885,7 @@ async function main(): Promise<void> {
 
   if (command === "mfa" && second === "setup") {
     const token = requireHostedAuthToken(store);
-    const setup = await postThaneApiWithAuth<{ factorId: string; secret: string; otpauthUrl: string }>(
+    const setup = await postThaneApiWithAuth<{ factorId: string; secret: string; otpauthUrl: string; qrSvg?: string; qrTerminal?: string }>(
       "/v1/thane-cli/mfa/setup/start",
       token
     );
@@ -896,8 +896,12 @@ async function main(): Promise<void> {
     const prompts = createPrompter();
     try {
       process.stdout.write(
-        "Add this to your authenticator app.\n" +
-          `Manual secret: ${setup.secret}\n` +
+        "Set up MFA (2FA)\n" +
+          "Scan this QR code with your authenticator app.\n" +
+          "Examples: 1Password, Google Authenticator, Authy, Microsoft Authenticator, Apple Passwords.\n\n" +
+          (setup.qrTerminal ? `${setup.qrTerminal}\n\n` : "") +
+          "Manual setup fallback:\n" +
+          `secret: ${setup.secret}\n` +
           `otpauth URL: ${setup.otpauthUrl}\n`
       );
       const code = await prompts.ask("Authenticator code: ");

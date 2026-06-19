@@ -253,6 +253,46 @@ describe("@ask-thane/api-worker", () => {
     expect(prepare).toHaveBeenCalledWith(expect.stringContaining("UPDATE thane_cli_auth_codes"));
   });
 
+  it("starts Thane CLI MFA setup with QR code renderings", async () => {
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const noMfa = vi.fn(async () => null);
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        if (sql.includes("FROM thane_cli_mfa_factors")) {
+          return { first: noMfa };
+        }
+        return { run };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/mfa/setup/start", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("garrett@example.com")}` }
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      ok: true,
+      factorId: expect.stringMatching(/^mfa_/),
+      secret: expect.stringMatching(/^[A-Z2-7]+$/),
+      otpauthUrl: expect.stringContaining("otpauth://totp/Thane%20Chat:garrett%40example.com")
+    });
+    expect(body.qrSvg).toContain("<svg");
+    expect(body.qrTerminal).toMatch(/[█▀▄]/);
+    expect(calls.some((call) => call.sql.includes("INSERT INTO thane_cli_mfa_factors"))).toBe(true);
+  });
+
   it("updates the hosted Thane CLI profile display name", async () => {
     const calls: Array<{ sql: string; args: unknown[] }> = [];
     const run = vi.fn(async () => ({ meta: { changes: 2 } }));

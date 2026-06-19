@@ -528,8 +528,19 @@ async function mfaStatus(store: ThaneStore): Promise<string> {
 
 async function startMfaSetup(store: ThaneStore): Promise<string> {
   const token = requireHostedAuthToken(store);
-  const setup = await postThaneApiWithAuth<{ factorId: string; secret: string; otpauthUrl: string }>("/v1/thane-cli/mfa/setup/start", token);
-  return `MFA setup started\nfactor: ${setup.factorId}\nsecret: ${setup.secret}\notpauth: ${setup.otpauthUrl}\nfinish: /mfa-verify ${setup.factorId} 123456`;
+  const setup = await postThaneApiWithAuth<{ factorId: string; secret: string; otpauthUrl: string; qrTerminal?: string }>("/v1/thane-cli/mfa/setup/start", token);
+  return [
+    "Set up MFA (2FA)",
+    "Scan this QR code with your authenticator app.",
+    "Examples: 1Password, Google Authenticator, Authy, Microsoft Authenticator, Apple Passwords.",
+    "",
+    ...(setup.qrTerminal ? setup.qrTerminal.split("\n") : []),
+    "",
+    "Manual setup fallback:",
+    `secret: ${setup.secret}`,
+    `otpauth: ${setup.otpauthUrl}`,
+    `finish: /mfa-verify ${setup.factorId} 123456`
+  ].join("\n");
 }
 
 async function verifyMfaSetup(store: ThaneStore, factorId: string, code: string): Promise<string> {
@@ -902,12 +913,12 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       return;
     }
     if (trimmed === "/mfa-setup") {
-      sidePanelLines = [`${BOLD}MFA Setup${RESET}`, "", ...(await startMfaSetup(store)).split("\n")];
+      sidePanelLines = [`${BOLD}MFA (2FA) Setup${RESET}`, "", ...(await startMfaSetup(store)).split("\n")];
       showHelp = false;
       showMenu = false;
       workspacePickerOpen = false;
       showReactionPicker = false;
-      status = "Add the secret to your authenticator app.";
+      status = "Scan the QR code or enter the manual secret in your authenticator app.";
       return;
     }
     if (trimmed.startsWith("/mfa-verify ")) {
