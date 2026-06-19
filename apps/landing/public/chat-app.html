@@ -238,6 +238,7 @@
         box-shadow: none;
         padding: 2px 0;
         font-size: 13px;
+        position: relative;
       }
       .message.reply {
         margin-left: 0;
@@ -261,6 +262,57 @@
         color: var(--amber);
         font-size: 12px;
         margin-left: 22px;
+      }
+      .message-actions {
+        position: absolute;
+        right: 0;
+        top: -2px;
+        display: flex;
+        gap: 4px;
+        opacity: 0;
+        pointer-events: none;
+        background: #070a08;
+        padding-left: 8px;
+      }
+      .message:hover .message-actions,
+      .message:focus-within .message-actions,
+      .message.show-reactions .message-actions {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .message-action {
+        min-height: 24px;
+        min-width: 28px;
+        padding: 0 7px;
+        border-color: #263229;
+        color: var(--muted);
+        background: #070a08;
+        line-height: 1;
+      }
+      .reaction-menu {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-left: 10px;
+        padding: 2px 4px;
+        border: 1px solid var(--line);
+        background: #070a08;
+        vertical-align: middle;
+      }
+      .reaction-menu button {
+        min-height: 26px;
+        min-width: 28px;
+        padding: 0 5px;
+      }
+      .reaction-custom {
+        display: inline-flex;
+        gap: 4px;
+        align-items: center;
+      }
+      .reaction-custom input {
+        width: 48px;
+        min-height: 26px;
+        padding: 2px 5px;
       }
       .msg-marker {
         color: var(--muted);
@@ -403,6 +455,9 @@
         activeWorkspaceId: "",
         activeChannelId: "",
         replyToId: "",
+        reactionMenuMessageId: "",
+        longPressTimer: null,
+        touchMoved: false,
         draftText: "",
         sidebarCollapsed: localStorage.getItem("thane.web.sidebarCollapsed") === "true",
         workspaceMenuOpen: localStorage.getItem("thane.web.workspaceMenuOpen") === "true",
@@ -669,6 +724,7 @@
 
       function replyTo(id) {
         state.replyToId = id;
+        state.reactionMenuMessageId = "";
         render();
         requestAnimationFrame(() => document.querySelector(".composer textarea")?.focus());
       }
@@ -679,6 +735,7 @@
 
       async function reactTo(messageId, emoji) {
         if (!messageId || !emoji) return;
+        state.reactionMenuMessageId = "";
         await api("/v1/thane-cli/reactions", {
           method: "POST",
           body: JSON.stringify({ workspaceId: state.activeWorkspaceId, messageId, emoji })
@@ -694,6 +751,38 @@
         if (!emoji) return;
         event.currentTarget.reset();
         await reactTo(messageId, emoji);
+      }
+
+      function openReactionMenu(event, messageId) {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        state.reactionMenuMessageId = state.reactionMenuMessageId === messageId ? "" : messageId;
+        render();
+      }
+
+      function closeReactionMenu() {
+        state.reactionMenuMessageId = "";
+        render();
+      }
+
+      function startLongPress(event, messageId) {
+        state.touchMoved = false;
+        clearTimeout(state.longPressTimer);
+        state.longPressTimer = setTimeout(() => {
+          if (state.touchMoved) return;
+          if (navigator.vibrate) navigator.vibrate(10);
+          openReactionMenu(event, messageId);
+        }, 520);
+      }
+
+      function cancelLongPress() {
+        clearTimeout(state.longPressTimer);
+        state.longPressTimer = null;
+      }
+
+      function markTouchMoved() {
+        state.touchMoved = true;
+        cancelLongPress();
       }
 
       async function createChannel(event) {
@@ -789,8 +878,12 @@
         const branch = isReply ? `<span class="msg-branch">└─</span> ` : "";
         const sourceMarker = message.source === "terminal" ? " 🤖" : "";
         const reactionText = (message.reactions || []).map((reaction) => reaction.emoji).join(" ");
-        return `<article class="message ${isReply ? "reply" : ""}">
+        const menuOpen = state.reactionMenuMessageId === message.id;
+        const quickReactions = ["👍", "❤️", "😂", "🎉", "👀"];
+        return `<article class="message ${isReply ? "reply" : ""} ${menuOpen ? "show-reactions" : ""}" ontouchstart="startLongPress(event, ${jsString(message.id)})" ontouchmove="markTouchMoved()" ontouchend="cancelLongPress()" ontouchcancel="cancelLongPress()" oncontextmenu="openReactionMenu(event, ${jsString(message.id)})">
           <span class="message-meta">${branch}<span class="msg-marker">  ${esc(stamp)}</span> <span class="message-author">@${esc(user?.handle || "unknown")}${sourceMarker}</span>: </span><span class="message-text">${esc(message.text)}</span>${replies.length && !isReply ? `<span class="thread-count"> (${replies.length} repl${replies.length === 1 ? "y" : "ies"})</span>` : ""}${reactionText ? `<span class="thread-count"> ${esc(reactionText)}</span>` : ""}
+          <span class="message-actions"><button class="message-action" title="React" onclick="openReactionMenu(event, ${jsString(message.id)})">+</button>${!isReply ? `<button class="message-action" title="Reply" onclick="event.stopPropagation(); replyTo(${jsString(message.id)})">↵</button>` : ""}</span>
+          ${menuOpen ? `<span class="reaction-menu">${quickReactions.map((emoji) => `<button onclick="reactTo(${jsString(message.id)}, ${jsString(emoji)})">${esc(emoji)}</button>`).join("")}<form class="reaction-custom" onsubmit="customReaction(event, ${jsString(message.id)})"><input name="emoji" maxlength="12" placeholder="+"/><button>ok</button></form><button title="Close" onclick="closeReactionMenu()">x</button></span>` : ""}
           ${!isReply && replies.length ? replies.map((reply) => renderMessage(reply, users, repliesByRoot, true)).join("") : ""}
         </article>`;
       }
@@ -909,6 +1002,11 @@
       window.replyTo = replyTo;
       window.reactTo = reactTo;
       window.customReaction = customReaction;
+      window.openReactionMenu = openReactionMenu;
+      window.closeReactionMenu = closeReactionMenu;
+      window.startLongPress = startLongPress;
+      window.cancelLongPress = cancelLongPress;
+      window.markTouchMoved = markTouchMoved;
       window.createWorkspace = createWorkspace;
       window.createChannel = createChannel;
       window.invite = invite;
