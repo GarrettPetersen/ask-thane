@@ -429,6 +429,7 @@
         .app { grid-template-columns: 1fr; height: auto; min-height: 100vh; min-height: 100dvh; overflow: visible; }
         .app.sidebar-collapsed { grid-template-columns: 1fr; }
         .sidebar-collapsed .rail { display: none; }
+        .side { display: block; border-left: 0; border-top: 1px solid var(--line); }
         .rail { min-height: auto; border-right: 0; }
         .rail, .side, .main { height: auto; }
         .main { min-height: 72vh; }
@@ -458,6 +459,7 @@
         reactionMenuMessageId: "",
         longPressTimer: null,
         touchMoved: false,
+        inviteLinkResult: null,
         draftText: "",
         sidebarCollapsed: localStorage.getItem("thane.web.sidebarCollapsed") === "true",
         workspaceMenuOpen: localStorage.getItem("thane.web.workspaceMenuOpen") === "true",
@@ -537,6 +539,16 @@
       function currentMessages() {
         const channel = currentChannel();
         return (currentSnapshot().messages || []).filter((message) => message.channelId === channel?.id);
+      }
+
+      function currentWorkspaceRole() {
+        const snap = currentSnapshot();
+        return (snap.workspaceMembers || []).find((member) => member.email === state.session?.email)?.role || "";
+      }
+
+      function canAdminWorkspace() {
+        const role = currentWorkspaceRole();
+        return role === "owner" || role === "admin";
       }
 
       function messageById(id) {
@@ -694,6 +706,7 @@
         state.activeWorkspaceId = id;
         state.activeChannelId = "";
         state.replyToId = "";
+        state.inviteLinkResult = null;
         await sync();
         render();
       }
@@ -820,6 +833,8 @@
         state.activeWorkspaceId = body.workspace?.id || state.activeWorkspaceId;
         state.activeChannelId = "";
         state.replyToId = "";
+        state.inviteLinkResult = null;
+        state.status = `Created workspace ${body.workspace?.slug || workspaceSlug}`;
         await sync();
         render();
       }
@@ -832,18 +847,71 @@
         event.currentTarget.reset();
         const workspace = state.snapshot.workspaces.find((item) => item.id === state.activeWorkspaceId);
         if (!workspace) return;
-        await api("/v1/thane-cli/workspace-invites", {
-          method: "POST",
-          body: JSON.stringify({
-            workspaceId: workspace.id,
-            workspaceSlug: workspace.slug,
-            workspaceName: workspace.name,
-            inviteeEmail: email,
-            role: "member",
-            maxUses: 1
-          })
-        });
-        state.status = `Invite sent to ${email}`;
+        try {
+          await api("/v1/thane-cli/workspace-invites", {
+            method: "POST",
+            body: JSON.stringify({
+              workspaceId: workspace.id,
+              workspaceSlug: workspace.slug,
+              workspaceName: workspace.name,
+              inviteeEmail: email,
+              role: "member",
+              maxUses: 1
+            })
+          });
+          state.status = `Invite sent to ${email}`;
+          state.error = "";
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
+      async function createInviteLink(event) {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const workspace = state.snapshot.workspaces.find((item) => item.id === state.activeWorkspaceId);
+        if (!workspace) return;
+        const role = String(form.get("role") || "member") === "admin" ? "admin" : "member";
+        const expires = String(form.get("expires") || "7d").trim();
+        const maxUsesRaw = String(form.get("maxUses") || "").trim();
+        try {
+          const body = await api("/v1/thane-cli/workspace-invites", {
+            method: "POST",
+            body: JSON.stringify({
+              workspaceId: workspace.id,
+              workspaceSlug: workspace.slug,
+              workspaceName: workspace.name,
+              role,
+              expiresInHours: parseExpiresInput(expires),
+              ...(maxUsesRaw ? { maxUses: Number(maxUsesRaw) } : {})
+            })
+          });
+          state.inviteLinkResult = body.invite;
+          state.status = "Invite link created";
+          state.error = "";
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
+      function parseExpiresInput(value) {
+        const match = String(value || "").trim().toLowerCase().match(/^(\d+)\s*([hd])?$/);
+        if (!match) return 24 * 7;
+        const amount = Number(match[1]);
+        return match[2] === "h" ? amount : amount * 24;
+      }
+
+      async function copyText(value, label) {
+        try {
+          await navigator.clipboard.writeText(value);
+          state.status = `${label} copied`;
+        } catch (_error) {
+          state.status = value;
+        }
         render();
       }
 
@@ -903,6 +971,9 @@
         }
         const rootMessages = messages.filter((message) => !message.threadRootId);
         const replyTarget = messageById(state.replyToId);
+        const isAdmin = canAdminWorkspace();
+        const role = currentWorkspaceRole();
+        const inviteResult = state.inviteLinkResult;
         root.innerHTML = `
           <div class="app ${state.sidebarCollapsed ? "sidebar-collapsed" : ""}">
             <aside class="rail">
@@ -951,9 +1022,10 @@
                 <div class="section-head"><span>Workspace</span></div>
                 <div class="kv">
                   <div class="cmdline">${esc(workspace?.name || "No workspace")}</div>
+                  <div>role: ${esc(role || "member")}</div>
                   <div>${snap.users.length} member${snap.users.length === 1 ? "" : "s"}</div>
                   <div>${snap.channels.length} channel${snap.channels.length === 1 ? "" : "s"}</div>
-                  <div class="${state.status ? "ok" : "muted"}">${esc(state.status || "Ready")}</div>
+                  <div class="${state.error ? "error" : state.status ? "ok" : "muted"}">${esc(state.error || state.status || "Ready")}</div>
                 </div>
               </section>
               <section class="section">
@@ -972,11 +1044,27 @@
                 </form>
               </section>
               <section class="section">
-                <div class="section-head"><span>Invite</span></div>
-                <form class="list" onsubmit="invite(event)">
-                  <input name="email" type="email" placeholder="friend@example.com" />
-                  <button>Email invite</button>
-                </form>
+                <div class="section-head"><span>Invites</span></div>
+                ${isAdmin ? `
+                  <form class="list" onsubmit="createInviteLink(event)">
+                    <input name="expires" placeholder="7d" value="7d" />
+                    <input name="maxUses" inputmode="numeric" placeholder="max uses blank=unlimited" />
+                    <select name="role">
+                      <option value="member">member</option>
+                      <option value="admin">admin</option>
+                    </select>
+                    <button>Create invite link</button>
+                  </form>
+                  ${inviteResult ? `<div class="kv">
+                    <div class="cmdline">${esc(inviteResult.webUrl || inviteResult.url)}</div>
+                    <button onclick="copyText(${jsString(inviteResult.webUrl || inviteResult.url)}, 'Web link')">Copy web link</button>
+                    <button onclick="copyText(${jsString(inviteResult.url)}, 'CLI link')">Copy CLI link</button>
+                  </div>` : ""}
+                  <form class="list" onsubmit="invite(event)">
+                    <input name="email" type="email" placeholder="friend@example.com" />
+                    <button>Email single-use invite</button>
+                  </form>
+                ` : `<div class="muted small">admin required</div>`}
               </section>
             </aside>
           </div>`;
@@ -1010,6 +1098,8 @@
       window.createWorkspace = createWorkspace;
       window.createChannel = createChannel;
       window.invite = invite;
+      window.createInviteLink = createInviteLink;
+      window.copyText = copyText;
       window.sync = sync;
       window.render = render;
       window.state = state;
