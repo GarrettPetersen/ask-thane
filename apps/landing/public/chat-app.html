@@ -547,6 +547,7 @@
         inviteToken: inviteMatch ? decodeURIComponent(inviteMatch[1]) : "",
         invitePreview: null,
         inviteAccepted: false,
+        autoLoginStarted: false,
         snapshot: null,
         activeWorkspaceId: "",
         activeChannelId: "",
@@ -592,6 +593,14 @@
         if (body.invite?.inviteeEmail && !state.email) {
           state.email = body.invite.inviteeEmail;
         }
+      }
+
+      async function autoStartInviteLogin() {
+        if (!state.inviteToken || state.session?.authToken || state.authStep !== "email" || state.autoLoginStarted || !state.email) {
+          return;
+        }
+        state.autoLoginStarted = true;
+        await requestLoginCodeForEmail(state.email);
       }
 
       async function acceptPendingInvite() {
@@ -782,12 +791,13 @@
         render();
       }
 
-      async function startLogin(event) {
-        event.preventDefault();
+      async function requestLoginCodeForEmail(email) {
+        state.email = String(email || "").trim();
+        if (!state.email) {
+          return;
+        }
         state.busy = true; state.error = ""; state.status = "";
         render();
-        const form = new FormData(event.currentTarget);
-        state.email = String(form.get("email") || "").trim();
         try {
           await api("/v1/thane-cli/auth/start", {
             method: "POST",
@@ -800,6 +810,12 @@
         } finally {
           state.busy = false; render();
         }
+      }
+
+      async function startLogin(event) {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        await requestLoginCodeForEmail(form.get("email"));
       }
 
       async function verifyLogin(event) {
@@ -1772,7 +1788,10 @@
         }, 5000);
       } else {
         if (state.inviteToken) {
-          previewInvite().catch((error) => { state.error = error.message; }).finally(render);
+          previewInvite()
+            .then(() => autoStartInviteLogin())
+            .catch((error) => { state.error = error.message; })
+            .finally(render);
         } else {
           render();
         }
