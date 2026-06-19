@@ -30,6 +30,6 @@
     "prepack": "pnpm run build",
     "postinstall": "node scripts/postinstall.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "pnpm run typecheck"
+    "test": "pnpm run typecheck && pnpm -w exec vitest run apps/thane-cli/test"
   }
 }
