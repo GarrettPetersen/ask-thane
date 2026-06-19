@@ -26,6 +26,7 @@
       body {
         margin: 0;
         min-height: 100vh;
+        overflow: hidden;
         background:
           linear-gradient(rgba(122, 255, 159, 0.025) 1px, transparent 1px),
           #070a08;
@@ -62,15 +63,19 @@
       .app {
         display: grid;
         grid-template-columns: 280px minmax(0, 1fr) 310px;
-        min-height: 100vh;
+        height: 100vh;
+        height: 100dvh;
+        overflow: hidden;
       }
 
       .rail, .side, .main {
-        min-height: 100vh;
+        min-height: 0;
+        height: 100%;
       }
       .rail, .side {
         background: rgba(16, 22, 18, 0.92);
         border-right: 1px solid var(--line);
+        overflow: auto;
       }
       .side { border-right: 0; border-left: 1px solid var(--line); }
 
@@ -131,6 +136,7 @@
         display: grid;
         grid-template-rows: auto 1fr auto;
         min-width: 0;
+        min-height: 0;
       }
       .topbar {
         display: flex;
@@ -144,6 +150,7 @@
       .channel-name { font-size: 18px; color: var(--green); }
       .messages {
         overflow: auto;
+        min-height: 0;
         padding: 18px;
         display: flex;
         flex-direction: column;
@@ -269,8 +276,10 @@
         .side { display: none; }
       }
       @media (max-width: 720px) {
-        .app { grid-template-columns: 1fr; }
+        body { overflow: auto; }
+        .app { grid-template-columns: 1fr; height: auto; min-height: 100vh; min-height: 100dvh; overflow: visible; }
         .rail { min-height: auto; border-right: 0; }
+        .rail, .side, .main { height: auto; }
         .main { min-height: 72vh; }
         .brand { padding: 14px; }
       }
