@@ -50,6 +50,12 @@ export const cliCommands: CliCommand[] = [
   },
   {
     category: "Accounts",
+    command: "thane profile name <display-name> [--json]",
+    description: "Change your display name across Thane workspaces.",
+    examples: ["thane profile name \"Garrett Petersen\"", "thane profile name GP --json"]
+  },
+  {
+    category: "Accounts",
     command: "thane logout",
     description: "Sign out locally.",
     examples: ["thane logout"]

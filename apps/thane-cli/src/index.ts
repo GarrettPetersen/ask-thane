@@ -354,6 +354,7 @@ Accounts:
   thane login <email>
   thane verify <email> <code>
   thane whoami [--json]
+  thane profile name <display-name> [--json]
   thane logout
 
 Security:
@@ -792,6 +793,26 @@ async function main(): Promise<void> {
     wantsJson(args)
       ? printJson({ account, user, workspace: store.activeWorkspace, member })
       : process.stdout.write(`${account?.email ?? "not signed in"} as @${user.handle} (${member?.role ?? "member"}) in ${store.activeWorkspace.slug}\n`);
+    return;
+  }
+
+  if (command === "profile" && second === "name") {
+    const displayName = args.positionals.slice(2).join(" ").trim();
+    if (!displayName) {
+      throw new Error("Usage: thane profile name <display-name>");
+    }
+    if (hasHostedChat(store)) {
+      const token = requireHostedAuthToken(store);
+      const response = await postThaneApiWithAuth<{ account: ThaneAccount; displayName: string }>("/v1/thane-cli/profile", token, {
+        displayName
+      });
+      await store.setDisplayName(response.displayName);
+      await syncHostedStore(store);
+      wantsJson(args) ? printJson({ account: response.account }) : process.stdout.write(`display name: ${response.displayName}\n`);
+      return;
+    }
+    const updated = await store.setDisplayName(displayName);
+    wantsJson(args) ? printJson(updated) : process.stdout.write(`display name: ${updated.user.displayName}\n`);
     return;
   }
 

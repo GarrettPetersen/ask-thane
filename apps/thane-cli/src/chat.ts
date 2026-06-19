@@ -438,6 +438,22 @@ async function createWorkspaceInviteLink(store: ThaneStore, role: "admin" | "mem
   return `web: ${webUrl}\ncli: ${response.invite.url} (${response.invite.role}, expires ${response.invite.expiresAt})`;
 }
 
+async function updateDisplayName(store: ThaneStore, displayName: string): Promise<string> {
+  const cleaned = displayName.trim();
+  if (!cleaned) {
+    return "Usage: /name <display-name>";
+  }
+  if (hasHostedChat(store)) {
+    const token = requireHostedAuthToken(store);
+    const response = await postThaneApiWithAuth<{ displayName: string }>("/v1/thane-cli/profile", token, { displayName: cleaned });
+    await store.setDisplayName(response.displayName);
+    await syncHostedStore(store);
+    return `Display name: ${response.displayName}`;
+  }
+  const updated = await store.setDisplayName(cleaned);
+  return `Display name: ${updated.user.displayName}`;
+}
+
 function renderScreen(inputText: string, state: {
   store: ThaneStore;
   activeChannelId: string;
@@ -779,6 +795,15 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     if (trimmed === "/workspace-art reset") {
       await store.clearWorkspaceAsciiArt();
       status = "Reset workspace art to generated default.";
+      return;
+    }
+    if (trimmed.startsWith("/name ")) {
+      status = await updateDisplayName(store, trimmed.slice("/name ".length));
+      showHelp = false;
+      showMenu = false;
+      sidePanelLines = undefined;
+      workspacePickerOpen = false;
+      showReactionPicker = false;
       return;
     }
     if (trimmed.startsWith("/invite ")) {

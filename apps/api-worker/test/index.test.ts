@@ -251,7 +251,59 @@ describe("@ask-thane/api-worker", () => {
     expect(prepare).toHaveBeenCalledWith(expect.stringContaining("UPDATE thane_cli_auth_codes"));
   });
 
+  it("updates the hosted Thane CLI profile display name", async () => {
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const run = vi.fn(async () => ({ meta: { changes: 2 } }));
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members")) {
+        return { display_name: "G.P." };
+      }
+      return null;
+    });
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        return sql.includes("SELECT display_name") ? { first: first.bind({ sql }) } : { run };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/profile", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("garrett@example.com")}` },
+        body: JSON.stringify({ displayName: " G.P. " })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      displayName: "G.P.",
+      account: {
+        email: "garrett@example.com",
+        displayName: "G.P."
+      }
+    });
+    const update = calls.find((call) => call.sql.includes("UPDATE thane_cli_workspace_members SET display_name"));
+    expect(update?.args[0]).toBe("G.P.");
+    expect(update?.args[2]).toBe("garrett@example.com");
+  });
+
   it("includes reactions in Thane CLI sync responses", async () => {
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("SELECT display_name")) {
+        return { display_name: "Owner" };
+      }
+      return null;
+    });
     const all = vi.fn(async function (this: { sql?: string }) {
       const sql = this.sql ?? "";
       if (sql.includes("FROM thane_cli_workspace_members m")) {
@@ -338,7 +390,7 @@ describe("@ask-thane/api-worker", () => {
       return { results: [] };
     });
     const prepare = vi.fn((sql: string) => ({
-      bind: vi.fn(() => ({ all: all.bind({ sql }) }))
+      bind: vi.fn(() => (sql.includes("SELECT display_name") ? { first: first.bind({ sql }) } : { all: all.bind({ sql }) }))
     }));
     const authEnv = {
       DB: { prepare },
@@ -355,6 +407,7 @@ describe("@ask-thane/api-worker", () => {
 
     expect(res.status).toBe(200);
     const body = await res.json();
+    expect(body.account.displayName).toBe("Owner");
     expect(body.messages[0].reactions).toEqual([
       {
         emoji: "👍",

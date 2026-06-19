@@ -898,6 +898,27 @@
         }
       }
 
+      async function updateDisplayName(event) {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const displayName = String(form.get("displayName") || "").trim();
+        if (!displayName) return;
+        try {
+          const body = await api("/v1/thane-cli/profile", {
+            method: "POST",
+            body: JSON.stringify({ displayName })
+          });
+          saveSession({ ...state.session, ...(body.account || {}), displayName: body.displayName || displayName });
+          state.status = `Display name: ${body.displayName || displayName}`;
+          state.error = "";
+          await sync();
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
       function parseExpiresInput(value) {
         const match = String(value || "").trim().toLowerCase().match(/^(\d+)\s*([hd])?$/);
         if (!match) return 24 * 7;
@@ -1022,11 +1043,19 @@
                 <div class="section-head"><span>Workspace</span></div>
                 <div class="kv">
                   <div class="cmdline">${esc(workspace?.name || "No workspace")}</div>
+                  <div>${esc(state.session.displayName || state.session.email)}</div>
                   <div>role: ${esc(role || "member")}</div>
                   <div>${snap.users.length} member${snap.users.length === 1 ? "" : "s"}</div>
                   <div>${snap.channels.length} channel${snap.channels.length === 1 ? "" : "s"}</div>
                   <div class="${state.error ? "error" : state.status ? "ok" : "muted"}">${esc(state.error || state.status || "Ready")}</div>
                 </div>
+              </section>
+              <section class="section">
+                <div class="section-head"><span>Profile</span></div>
+                <form class="list" onsubmit="updateDisplayName(event)">
+                  <input name="displayName" value="${esc(state.session.displayName || "")}" placeholder="Display name" />
+                  <button>Update name</button>
+                </form>
               </section>
               <section class="section">
                 <div class="section-head"><span>New workspace</span></div>
@@ -1099,6 +1128,7 @@
       window.createChannel = createChannel;
       window.invite = invite;
       window.createInviteLink = createInviteLink;
+      window.updateDisplayName = updateDisplayName;
       window.copyText = copyText;
       window.sync = sync;
       window.render = render;

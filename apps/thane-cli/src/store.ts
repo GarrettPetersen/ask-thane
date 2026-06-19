@@ -525,6 +525,29 @@ export class ThaneStore {
     );
   }
 
+  async setDisplayName(displayName: string): Promise<{ account?: ThaneAccount; user: ThaneUser }> {
+    const cleaned = displayName.trim();
+    if (!cleaned) {
+      throw new Error("Display name must contain at least one character.");
+    }
+    const account = this.currentAccount;
+    if (account) {
+      account.displayName = cleaned.slice(0, 120);
+      for (const user of this.data.users) {
+        if (user.accountId === account.id) {
+          user.displayName = account.displayName;
+        }
+      }
+    } else {
+      this.currentUser.displayName = cleaned.slice(0, 120);
+    }
+    await saveData(this.data);
+    return {
+      ...(account ? { account } : {}),
+      user: this.currentUser
+    };
+  }
+
   requireWorkspaceAdmin(): void {
     const role = this.currentMember()?.role;
     if (role !== "owner" && role !== "admin") {

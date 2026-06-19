@@ -19,6 +19,10 @@ interface AuthStartPayload {
   displayName?: unknown;
 }
 
+interface ProfileUpdatePayload {
+  displayName?: unknown;
+}
+
 interface RateLimitResult {
   ok: boolean;
   retryAfterSeconds?: number;
@@ -422,7 +426,8 @@ async function accountIdForEmail(email: string): Promise<string> {
 }
 
 async function buildAccount(env: Env, input: { email: string; displayName?: string | null }): Promise<Record<string, string>> {
-  const displayName = input.displayName?.trim() || input.email.split("@")[0] || input.email;
+  const savedDisplayName = input.displayName?.trim() || (await profileDisplayNameForEmail(env, input.email));
+  const displayName = savedDisplayName || input.email.split("@")[0] || input.email;
   return {
     id: await accountIdForEmail(input.email),
     email: input.email,
@@ -434,6 +439,27 @@ async function buildAccount(env: Env, input: { email: string; displayName?: stri
       exp: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60
     })
   };
+}
+
+async function profileDisplayNameForEmail(env: Env, email: string): Promise<string | null> {
+  try {
+    const row = await env.DB
+      .prepare(
+        `SELECT display_name
+         FROM thane_cli_workspace_members
+         WHERE email = ? AND display_name IS NOT NULL AND display_name != ''
+         ORDER BY updated_at DESC
+         LIMIT 1`
+      )
+      .bind(email)
+      .first<{ display_name?: string | null }>();
+    return row?.display_name?.trim() || null;
+  } catch (error) {
+    if (String(error).toLowerCase().includes("no such table")) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 async function encryptionKey(env: Env): Promise<CryptoKey> {
@@ -1214,6 +1240,27 @@ async function handleThaneCliMfaDisable(request: Request, env: Env): Promise<Res
   return Response.json({ ok: true, enabled: false });
 }
 
+async function handleThaneCliProfileUpdate(request: Request, env: Env): Promise<Response> {
+  const email = await requireAuthEmail(request, env);
+  if (!email) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  const payload = await parseJsonObject<ProfileUpdatePayload>(request);
+  const displayName = normalizeDisplayName(payload?.displayName);
+  if (!displayName) {
+    return Response.json({ ok: false, error: "display_name_required" }, { status: 400 });
+  }
+  await env.DB
+    .prepare("UPDATE thane_cli_workspace_members SET display_name = ?, updated_at = ? WHERE email = ?")
+    .bind(displayName, nowIso(), email)
+    .run();
+  return Response.json({
+    ok: true,
+    account: await buildAccount(env, { email, displayName }),
+    displayName
+  });
+}
+
 async function handleThaneCliWorkspaceEnsure(request: Request, env: Env): Promise<Response> {
   const email = await requireAuthEmail(request, env);
   if (!email) {
@@ -1750,6 +1797,9 @@ async function handleThaneCliRequest(request: Request, env: Env): Promise<Respon
   }
   if (url.pathname === "/v1/thane-cli/mfa/disable" && request.method === "POST") {
     return handleThaneCliMfaDisable(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/profile" && request.method === "POST") {
+    return handleThaneCliProfileUpdate(request, env);
   }
   if (url.pathname === "/v1/thane-cli/workspaces" && request.method === "POST") {
     return handleThaneCliWorkspaceEnsure(request, env);

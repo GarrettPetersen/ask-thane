@@ -14,6 +14,12 @@ Check for updates:
 thane update
 ```
 
+Change your display name:
+
+```bash
+thane profile name "Garrett Petersen"
+```
+
 Customize the workspace art shown above the channel list:
 
 ```bash
