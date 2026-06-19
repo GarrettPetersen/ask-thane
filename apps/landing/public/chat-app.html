@@ -155,6 +155,11 @@
         box-shadow: 0 10px 30px var(--shadow);
         padding: 12px;
       }
+      .message.reply {
+        margin-left: 24px;
+        border-left-color: var(--amber);
+        background: rgba(21, 29, 24, 0.58);
+      }
       .message-meta {
         display: flex;
         justify-content: space-between;
@@ -169,6 +174,36 @@
         overflow-wrap: anywhere;
         line-height: 1.45;
       }
+      .message-actions, .reaction-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 10px;
+        align-items: center;
+      }
+      .message-actions button, .reaction-row button {
+        min-height: 28px;
+        padding: 0 8px;
+        font-size: 12px;
+      }
+      .reaction {
+        border-color: rgba(125, 211, 252, 0.42);
+        color: var(--cyan);
+      }
+      .custom-reaction {
+        display: grid;
+        grid-template-columns: minmax(74px, 96px) auto;
+        gap: 6px;
+      }
+      .custom-reaction input {
+        min-height: 28px;
+        padding: 4px 7px;
+      }
+      .thread-count {
+        color: var(--amber);
+        font-size: 12px;
+        margin-top: 8px;
+      }
       .composer {
         border-top: 1px solid var(--line);
         padding: 12px;
@@ -176,6 +211,22 @@
         display: grid;
         grid-template-columns: 1fr auto;
         gap: 10px;
+      }
+      .composer-wrap {
+        border-top: 1px solid var(--line);
+        background: rgba(7, 10, 8, 0.92);
+      }
+      .composer-wrap .composer {
+        border-top: 0;
+      }
+      .reply-target {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 12px 0;
+        color: var(--amber);
+        font-size: 12px;
       }
 
       .login {
@@ -239,6 +290,7 @@
         snapshot: null,
         activeWorkspaceId: "",
         activeChannelId: "",
+        replyToId: "",
         status: "",
         error: "",
         busy: false
@@ -268,6 +320,36 @@
       function time(value) {
         const date = new Date(value);
         return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      }
+      const quickReactions = ["👍", "👀", "✅", "🔥", "❤️", "😂"];
+
+      function currentSnapshot() {
+        return state.snapshot || { workspaces: [], channels: [], messages: [], users: [] };
+      }
+
+      function currentChannel() {
+        const snap = currentSnapshot();
+        return snap.channels.find((item) => item.id === state.activeChannelId) || snap.channels[0];
+      }
+
+      function currentMessages() {
+        const channel = currentChannel();
+        return (currentSnapshot().messages || []).filter((message) => message.channelId === channel?.id);
+      }
+
+      function messageById(id) {
+        return (currentSnapshot().messages || []).find((message) => message.id === id);
+      }
+
+      function reactionGroups(message) {
+        const groups = new Map();
+        for (const reaction of message.reactions || []) {
+          const group = groups.get(reaction.emoji) || { emoji: reaction.emoji, count: 0, by: [] };
+          group.count += 1;
+          if (reaction.by) group.by.push(reaction.by);
+          groups.set(reaction.emoji, group);
+        }
+        return [...groups.values()];
       }
 
       async function startLogin(event) {
@@ -348,6 +430,7 @@
       async function chooseWorkspace(id) {
         state.activeWorkspaceId = id;
         state.activeChannelId = "";
+        state.replyToId = "";
         await sync();
         render();
       }
@@ -358,12 +441,46 @@
         const text = String(form.get("text") || "").trim();
         if (!text || !state.activeChannelId) return;
         event.currentTarget.reset();
+        const replyTarget = messageById(state.replyToId);
+        const threadRootId = replyTarget ? (replyTarget.threadRootId || replyTarget.id) : "";
         await api("/v1/thane-cli/messages", {
           method: "POST",
-          body: JSON.stringify({ workspaceId: state.activeWorkspaceId, channelId: state.activeChannelId, text, source: "chat" })
+          body: JSON.stringify({
+            workspaceId: state.activeWorkspaceId,
+            channelId: state.activeChannelId,
+            text,
+            source: "chat",
+            ...(threadRootId ? { threadRootId } : {})
+          })
+        });
+        state.replyToId = "";
+        await sync();
+        render();
+      }
+
+      function replyTo(id) {
+        state.replyToId = id;
+        render();
+        requestAnimationFrame(() => document.querySelector(".composer textarea")?.focus());
+      }
+
+      async function reactTo(messageId, emoji) {
+        if (!messageId || !emoji) return;
+        await api("/v1/thane-cli/reactions", {
+          method: "POST",
+          body: JSON.stringify({ workspaceId: state.activeWorkspaceId, messageId, emoji })
         });
         await sync();
         render();
+      }
+
+      async function customReaction(event, messageId) {
+        event.preventDefault();
+        const input = event.currentTarget.querySelector("input");
+        const emoji = String(input?.value || "").trim();
+        if (!emoji) return;
+        event.currentTarget.reset();
+        await reactTo(messageId, emoji);
       }
 
       async function createChannel(event) {
@@ -378,6 +495,30 @@
         });
         await sync();
         state.activeChannelId = state.snapshot.channels.find((channel) => channel.name === name.replace(/^#/, "").toLowerCase())?.id || state.activeChannelId;
+        render();
+      }
+
+      async function createWorkspace(event) {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const rawName = String(form.get("name") || "").trim();
+        const rawSlug = String(form.get("slug") || "").trim();
+        if (!rawName && !rawSlug) return;
+        event.currentTarget.reset();
+        const workspaceSlug = (rawSlug || rawName)
+          .toLowerCase()
+          .replace(/[^a-z0-9._-]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 60);
+        const workspaceName = rawName || workspaceSlug;
+        const body = await api("/v1/thane-cli/workspaces", {
+          method: "POST",
+          body: JSON.stringify({ workspaceSlug, workspaceName })
+        });
+        state.activeWorkspaceId = body.workspace?.id || state.activeWorkspaceId;
+        state.activeChannelId = "";
+        state.replyToId = "";
+        await sync();
         render();
       }
 
@@ -426,12 +567,47 @@
           </main>`;
       }
 
+      function renderMessage(message, users, repliesByRoot, isReply = false) {
+        const user = users.get(message.authorId);
+        const replies = repliesByRoot.get(message.id) || [];
+        const groups = reactionGroups(message);
+        return `<article class="message ${isReply ? "reply" : ""}">
+          <div class="message-meta">
+            <span class="message-author">@${esc(user?.handle || "unknown")}</span>
+            <span>${esc(time(message.createdAt))}</span>
+          </div>
+          <div class="message-text">${esc(message.text)}</div>
+          ${replies.length && !isReply ? `<div class="thread-count">${replies.length} repl${replies.length === 1 ? "y" : "ies"}</div>` : ""}
+          <div class="reaction-row">
+            ${groups.map((group) => `<button class="reaction" title="${esc(group.by.join(", "))}" onclick="reactTo(${jsString(message.id)}, ${jsString(group.emoji)})">${esc(group.emoji)} ${group.count}</button>`).join("")}
+          </div>
+          <div class="message-actions">
+            <button onclick="replyTo(${jsString(message.id)})">reply</button>
+            ${quickReactions.map((emoji) => `<button onclick="reactTo(${jsString(message.id)}, ${jsString(emoji)})">${emoji}</button>`).join("")}
+            <form class="custom-reaction" onsubmit="customReaction(event, ${jsString(message.id)})">
+              <input name="emoji" aria-label="Custom reaction" placeholder="+ emoji" />
+              <button>react</button>
+            </form>
+          </div>
+          ${!isReply && replies.length ? replies.map((reply) => renderMessage(reply, users, repliesByRoot, true)).join("") : ""}
+        </article>`;
+      }
+
       function renderApp() {
         const snap = state.snapshot || { workspaces: [], channels: [], messages: [], users: [] };
         const workspace = snap.workspaces.find((item) => item.id === state.activeWorkspaceId) || snap.workspaces[0];
         const channel = snap.channels.find((item) => item.id === state.activeChannelId) || snap.channels[0];
         const users = new Map((snap.users || []).map((user) => [user.id, user]));
         const messages = (snap.messages || []).filter((message) => message.channelId === channel?.id);
+        const repliesByRoot = new Map();
+        for (const message of messages) {
+          if (!message.threadRootId) continue;
+          const replies = repliesByRoot.get(message.threadRootId) || [];
+          replies.push(message);
+          repliesByRoot.set(message.threadRootId, replies);
+        }
+        const rootMessages = messages.filter((message) => !message.threadRootId);
+        const replyTarget = messageById(state.replyToId);
         root.innerHTML = `
           <div class="app">
             <aside class="rail">
@@ -446,7 +622,7 @@
               </section>
               <section class="section">
                 <div class="section-head"><span>Channels</span></div>
-                <div class="list">${snap.channels.map((item) => `<button class="item ${item.id === state.activeChannelId ? "active" : ""}" onclick="state.activeChannelId=${jsString(item.id)}; render()">#${esc(item.name)}</button>`).join("") || `<div class="empty">No channels yet</div>`}</div>
+                <div class="list">${snap.channels.map((item) => `<button class="item ${item.id === state.activeChannelId ? "active" : ""}" onclick="state.activeChannelId=${jsString(item.id)}; state.replyToId=''; render()">#${esc(item.name)}</button>`).join("") || `<div class="empty">No channels yet</div>`}</div>
               </section>
             </aside>
             <main class="main">
@@ -458,18 +634,15 @@
                 <button onclick="saveSession(null); location.reload()">sign out</button>
               </header>
               <section class="messages">
-                ${messages.length ? messages.map((message) => {
-                  const user = users.get(message.authorId);
-                  return `<article class="message">
-                    <div class="message-meta"><span class="message-author">@${esc(user?.handle || "unknown")}</span><span>${esc(time(message.createdAt))}</span></div>
-                    <div class="message-text">${esc(message.text)}</div>
-                  </article>`;
-                }).join("") : `<div class="empty">No messages in this channel yet.</div>`}
+                ${rootMessages.length ? rootMessages.map((message) => renderMessage(message, users, repliesByRoot)).join("") : `<div class="empty">No messages in this channel yet.</div>`}
               </section>
-              <form class="composer" onsubmit="sendMessage(event)">
-                <textarea name="text" placeholder="Type a message for #${esc(channel?.name || "general")}"></textarea>
-                <button>send</button>
-              </form>
+              <div class="composer-wrap">
+                ${replyTarget ? `<div class="reply-target"><span>replying to @${esc(users.get(replyTarget.authorId)?.handle || "unknown")}: ${esc(replyTarget.text.slice(0, 80))}</span><button onclick="state.replyToId=''; render()">cancel</button></div>` : ""}
+                <form class="composer" onsubmit="sendMessage(event)">
+                  <textarea name="text" placeholder="${replyTarget ? "Type a reply" : `Type a message for #${esc(channel?.name || "general")}`}"></textarea>
+                  <button>${replyTarget ? "reply" : "send"}</button>
+                </form>
+              </div>
             </main>
             <aside class="side">
               <section class="section">
@@ -480,6 +653,14 @@
                   <div>${snap.channels.length} channel${snap.channels.length === 1 ? "" : "s"}</div>
                   <div class="${state.status ? "ok" : "muted"}">${esc(state.status || "Ready")}</div>
                 </div>
+              </section>
+              <section class="section">
+                <div class="section-head"><span>New workspace</span></div>
+                <form class="list" onsubmit="createWorkspace(event)">
+                  <input name="name" placeholder="Thane Internal" />
+                  <input name="slug" placeholder="thane-internal" />
+                  <button>Create workspace</button>
+                </form>
               </section>
               <section class="section">
                 <div class="section-head"><span>New channel</span></div>
@@ -513,6 +694,10 @@
       window.verifyMfa = verifyMfa;
       window.chooseWorkspace = chooseWorkspace;
       window.sendMessage = sendMessage;
+      window.replyTo = replyTo;
+      window.reactTo = reactTo;
+      window.customReaction = customReaction;
+      window.createWorkspace = createWorkspace;
       window.createChannel = createChannel;
       window.invite = invite;
       window.sync = sync;

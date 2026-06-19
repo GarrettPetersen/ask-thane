@@ -1329,6 +1329,30 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
       thread_root_id: string | null;
       created_at: string;
     }>();
+  const messageResults = messageRows.results ?? [];
+  const messageIds = messageResults.map((message) => message.id);
+  const reactionsByMessage = new Map<string, Array<{ emoji: string; by: string; createdAt: string }>>();
+  if (messageIds.length > 0) {
+    const reactionRows = await env.DB
+      .prepare(
+        `SELECT reaction.message_id, reaction.emoji, reaction.created_at, member.handle
+         FROM thane_cli_message_reactions reaction
+         JOIN thane_cli_workspace_members member ON member.id = reaction.member_id
+         WHERE reaction.message_id IN (${messageIds.map(() => "?").join(", ")})
+         ORDER BY reaction.created_at ASC`
+      )
+      .bind(...messageIds)
+      .all<{ message_id: string; emoji: string; created_at: string; handle: string }>();
+    for (const reaction of reactionRows.results ?? []) {
+      const reactions = reactionsByMessage.get(reaction.message_id) ?? [];
+      reactions.push({
+        emoji: reaction.emoji,
+        by: reaction.handle,
+        createdAt: reaction.created_at
+      });
+      reactionsByMessage.set(reaction.message_id, reactions);
+    }
+  }
   const messages = (messageRows.results ?? []).reverse().map((message) => ({
     id: message.id,
     workspaceId: message.workspace_id,
@@ -1338,7 +1362,7 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
     createdAt: message.created_at,
     source: message.source,
     ...(message.thread_root_id ? { threadRootId: message.thread_root_id } : {}),
-    reactions: [],
+    reactions: reactionsByMessage.get(message.id) ?? [],
     mentions: [...message.text.matchAll(/@([a-zA-Z0-9._-]+)/g)].map((match) => String(match[1] ?? "").toLowerCase()).filter(Boolean)
   }));
 
