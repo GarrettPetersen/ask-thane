@@ -236,33 +236,6 @@
         overflow-wrap: anywhere;
         line-height: 1.45;
       }
-      .message-actions, .reaction-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        margin-top: 4px;
-        margin-left: 22px;
-        align-items: center;
-      }
-      .message-actions button, .reaction-row button {
-        min-height: 28px;
-        padding: 0 8px;
-        font-size: 12px;
-        background: transparent;
-      }
-      .reaction {
-        border-color: rgba(125, 211, 252, 0.42);
-        color: var(--cyan);
-      }
-      .custom-reaction {
-        display: grid;
-        grid-template-columns: minmax(74px, 96px) auto;
-        gap: 6px;
-      }
-      .custom-reaction input {
-        min-height: 28px;
-        padding: 4px 7px;
-      }
       .thread-count {
         color: var(--amber);
         font-size: 12px;
@@ -437,8 +410,6 @@
         const date = new Date(value);
         return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       }
-      const quickReactions = ["👍", "👀", "✅", "🔥", "❤️", "😂"];
-
       function currentSnapshot() {
         return state.snapshot || { workspaces: [], channels: [], messages: [], users: [] };
       }
@@ -742,24 +713,12 @@
       function renderMessage(message, users, repliesByRoot, isReply = false) {
         const user = users.get(message.authorId);
         const replies = repliesByRoot.get(message.id) || [];
-        const groups = reactionGroups(message);
         const stamp = time(message.createdAt);
         const branch = isReply ? `<span class="msg-branch">└─</span> ` : "";
         const sourceMarker = message.source === "terminal" ? " 🤖" : "";
         const reactionText = (message.reactions || []).map((reaction) => reaction.emoji).join(" ");
         return `<article class="message ${isReply ? "reply" : ""}">
           <span class="message-meta">${branch}<span class="msg-marker">  ${esc(stamp)}</span> <span class="message-author">@${esc(user?.handle || "unknown")}${sourceMarker}</span>: </span><span class="message-text">${esc(message.text)}</span>${replies.length && !isReply ? `<span class="thread-count"> (${replies.length} repl${replies.length === 1 ? "y" : "ies"})</span>` : ""}${reactionText ? `<span class="thread-count"> ${esc(reactionText)}</span>` : ""}
-          <div class="reaction-row">
-            ${groups.map((group) => `<button class="reaction" title="${esc(group.by.join(", "))}" onclick="reactTo(${jsString(message.id)}, ${jsString(group.emoji)})">${esc(group.emoji)} ${group.count}</button>`).join("")}
-          </div>
-          <div class="message-actions">
-            <button onclick="replyTo(${jsString(message.id)})">reply</button>
-            ${quickReactions.map((emoji) => `<button onclick="reactTo(${jsString(message.id)}, ${jsString(emoji)})">${emoji}</button>`).join("")}
-            <form class="custom-reaction" onsubmit="customReaction(event, ${jsString(message.id)})">
-              <input name="emoji" aria-label="Custom reaction" placeholder="+ emoji" />
-              <button>react</button>
-            </form>
-          </div>
           ${!isReply && replies.length ? replies.map((reply) => renderMessage(reply, users, repliesByRoot, true)).join("") : ""}
         </article>`;
       }
