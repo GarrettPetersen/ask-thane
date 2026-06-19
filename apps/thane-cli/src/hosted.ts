@@ -53,7 +53,7 @@ function authToken(store: ThaneStore): string | undefined {
 }
 
 function realtimeEnabled(): boolean {
-  return process.env.THANE_ENABLE_REALTIME === "1";
+  return process.env.THANE_ENABLE_REALTIME !== "0";
 }
 
 function hostedEventsUrl(store: ThaneStore, workspaceId: string): string {
@@ -63,7 +63,7 @@ function hostedEventsUrl(store: ThaneStore, workspaceId: string): string {
     throw new Error("Run `thane init` with hosted auth before using hosted chat.");
   }
   const params = new URLSearchParams({ workspaceId, authToken: token });
-  return `${baseUrl.replace(/^http/, "ws")}/v1/thane-cli/events?${params}`;
+  return `${baseUrl}/v1/thane-cli/events?${params}`;
 }
 
 export function hasHostedChat(store: ThaneStore): boolean {
@@ -128,7 +128,7 @@ export function watchHostedWorkspaceEvents(
     input.onStatus?.("unavailable");
     return { close: () => {} };
   }
-  if (!hasHostedChat(store) || typeof WebSocket === "undefined") {
+  if (!hasHostedChat(store) || typeof fetch === "undefined" || typeof AbortController === "undefined") {
     input.onStatus?.("unavailable");
     return { close: () => {} };
   }
@@ -137,22 +137,88 @@ export function watchHostedWorkspaceEvents(
     input.onStatus?.("unavailable");
     return { close: () => {} };
   }
-  const socket = new WebSocket(hostedEventsUrl(store, workspaceId));
-  input.onStatus?.("connecting");
-  socket.addEventListener("open", () => input.onStatus?.("live"));
-  socket.addEventListener("message", (event) => {
-    if (typeof event.data !== "string") {
-      return;
+  const controller = new AbortController();
+  let closed = false;
+  let backoffMs = 1000;
+
+  const wait = (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+      const timeout = setTimeout(resolve, ms);
+      controller.signal.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timeout);
+          resolve();
+        },
+        { once: true }
+      );
+    });
+
+  const readEventStream = async (): Promise<void> => {
+    const response = await fetch(hostedEventsUrl(store, workspaceId), {
+      headers: { accept: "text/event-stream" },
+      signal: controller.signal
+    });
+    if (!response.ok || !response.body) {
+      throw new Error(`Thane events returned ${response.status}`);
     }
-    try {
-      input.onEvent(JSON.parse(event.data) as HostedChatEvent);
-    } catch (_error) {
-      // Ignore malformed push events; fallback polling still keeps the cache fresh.
+    input.onStatus?.("live");
+    backoffMs = 1000;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (!closed) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        break;
+      }
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let boundary = buffer.search(/\r?\n\r?\n/);
+      while (boundary >= 0) {
+        const separator = buffer.slice(boundary).match(/^\r?\n\r?\n/)?.[0] ?? "\n\n";
+        const rawEvent = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + separator.length);
+        const data = rawEvent
+          .split(/\r?\n/g)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice("data:".length).trimStart())
+          .join("\n");
+        if (data) {
+          try {
+            input.onEvent(JSON.parse(data) as HostedChatEvent);
+          } catch (_error) {
+            // Ignore malformed push events; fallback polling still keeps the cache fresh.
+          }
+        }
+        boundary = buffer.search(/\r?\n\r?\n/);
+      }
     }
-  });
-  socket.addEventListener("close", () => input.onStatus?.("closed"));
-  socket.addEventListener("error", () => input.onStatus?.("closed"));
-  return { close: () => socket.close() };
+  };
+
+  void (async () => {
+    while (!closed) {
+      input.onStatus?.("connecting");
+      try {
+        await readEventStream();
+      } catch (_error) {
+        if (closed) {
+          break;
+        }
+      }
+      if (!closed) {
+        input.onStatus?.("closed");
+        await wait(backoffMs);
+        backoffMs = Math.min(backoffMs * 2, 30_000);
+      }
+    }
+  })();
+
+  return {
+    close: () => {
+      closed = true;
+      controller.abort();
+    }
+  };
 }
 
 export async function createHostedWorkspace(

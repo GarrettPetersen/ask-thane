@@ -537,7 +537,7 @@
       const API = "https://api.askthane.com";
       const freeLimits = { members: 100, privateChannels: 10 };
       const storageKey = "thane.web.session";
-      const realtimeEnabled = localStorage.getItem("thane.web.realtime") === "true";
+      const realtimeEnabled = localStorage.getItem("thane.web.realtime") !== "false";
       const root = document.querySelector("#root");
       const inviteMatch = location.pathname.match(/^\/invite\/([^/?#]+)/);
       const inviteEmail = new URLSearchParams(location.search).get("email") || "";
@@ -906,12 +906,11 @@
       }
 
       function realtimeUrl(workspaceId) {
-        const base = API.replace(/^http/, "ws");
         const params = new URLSearchParams({
           workspaceId,
           authToken: state.session.authToken
         });
-        return `${base}/v1/thane-cli/events?${params}`;
+        return `${API}/v1/thane-cli/events?${params}`;
       }
 
       function connectRealtime() {
@@ -919,11 +918,11 @@
           state.realtimeStatus = "polling";
           return;
         }
-        if (!state.session?.authToken || !state.activeWorkspaceId || !("WebSocket" in window)) {
+        if (!state.session?.authToken || !state.activeWorkspaceId || !("EventSource" in window)) {
           state.realtimeStatus = "polling";
           return;
         }
-        if (state.realtimeSocket && state.realtimeWorkspaceId === state.activeWorkspaceId && state.realtimeSocket.readyState < 2) {
+        if (state.realtimeSocket && state.realtimeWorkspaceId === state.activeWorkspaceId && state.realtimeSocket.readyState !== EventSource.CLOSED) {
           return;
         }
         if (state.realtimeSocket) {
@@ -934,16 +933,16 @@
           state.realtimeReconnectTimer = null;
         }
         const workspaceId = state.activeWorkspaceId;
-        const socket = new WebSocket(realtimeUrl(workspaceId));
-        state.realtimeSocket = socket;
+        const source = new EventSource(realtimeUrl(workspaceId));
+        state.realtimeSocket = source;
         state.realtimeWorkspaceId = workspaceId;
         state.realtimeStatus = "connecting";
-        socket.addEventListener("open", () => {
+        source.addEventListener("open", () => {
           state.realtimeBackoffMs = 1000;
           state.realtimeStatus = "live";
           if (!state.settingsMenuOpen) render();
         });
-        socket.addEventListener("message", (event) => {
+        source.addEventListener("message", (event) => {
           let payload = null;
           try {
             payload = JSON.parse(event.data);
@@ -955,16 +954,15 @@
             void syncFromRealtime();
           }
         });
-        socket.addEventListener("close", () => {
-          if (state.realtimeSocket !== socket) return;
+        source.addEventListener("error", () => {
+          if (state.realtimeSocket !== source) return;
           state.realtimeStatus = "polling";
-          const delay = state.realtimeBackoffMs;
-          state.realtimeBackoffMs = Math.min(state.realtimeBackoffMs * 2, 30000);
-          state.realtimeReconnectTimer = setTimeout(() => connectRealtime(), delay);
+          if (source.readyState === EventSource.CLOSED) {
+            const delay = state.realtimeBackoffMs;
+            state.realtimeBackoffMs = Math.min(state.realtimeBackoffMs * 2, 30000);
+            state.realtimeReconnectTimer = setTimeout(() => connectRealtime(), delay);
+          }
           if (!state.settingsMenuOpen) render();
-        });
-        socket.addEventListener("error", () => {
-          state.realtimeStatus = "polling";
         });
       }
 

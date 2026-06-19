@@ -150,6 +150,8 @@ interface ThaneChatPushEvent {
 
 export class ThaneChatEvents extends DurableObject {
   private readonly sockets = new Set<WebSocket>();
+  private readonly streams = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  private readonly encoder = new TextEncoder();
 
   constructor(state: DurableObjectState, env: Env) {
     super(state, env);
@@ -159,6 +161,9 @@ export class ThaneChatEvents extends DurableObject {
     const url = new URL(request.url);
     if (url.pathname.endsWith("/broadcast") && request.method === "POST") {
       return this.broadcast(request);
+    }
+    if (url.pathname.endsWith("/stream") && request.method === "GET") {
+      return this.stream();
     }
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return new Response("Expected WebSocket upgrade", { status: 426 });
@@ -188,7 +193,50 @@ export class ThaneChatEvents extends DurableObject {
         this.sockets.delete(socket);
       }
     }
-    return Response.json({ ok: true, clients: this.sockets.size });
+    this.broadcastToStreams(event);
+    return Response.json({ ok: true, clients: this.sockets.size + this.streams.size });
+  }
+
+  private stream(): Response {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+    const stream = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        streamController = controller;
+        this.streams.add(controller);
+        this.sendStreamEvent(controller, {
+          type: "connected",
+          occurredAt: new Date().toISOString()
+        });
+      },
+      cancel: () => {
+        if (streamController) {
+          this.streams.delete(streamController);
+        }
+      }
+    });
+    return new Response(stream, {
+      headers: {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform"
+      }
+    });
+  }
+
+  private broadcastToStreams(event: ThaneChatPushEvent): void {
+    for (const controller of [...this.streams]) {
+      this.sendStreamEvent(controller, event);
+    }
+  }
+
+  private sendStreamEvent(
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    event: ThaneChatPushEvent | { type: "connected"; occurredAt: string }
+  ): void {
+    try {
+      controller.enqueue(this.encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+    } catch (_error) {
+      this.streams.delete(controller);
+    }
   }
 }
 
@@ -2031,9 +2079,6 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
 }
 
 async function handleThaneCliEvents(request: Request, env: Env): Promise<Response> {
-  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-    return Response.json({ ok: false, error: "websocket_upgrade_required" }, { status: 426 });
-  }
   const url = new URL(request.url);
   const authToken = url.searchParams.get("authToken");
   const email = authToken
@@ -2053,6 +2098,9 @@ async function handleThaneCliEvents(request: Request, env: Env): Promise<Respons
   const stub = workspaceEventsObject(env, workspaceId);
   if (!stub) {
     return Response.json({ ok: false, error: "events_unavailable" }, { status: 503 });
+  }
+  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+    return stub.fetch("https://thane-chat-events.local/stream", { method: "GET" });
   }
   try {
     return await stub.fetch(request);

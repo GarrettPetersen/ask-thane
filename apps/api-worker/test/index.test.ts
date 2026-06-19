@@ -298,6 +298,55 @@ describe("@ask-thane/api-worker", () => {
     expect(update?.args[2]).toBe("garrett@example.com");
   });
 
+  it("opens a hosted Thane Chat event stream for workspace members", async () => {
+    const streamResponse = new Response('data: {"type":"connected"}\n\n', {
+      headers: { "content-type": "text/event-stream; charset=utf-8" }
+    });
+    const objectFetch = vi.fn(async () => streamResponse);
+    const eventObject = { fetch: objectFetch };
+    const idFromName = vi.fn((name: string) => name);
+    const get = vi.fn(() => eventObject);
+    const first = vi.fn(async () => ({
+      id: "member_1",
+      account_id: "acct_1",
+      email: "garrett@example.com",
+      display_name: "Garrett",
+      handle: "garrett",
+      role: "owner"
+    }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        expect(sql).toContain("FROM thane_cli_workspace_members");
+        expect(args).toEqual(["wsp_1", "garrett@example.com"]);
+        return { first };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret",
+      THANE_CHAT_EVENTS: { idFromName, get }
+    } as never;
+
+    const token = await signAuthToken("garrett@example.com");
+    const res = await worker.fetch(
+      new Request(`https://api.local/v1/thane-cli/events?workspaceId=wsp_1&authToken=${token}`, {
+        headers: {
+          accept: "text/event-stream",
+          origin: "https://chat.askthane.com"
+        }
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    expect(res.headers.get("access-control-allow-origin")).toBe("https://chat.askthane.com");
+    expect(idFromName).toHaveBeenCalledWith("wsp_1");
+    expect(get).toHaveBeenCalledWith("wsp_1");
+    expect(objectFetch).toHaveBeenCalledWith("https://thane-chat-events.local/stream", { method: "GET" });
+  });
+
   it("includes reactions in Thane CLI sync responses", async () => {
     const first = vi.fn(async function (this: { sql?: string }) {
       const sql = this.sql ?? "";
