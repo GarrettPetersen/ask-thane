@@ -16,7 +16,8 @@ import {
   sendHostedMessage,
   setHostedWorkspaceMemberRole,
   syncHostedStore,
-  unbanHostedWorkspaceMember
+  unbanHostedWorkspaceMember,
+  watchHostedWorkspaceEvents
 } from "./hosted.js";
 import { renderChannels, renderInbox, renderMembers, renderMessages, renderUsers } from "./render.js";
 import { completeSlashCommand, renderSlashCommands, slashCommands } from "./slash-commands.js";
@@ -654,10 +655,11 @@ export async function runChat(initialChannel = "general"): Promise<void> {
   let targetMessageId: string | undefined;
   let isOpen = true;
   let lastHostedSyncMs = 0;
+  let realtimeStatus: "connecting" | "live" | "closed" | "unavailable" = "unavailable";
 
-  const refresh = async (): Promise<void> => {
+  const refresh = async (options: { forceHostedSync?: boolean } = {}): Promise<void> => {
     store = await ThaneStore.open();
-    if (hasHostedChat(store) && Date.now() - lastHostedSyncMs > 2500) {
+    if (hasHostedChat(store) && (options.forceHostedSync || Date.now() - lastHostedSyncMs > 2500)) {
       try {
         await syncHostedStore(store, { workspaceId: store.activeWorkspace.id });
         lastHostedSyncMs = Date.now();
@@ -665,6 +667,9 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       } catch (error) {
         status ||= `Hosted sync failed: ${(error as Error).message}`;
       }
+    }
+    if (realtimeStatus === "live" && status.startsWith("Hosted sync failed:")) {
+      status = "";
     }
     if (!store.findChannel(activeChannel.id)) {
       activeChannel = await selectConversation(store, "general");
@@ -699,6 +704,30 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       updateStatus,
       ...(targetMessageId ? { targetMessageId } : {})
     });
+  };
+
+  const startEventWatcher = (): { close: () => void } =>
+    hasHostedChat(store)
+      ? watchHostedWorkspaceEvents(store, {
+          workspaceId: store.activeWorkspace.id,
+          onStatus: (nextStatus) => {
+            realtimeStatus = nextStatus;
+          },
+          onEvent: (event) => {
+            if (event.type === "connected" || event.workspaceId !== store.activeWorkspace.id) {
+              return;
+            }
+            void refresh({ forceHostedSync: true });
+          }
+        })
+      : { close: () => {} };
+
+  let eventWatcher = startEventWatcher();
+
+  const restartEventWatcher = (): void => {
+    eventWatcher.close();
+    realtimeStatus = "unavailable";
+    eventWatcher = startEventWatcher();
   };
 
   const refreshUpdateStatus = async (force = false): Promise<UpdateStatus> => {
@@ -1205,6 +1234,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
         await syncHostedStore(store, { workspaceId: workspace.id });
         store = await ThaneStore.open();
       }
+      restartEventWatcher();
       activeChannel = await selectConversation(store, "general");
       status = `Switched to workspace ${workspace.slug}`;
       showHelp = false;
@@ -1392,6 +1422,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
                 await syncHostedStore(store, { workspaceId: workspace.id });
                 store = await ThaneStore.open();
               }
+              restartEventWatcher();
               activeChannel = await selectConversation(store, "general");
               workspacePickerOpen = false;
               sidePanelLines = undefined;
@@ -1522,7 +1553,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     if (isOpen) {
       void refresh();
     }
-  }, 1_500);
+  }, 30_000);
 
   try {
     await store.markReadConversation(activeChannel.id);
@@ -1532,6 +1563,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     }
   } finally {
     clearInterval(poll);
+    eventWatcher.close();
     input.off("keypress", onKeypress);
     if (input.isTTY) {
       input.setRawMode?.(false);

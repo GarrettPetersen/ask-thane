@@ -526,7 +526,7 @@ function agentInstructions(): string {
 - Check store/account/workspace first: \`thane doctor --json\`.
 - Get compact context: \`thane agent context --json\`.
 - List channels: \`thane channels --json\`.
-- Read recent messages: \`thane see-recent --json\`.
+- Read recent messages from the server-backed cache: \`thane see-recent --json\`.
 - Read a thread: \`thane thread <message-id> --json\`.
 - Search messages: \`thane search <query> --json\`.
 - Do not send, reply, react, invite, or mark messages read unless explicitly asked.
@@ -600,8 +600,12 @@ async function main(): Promise<void> {
     }
   };
   await syncHosted({ silent: true });
+  const syncBeforeRead = async (): Promise<void> => {
+    await syncHosted();
+  };
 
   if (command === "agent" && second === "context") {
+    await syncBeforeRead();
     const recent = store.recent(undefined, flagNumber(args, "limit", 12));
     const unread = store.unread(flagNumber(args, "unread-limit", 20));
     const response = {
@@ -620,6 +624,7 @@ async function main(): Promise<void> {
   }
 
   if (command === "export" && second === "messages") {
+    await syncBeforeRead();
     const channel = flagString(args, "channel");
     const limit = flagNumber(args, "limit", 10_000);
     const since = parseSince(flagString(args, "since"));
@@ -649,6 +654,7 @@ async function main(): Promise<void> {
       flags: args.flags
     };
     if (readCommand === "recent") {
+      await syncBeforeRead();
       const messages = store.recent(args.positionals[2], flagNumber(forwardedArgs, "limit", 20), parseSince(flagString(forwardedArgs, "since")));
       wantsJson(args) ? printJson({ messages }) : process.stdout.write(`${renderMessages(messages)}\n`);
       return;
@@ -658,6 +664,7 @@ async function main(): Promise<void> {
       if (!messageId) {
         throw new Error("Usage: thane read thread <message-id>");
       }
+      await syncBeforeRead();
       const messages = store.thread(messageId);
       wantsJson(args) ? printJson({ messages }) : process.stdout.write(`${renderMessages(messages)}\n`);
       return;
@@ -667,6 +674,7 @@ async function main(): Promise<void> {
       if (!query) {
         throw new Error("Usage: thane read search <query>");
       }
+      await syncBeforeRead();
       const messages = store.search(query, flagNumber(args, "limit", 20));
       wantsJson(args) ? printJson({ messages }) : process.stdout.write(`${renderMessages(messages)}\n`);
       return;
@@ -1403,12 +1411,14 @@ async function main(): Promise<void> {
   }
 
   if ((command === "dm-recent" || command === "dm") && second) {
+    await syncBeforeRead();
     const messages = store.recentDm(second, flagNumber(args, "limit", 20), parseSince(flagString(args, "since")));
     wantsJson(args) ? printJson({ messages }) : process.stdout.write(`${renderMessages(messages)}\n`);
     return;
   }
 
   if (command === "recent" || command === "see-recent") {
+    await syncBeforeRead();
     const limit = flagNumber(args, "limit", command === "see-recent" ? 50 : 20);
     const since = parseSince(flagString(args, "since"));
     const channel = second && !second.startsWith("--") ? second : undefined;
@@ -1418,12 +1428,14 @@ async function main(): Promise<void> {
   }
 
   if (command === "unread") {
+    await syncBeforeRead();
     const messages = store.unread(flagNumber(args, "limit", 50));
     wantsJson(args) ? printJson({ messages }) : process.stdout.write(`${renderMessages(messages)}\n`);
     return;
   }
 
   if (command === "mentions") {
+    await syncBeforeRead();
     const messages = store.mentions(flagNumber(args, "limit", 20), parseSince(flagString(args, "since")));
     wantsJson(args) ? printJson({ messages }) : process.stdout.write(`${renderMessages(messages)}\n`);
     return;
@@ -1434,6 +1446,7 @@ async function main(): Promise<void> {
     if (!query) {
       throw new Error("Usage: thane search <query>");
     }
+    await syncBeforeRead();
     const messages = store.search(query, flagNumber(args, "limit", 20));
     wantsJson(args) ? printJson({ messages }) : process.stdout.write(`${renderMessages(messages)}\n`);
     return;
@@ -1443,6 +1456,7 @@ async function main(): Promise<void> {
     if (!second) {
       throw new Error("Usage: thane thread <message-id>");
     }
+    await syncBeforeRead();
     const messages = store.thread(second);
     wantsJson(args) ? printJson({ messages }) : process.stdout.write(`${renderMessages(messages)}\n`);
     return;

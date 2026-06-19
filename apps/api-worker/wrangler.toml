@@ -18,6 +18,14 @@ migrations_dir = "../../infra/d1/migrations"
 name = "EMAIL"
 allowed_sender_addresses = ["noreply@askthane.com"]
 
+[[durable_objects.bindings]]
+name = "THANE_CHAT_EVENTS"
+class_name = "ThaneChatEvents"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ThaneChatEvents"]
+
 [vars]
 BUILD_ENV = "local"
 BUILD_GIT_SHA = "dev"
@@ -42,6 +50,10 @@ migrations_dir = "../../infra/d1/migrations"
 [[env.staging.send_email]]
 name = "EMAIL"
 allowed_sender_addresses = ["noreply@askthane.com"]
+
+[[env.staging.durable_objects.bindings]]
+name = "THANE_CHAT_EVENTS"
+class_name = "ThaneChatEvents"
 
 [env.staging.vars]
 BUILD_ENV = "staging"
@@ -71,6 +83,10 @@ migrations_dir = "../../infra/d1/migrations"
 [[env.production.send_email]]
 name = "EMAIL"
 allowed_sender_addresses = ["noreply@askthane.com"]
+
+[[env.production.durable_objects.bindings]]
+name = "THANE_CHAT_EVENTS"
+class_name = "ThaneChatEvents"
 
 [env.production.vars]
 BUILD_ENV = "production"

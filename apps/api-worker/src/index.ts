@@ -6,6 +6,7 @@ import { ingestMessageForTasks } from "@ask-thane/workflows";
 interface Env {
   DB: D1Database;
   EMAIL?: SendEmail;
+  THANE_CHAT_EVENTS?: DurableObjectNamespace;
   ANTHROPIC_API_KEY?: string;
   BILLING_LINK_SIGNING_SECRET?: string;
   DEFAULT_LLM_MODEL?: string;
@@ -137,6 +138,54 @@ const THANE_CLI_FREE_LIMITS = {
 } as const;
 
 type ThaneCliPlanTier = "free" | "cli_team";
+
+interface ThaneChatPushEvent {
+  type: "message_created" | "reaction_created" | "workspace_changed";
+  workspaceId: string;
+  channelId?: string;
+  messageId?: string;
+  occurredAt: string;
+}
+
+export class ThaneChatEvents {
+  private readonly sockets = new Set<WebSocket>();
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/broadcast") && request.method === "POST") {
+      return this.broadcast(request);
+    }
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("Expected WebSocket upgrade", { status: 426 });
+    }
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    server.accept();
+    this.sockets.add(server);
+    const close = () => this.sockets.delete(server);
+    server.addEventListener("close", close);
+    server.addEventListener("error", close);
+    server.send(JSON.stringify({ type: "connected", occurredAt: nowIso() }));
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  private async broadcast(request: Request): Promise<Response> {
+    const event = (await request.json().catch(() => null)) as ThaneChatPushEvent | null;
+    if (!event?.workspaceId || !event.type) {
+      return Response.json({ ok: false, error: "invalid_event" }, { status: 400 });
+    }
+    const payload = JSON.stringify(event);
+    for (const socket of [...this.sockets]) {
+      try {
+        socket.send(payload);
+      } catch (_error) {
+        this.sockets.delete(socket);
+      }
+    }
+    return Response.json({ ok: true, clients: this.sockets.size });
+  }
+}
 
 interface ThaneCliAskThaneIntegrationRow {
   workspace_id: string;
@@ -634,6 +683,25 @@ async function requireAuthEmail(request: Request, env: Env): Promise<string | nu
   }
   const payload = await verifyToken(env, authHeader.slice("bearer ".length).trim(), "auth");
   return payload?.email ?? null;
+}
+
+function workspaceEventsObject(env: Env, workspaceId: string): DurableObjectStub | null {
+  if (!env.THANE_CHAT_EVENTS) {
+    return null;
+  }
+  return env.THANE_CHAT_EVENTS.get(env.THANE_CHAT_EVENTS.idFromName(workspaceId));
+}
+
+async function broadcastThaneChatEvent(env: Env, event: ThaneChatPushEvent): Promise<void> {
+  const stub = workspaceEventsObject(env, event.workspaceId);
+  if (!stub) {
+    return;
+  }
+  await stub.fetch("https://thane-chat-events.local/broadcast", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(event)
+  });
 }
 
 function inviteBaseUrl(env: Env, request: Request): string {
@@ -1957,6 +2025,33 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
   });
 }
 
+async function handleThaneCliEvents(request: Request, env: Env): Promise<Response> {
+  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+    return Response.json({ ok: false, error: "websocket_upgrade_required" }, { status: 426 });
+  }
+  const url = new URL(request.url);
+  const authToken = url.searchParams.get("authToken");
+  const email = authToken
+    ? (await verifyToken(env, authToken, "auth"))?.email ?? null
+    : await requireAuthEmail(request, env);
+  if (!email) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  const workspaceId = url.searchParams.get("workspaceId")?.trim();
+  if (!workspaceId) {
+    return Response.json({ ok: false, error: "workspace_id_required" }, { status: 400 });
+  }
+  const member = await requireThaneCliWorkspaceMember(env, workspaceId, email);
+  if (!member) {
+    return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
+  }
+  const stub = workspaceEventsObject(env, workspaceId);
+  if (!stub) {
+    return Response.json({ ok: false, error: "events_unavailable" }, { status: 503 });
+  }
+  return stub.fetch(request);
+}
+
 async function handleThaneCliChannelCreate(request: Request, env: Env): Promise<Response> {
   const email = await requireAuthEmail(request, env);
   if (!email) {
@@ -2533,6 +2628,19 @@ async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<
           return { reason: "failed" };
         })
         : { reason: "non_chat_source" };
+  await broadcastThaneChatEvent(env, {
+    type: "message_created",
+    workspaceId,
+    channelId: channel.id,
+    messageId,
+    occurredAt: nowIso()
+  }).catch((error) => {
+    console.warn("thane_chat_event_broadcast_failed", {
+      workspaceId,
+      channelId: channel.id,
+      reason: error instanceof Error ? error.message : String(error)
+    });
+  });
   return Response.json({
     ok: true,
     message: {
@@ -2592,6 +2700,19 @@ async function handleThaneCliReactionCreate(request: Request, env: Env): Promise
     )
     .bind(makeId("trxn"), messageId, member.id, emoji, createdAt)
     .run();
+  await broadcastThaneChatEvent(env, {
+    type: "reaction_created",
+    workspaceId,
+    channelId: message.channel_id,
+    messageId,
+    occurredAt: createdAt
+  }).catch((error) => {
+    console.warn("thane_chat_event_broadcast_failed", {
+      workspaceId,
+      channelId: message.channel_id,
+      reason: error instanceof Error ? error.message : String(error)
+    });
+  });
   return Response.json({ ok: true, reaction: { emoji, by: member.handle, createdAt } });
 }
 
@@ -3141,6 +3262,9 @@ async function handleThaneCliRequest(request: Request, env: Env): Promise<Respon
   }
   if (url.pathname === "/v1/thane-cli/sync" && request.method === "GET") {
     return buildThaneCliSyncResponse(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/events" && request.method === "GET") {
+    return handleThaneCliEvents(request, env);
   }
   if (url.pathname === "/v1/thane-cli/channels" && request.method === "POST") {
     return handleThaneCliChannelCreate(request, env);

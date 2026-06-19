@@ -32,6 +32,14 @@ export interface HostedBillingLink {
   expiresAt: string;
 }
 
+export interface HostedChatEvent {
+  type: "connected" | "message_created" | "reaction_created" | "workspace_changed";
+  workspaceId?: string;
+  channelId?: string;
+  messageId?: string;
+  occurredAt?: string;
+}
+
 function hostedBaseUrl(): string | undefined {
   const value = process.env.THANE_API_BASE_URL?.trim();
   if (value === "local" || value === "none") {
@@ -42,6 +50,16 @@ function hostedBaseUrl(): string | undefined {
 
 function authToken(store: ThaneStore): string | undefined {
   return store.currentAccount?.authToken;
+}
+
+function hostedEventsUrl(store: ThaneStore, workspaceId: string): string {
+  const baseUrl = hostedBaseUrl();
+  const token = authToken(store);
+  if (!baseUrl || !token) {
+    throw new Error("Run `thane init` with hosted auth before using hosted chat.");
+  }
+  const params = new URLSearchParams({ workspaceId, authToken: token });
+  return `${baseUrl.replace(/^http/, "ws")}/v1/thane-cli/events?${params}`;
 }
 
 export function hasHostedChat(store: ThaneStore): boolean {
@@ -92,6 +110,41 @@ export async function syncHostedStore(store: ThaneStore, options: { workspaceId?
   const snapshot = await getHosted<HostedSyncSnapshot>(store, path);
   await store.applyHostedSnapshot(snapshot);
   return true;
+}
+
+export function watchHostedWorkspaceEvents(
+  store: ThaneStore,
+  input: {
+    workspaceId?: string;
+    onEvent: (event: HostedChatEvent) => void;
+    onStatus?: (status: "connecting" | "live" | "closed" | "unavailable") => void;
+  }
+): { close: () => void } {
+  if (!hasHostedChat(store) || typeof WebSocket === "undefined") {
+    input.onStatus?.("unavailable");
+    return { close: () => {} };
+  }
+  const workspaceId = input.workspaceId ?? store.activeWorkspaceId;
+  if (!workspaceId) {
+    input.onStatus?.("unavailable");
+    return { close: () => {} };
+  }
+  const socket = new WebSocket(hostedEventsUrl(store, workspaceId));
+  input.onStatus?.("connecting");
+  socket.addEventListener("open", () => input.onStatus?.("live"));
+  socket.addEventListener("message", (event) => {
+    if (typeof event.data !== "string") {
+      return;
+    }
+    try {
+      input.onEvent(JSON.parse(event.data) as HostedChatEvent);
+    } catch (_error) {
+      // Ignore malformed push events; fallback polling still keeps the cache fresh.
+    }
+  });
+  socket.addEventListener("close", () => input.onStatus?.("closed"));
+  socket.addEventListener("error", () => input.onStatus?.("closed"));
+  return { close: () => socket.close() };
 }
 
 export async function createHostedWorkspace(

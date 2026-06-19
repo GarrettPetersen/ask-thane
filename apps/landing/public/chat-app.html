@@ -564,6 +564,12 @@
         channelMenuOpen: localStorage.getItem("thane.web.channelMenuOpen") === "true",
         cliInstallOpen: false,
         settingsMenuOpen: false,
+        realtimeSocket: null,
+        realtimeWorkspaceId: "",
+        realtimeReconnectTimer: null,
+        realtimeBackoffMs: 1000,
+        realtimeStatus: "polling",
+        realtimeSyncing: false,
         status: "",
         error: "",
         busy: false
@@ -869,9 +875,86 @@
         if (!state.activeChannelId || !snapshot.channels?.some((channel) => channel.id === state.activeChannelId)) {
           state.activeChannelId = snapshot.channels?.find((channel) => channel.name === "general")?.id || snapshot.channels?.[0]?.id || "";
         }
+        connectRealtime();
+      }
+
+      async function syncFromRealtime() {
+        if (state.realtimeSyncing) return;
+        state.realtimeSyncing = true;
+        try {
+          await sync();
+          render();
+        } catch (_error) {
+          state.realtimeStatus = "polling";
+        } finally {
+          state.realtimeSyncing = false;
+        }
+      }
+
+      function realtimeUrl(workspaceId) {
+        const base = API.replace(/^http/, "ws");
+        const params = new URLSearchParams({
+          workspaceId,
+          authToken: state.session.authToken
+        });
+        return `${base}/v1/thane-cli/events?${params}`;
+      }
+
+      function connectRealtime() {
+        if (!state.session?.authToken || !state.activeWorkspaceId || !("WebSocket" in window)) {
+          state.realtimeStatus = "polling";
+          return;
+        }
+        if (state.realtimeSocket && state.realtimeWorkspaceId === state.activeWorkspaceId && state.realtimeSocket.readyState < 2) {
+          return;
+        }
+        if (state.realtimeSocket) {
+          state.realtimeSocket.close();
+        }
+        if (state.realtimeReconnectTimer) {
+          clearTimeout(state.realtimeReconnectTimer);
+          state.realtimeReconnectTimer = null;
+        }
+        const workspaceId = state.activeWorkspaceId;
+        const socket = new WebSocket(realtimeUrl(workspaceId));
+        state.realtimeSocket = socket;
+        state.realtimeWorkspaceId = workspaceId;
+        state.realtimeStatus = "connecting";
+        socket.addEventListener("open", () => {
+          state.realtimeBackoffMs = 1000;
+          state.realtimeStatus = "live";
+          render();
+        });
+        socket.addEventListener("message", (event) => {
+          let payload = null;
+          try {
+            payload = JSON.parse(event.data);
+          } catch (_error) {
+            return;
+          }
+          if (payload?.type === "connected") return;
+          if (payload?.workspaceId === state.activeWorkspaceId) {
+            void syncFromRealtime();
+          }
+        });
+        socket.addEventListener("close", () => {
+          if (state.realtimeSocket !== socket) return;
+          state.realtimeStatus = "polling";
+          const delay = state.realtimeBackoffMs;
+          state.realtimeBackoffMs = Math.min(state.realtimeBackoffMs * 2, 30000);
+          state.realtimeReconnectTimer = setTimeout(() => connectRealtime(), delay);
+          render();
+        });
+        socket.addEventListener("error", () => {
+          state.realtimeStatus = "polling";
+        });
       }
 
       async function chooseWorkspace(id) {
+        if (state.realtimeSocket) {
+          state.realtimeSocket.close();
+          state.realtimeSocket = null;
+        }
         state.activeWorkspaceId = id;
         state.activeChannelId = "";
         state.replyToId = "";
@@ -1665,7 +1748,7 @@
               <section class="messages">
                 ${rootMessages.length ? rootMessages.map((message) => renderMessage(message, users, repliesByRoot)).join("") : `<div class="empty">No messages in this channel yet.</div>`}
               </section>
-              <div class="statusbar"><span><strong>${channel?.kind === "dm" ? "@" : "#"}${esc(channel?.name || "general")}</strong> Up messages. Left channels. Right messages.</span><span>${messages.length} msg${messages.length === 1 ? "" : "s"} · sync 5s</span></div>
+              <div class="statusbar"><span><strong>${channel?.kind === "dm" ? "@" : "#"}${esc(channel?.name || "general")}</strong> Up messages. Left channels. Right messages.</span><span>${messages.length} msg${messages.length === 1 ? "" : "s"} · ${state.realtimeStatus === "live" ? "live" : "sync 30s"}</span></div>
               <div class="composer-wrap">
                 ${replyTarget ? `<div class="reply-target"><span>replying to @${esc(users.get(replyTarget.authorId)?.handle || "unknown")}: ${esc(replyTarget.text.slice(0, 80))}</span><button onclick="state.replyToId=''; render()">cancel</button></div>` : ""}
                 <form class="composer" onsubmit="sendMessage(event)">
@@ -1785,7 +1868,7 @@
               render();
             })
             .catch(() => {});
-        }, 5000);
+        }, 30000);
       } else {
         if (state.inviteToken) {
           previewInvite()
