@@ -34,6 +34,8 @@ interface AuthStartPayload {
 
 interface ProfileUpdatePayload {
   displayName?: unknown;
+  scope?: unknown;
+  workspaceId?: unknown;
 }
 
 interface RateLimitResult {
@@ -622,7 +624,26 @@ async function buildAccount(env: Env, input: { email: string; displayName?: stri
   };
 }
 
+async function accountProfileDisplayNameForEmail(env: Env, email: string): Promise<string | null> {
+  try {
+    const row = await env.DB
+      .prepare("SELECT display_name FROM thane_cli_account_profiles WHERE email = ? LIMIT 1")
+      .bind(email)
+      .first<{ display_name?: string | null }>();
+    return row?.display_name?.trim() || null;
+  } catch (error) {
+    if (String(error).toLowerCase().includes("no such table")) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 async function profileDisplayNameForEmail(env: Env, email: string): Promise<string | null> {
+  const accountDisplayName = await accountProfileDisplayNameForEmail(env, email);
+  if (accountDisplayName) {
+    return accountDisplayName;
+  }
   try {
     const row = await env.DB
       .prepare(
@@ -641,6 +662,20 @@ async function profileDisplayNameForEmail(env: Env, email: string): Promise<stri
     }
     throw error;
   }
+}
+
+async function setAccountProfileDisplayName(env: Env, email: string, displayName: string): Promise<void> {
+  const now = nowIso();
+  await env.DB
+    .prepare(
+      `INSERT INTO thane_cli_account_profiles (email, display_name, created_at, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(email) DO UPDATE SET
+         display_name = excluded.display_name,
+         updated_at = excluded.updated_at`
+    )
+    .bind(email, displayName, now, now)
+    .run();
 }
 
 async function encryptionKey(env: Env): Promise<CryptoKey> {
@@ -906,7 +941,7 @@ async function ensureThaneCliWorkspace(env: Env, input: {
   await ensureThaneCliMember(env, {
     workspaceId: workspace.id,
     email: input.email,
-    displayName: normalizeHandleFromEmail(input.email),
+    displayName: await profileDisplayNameForEmail(env, input.email),
     role: input.role
   });
   await ensureThaneCliChannel(env, workspace.id, "general", "Community-wide conversation");
@@ -936,7 +971,7 @@ async function ensureThaneCliMember(env: Env, input: {
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(workspace_id, email) DO UPDATE SET
          account_id = excluded.account_id,
-         display_name = excluded.display_name,
+         display_name = COALESCE(NULLIF(thane_cli_workspace_members.display_name, ''), excluded.display_name),
          handle = excluded.handle,
          role = CASE
            WHEN thane_cli_workspace_members.role = 'owner' THEN 'owner'
@@ -1677,10 +1712,14 @@ async function handleThaneCliAuthVerify(request: Request, env: Env): Promise<Res
     return Response.json({ ok: false, error: "code_expired" }, { status: 401 });
   }
 
-  const displayName =
+  const verifiedDisplayName =
     typeof authRow.display_name === "string" && authRow.display_name.trim()
       ? authRow.display_name.trim()
-      : email.split("@")[0] || email;
+      : null;
+  const displayName = verifiedDisplayName ?? email.split("@")[0] ?? email;
+  if (verifiedDisplayName) {
+    await setAccountProfileDisplayName(env, email, verifiedDisplayName);
+  }
   await env.DB
     .prepare("UPDATE thane_cli_auth_codes SET consumed_at = ? WHERE id = ?")
     .bind(nowIso(), authRow.id)
@@ -1831,14 +1870,51 @@ async function handleThaneCliProfileUpdate(request: Request, env: Env): Promise<
   if (!displayName) {
     return Response.json({ ok: false, error: "display_name_required" }, { status: 400 });
   }
+  const scope = typeof payload?.scope === "string" ? payload.scope.trim().toLowerCase() : "";
+  const workspaceId = typeof payload?.workspaceId === "string" && payload.workspaceId.trim() ? payload.workspaceId.trim().slice(0, 120) : null;
+  if (scope === "workspace" || workspaceId) {
+    if (!workspaceId) {
+      return Response.json({ ok: false, error: "workspace_id_required" }, { status: 400 });
+    }
+    const member = await requireThaneCliWorkspaceMember(env, workspaceId, email);
+    if (!member) {
+      return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
+    }
+    await env.DB
+      .prepare("UPDATE thane_cli_workspace_members SET display_name = ?, updated_at = ? WHERE workspace_id = ? AND email = ?")
+      .bind(displayName, nowIso(), workspaceId, email)
+      .run();
+    return Response.json({
+      ok: true,
+      scope: "workspace",
+      workspaceId,
+      account: await buildAccount(env, { email }),
+      displayName,
+      workspaceDisplayName: displayName
+    });
+  }
+  if (scope === "account") {
+    await setAccountProfileDisplayName(env, email, displayName);
+    return Response.json({
+      ok: true,
+      scope: "account",
+      account: await buildAccount(env, { email, displayName }),
+      displayName,
+      accountDisplayName: displayName
+    });
+  }
   await env.DB
     .prepare("UPDATE thane_cli_workspace_members SET display_name = ?, updated_at = ? WHERE email = ?")
     .bind(displayName, nowIso(), email)
     .run();
+  await setAccountProfileDisplayName(env, email, displayName);
   return Response.json({
     ok: true,
+    scope: "global",
     account: await buildAccount(env, { email, displayName }),
-    displayName
+    displayName,
+    accountDisplayName: displayName,
+    workspaceDisplayName: displayName
   });
 }
 
@@ -2977,7 +3053,7 @@ async function handleThaneCliWorkspaceInviteAccept(request: Request, env: Env): 
   await ensureThaneCliMember(env, {
     workspaceId: row!.workspace_id,
     email,
-    displayName: normalizeHandleFromEmail(email),
+    displayName: await profileDisplayNameForEmail(env, email),
     role: row!.role
   });
   return Response.json({

@@ -298,6 +298,101 @@ describe("@ask-thane/api-worker", () => {
     expect(update?.args[2]).toBe("garrett@example.com");
   });
 
+  it("updates only the active workspace display name when a workspace is provided", async () => {
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members")) {
+        return {
+          id: "member_1",
+          account_id: "acct_1",
+          email: "garrett@example.com",
+          display_name: "Garrett",
+          handle: "garrett.m.petersen",
+          role: "owner"
+        };
+      }
+      if (sql.includes("FROM thane_cli_account_profiles")) {
+        return { display_name: "Garrett Default" };
+      }
+      return null;
+    });
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        return sql.startsWith("SELECT") ? { first: first.bind({ sql }) } : { run };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/profile", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("garrett@example.com")}` },
+        body: JSON.stringify({ displayName: " GP ", workspaceId: "wsp_1", scope: "workspace" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      scope: "workspace",
+      workspaceId: "wsp_1",
+      displayName: "GP",
+      workspaceDisplayName: "GP",
+      account: {
+        displayName: "Garrett Default"
+      }
+    });
+    const update = calls.find((call) => call.sql.startsWith("UPDATE thane_cli_workspace_members SET display_name") && call.sql.includes("WHERE workspace_id = ? AND email = ?"));
+    expect(update?.args).toEqual(["GP", expect.any(String), "wsp_1", "garrett@example.com"]);
+    expect(calls.some((call) => call.sql.includes("UPDATE thane_cli_workspace_members SET display_name = ?, updated_at = ? WHERE email = ?"))).toBe(false);
+  });
+
+  it("updates the account default display name without rewriting workspace memberships", async () => {
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        return { run };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/profile", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("garrett@example.com")}` },
+        body: JSON.stringify({ displayName: " Garrett Petersen ", scope: "account" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      scope: "account",
+      displayName: "Garrett Petersen",
+      accountDisplayName: "Garrett Petersen",
+      account: {
+        displayName: "Garrett Petersen"
+      }
+    });
+    expect(calls.some((call) => call.sql.includes("thane_cli_account_profiles"))).toBe(true);
+    expect(calls.some((call) => call.sql.includes("UPDATE thane_cli_workspace_members"))).toBe(false);
+  });
+
   it("opens a hosted Thane Chat event stream for workspace members", async () => {
     const streamResponse = new Response('data: {"type":"connected"}\n\n', {
       headers: { "content-type": "text/event-stream; charset=utf-8" }

@@ -382,6 +382,7 @@ Accounts:
   thane verify <email> <code>
   thane whoami [--json]
   thane profile name <display-name> [--json]
+  thane profile account-name <display-name> [--json]
   thane logout
 
 Security:
@@ -824,7 +825,9 @@ async function main(): Promise<void> {
     const member = store.currentMember();
     wantsJson(args)
       ? printJson({ account, user, workspace: store.activeWorkspace, member })
-      : process.stdout.write(`${account?.email ?? "not signed in"} as @${user.handle} (${member?.role ?? "member"}) in ${store.activeWorkspace.slug}\n`);
+      : process.stdout.write(
+          `${account?.email ?? "not signed in"} as ${user.displayName || `@${user.handle}`} (@${user.handle}, ${member?.role ?? "member"}) in ${store.activeWorkspace.slug}\n`
+        );
     return;
   }
 
@@ -834,12 +837,36 @@ async function main(): Promise<void> {
       throw new Error("Usage: thane profile name <display-name>");
     }
     const token = requireHostedAuthToken(store);
-    const response = await postThaneApiWithAuth<{ account: ThaneAccount; displayName: string }>("/v1/thane-cli/profile", token, {
-      displayName
+    const response = await postThaneApiWithAuth<{ account: ThaneAccount; displayName: string; workspaceDisplayName?: string }>("/v1/thane-cli/profile", token, {
+      displayName,
+      workspaceId: store.activeWorkspace.id,
+      scope: "workspace"
     });
-    await store.setDisplayName(response.displayName);
+    const workspaceDisplayName = response.workspaceDisplayName ?? response.displayName;
+    await store.setWorkspaceDisplayName(workspaceDisplayName);
     await syncHostedStore(store);
-    wantsJson(args) ? printJson({ account: response.account }) : process.stdout.write(`display name: ${response.displayName}\n`);
+    wantsJson(args)
+      ? printJson({ account: response.account, workspaceDisplayName, workspace: store.activeWorkspace })
+      : process.stdout.write(`workspace display name: ${workspaceDisplayName}\n`);
+    return;
+  }
+
+  if (command === "profile" && second === "account-name") {
+    const displayName = args.positionals.slice(2).join(" ").trim();
+    if (!displayName) {
+      throw new Error("Usage: thane profile account-name <display-name>");
+    }
+    const token = requireHostedAuthToken(store);
+    const response = await postThaneApiWithAuth<{ account: ThaneAccount; displayName: string; accountDisplayName?: string }>("/v1/thane-cli/profile", token, {
+      displayName,
+      scope: "account"
+    });
+    const accountDisplayName = response.accountDisplayName ?? response.displayName;
+    await store.setAccountDisplayName(accountDisplayName);
+    await syncHostedStore(store);
+    wantsJson(args)
+      ? printJson({ account: response.account, accountDisplayName })
+      : process.stdout.write(`account default name: ${accountDisplayName}\n`);
     return;
   }
 

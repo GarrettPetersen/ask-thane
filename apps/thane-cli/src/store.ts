@@ -488,26 +488,46 @@ export class ThaneStore {
     );
   }
 
-  async setDisplayName(displayName: string): Promise<{ account?: ThaneAccount; user: ThaneUser }> {
+  async setAccountDisplayName(displayName: string): Promise<{ account: ThaneAccount }> {
     const cleaned = displayName.trim();
     if (!cleaned) {
       throw new Error("Display name must contain at least one character.");
     }
     const account = this.currentAccount;
-    if (account) {
-      account.displayName = cleaned.slice(0, 120);
-      for (const user of this.data.users) {
-        if (user.accountId === account.id) {
-          user.displayName = account.displayName;
-        }
-      }
-    } else {
-      this.currentUser.displayName = cleaned.slice(0, 120);
+    if (!account) {
+      throw new Error("No hosted account is active. Run `thane init` first.");
     }
+    account.displayName = cleaned.slice(0, 120);
     await saveData(this.data);
+    return { account };
+  }
+
+  async setWorkspaceDisplayName(displayName: string, workspaceId = this.activeWorkspace.id): Promise<{ user: ThaneUser }> {
+    const cleaned = displayName.trim();
+    if (!cleaned) {
+      throw new Error("Display name must contain at least one character.");
+    }
+    const account = this.currentAccount;
+    const user =
+      (account && this.data.users.find((candidate) => candidate.workspaceId === workspaceId && candidate.accountId === account.id)) ||
+      this.data.users.find((candidate) => candidate.workspaceId === workspaceId && candidate.id === this.data.currentUserId);
+    if (!user) {
+      throw new Error("Current workspace user is missing. Run `thane sync` or `thane workspaces` to refresh.");
+    }
+    user.displayName = cleaned.slice(0, 120);
+    await saveData(this.data);
+    return { user };
+  }
+
+  async setDisplayName(displayName: string): Promise<{ account?: ThaneAccount; user: ThaneUser }> {
+    const account = this.currentAccount;
+    if (account) {
+      await this.setAccountDisplayName(displayName);
+    }
+    const { user } = await this.setWorkspaceDisplayName(displayName);
     return {
       ...(account ? { account } : {}),
-      user: this.currentUser
+      user
     };
   }
 

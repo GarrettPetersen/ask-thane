@@ -718,6 +718,13 @@ CREATE INDEX IF NOT EXISTS idx_thane_cli_accounts_created_at
 CREATE INDEX IF NOT EXISTS idx_thane_cli_accounts_workspace
   ON thane_cli_accounts(workspace_id);
 
+CREATE TABLE IF NOT EXISTS thane_cli_account_profiles (
+  email TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS thane_cli_messages (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,

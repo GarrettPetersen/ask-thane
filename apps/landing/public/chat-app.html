@@ -561,7 +561,8 @@
         touchMoved: false,
         inviteLinkResult: null,
         billingBusy: false,
-        profileDraft: null,
+        workspaceProfileDraft: null,
+        accountProfileDraft: null,
         searchQuery: "",
         draftText: "",
         sidebarCollapsed: localStorage.getItem("thane.web.sidebarCollapsed") === "true",
@@ -821,7 +822,7 @@
         try {
           await api("/v1/thane-cli/auth/start", {
             method: "POST",
-            body: JSON.stringify({ email: state.email, displayName: state.email.split("@")[0] })
+            body: JSON.stringify({ email: state.email })
           });
           state.authStep = "code";
           state.status = `Code sent to ${state.email}`;
@@ -1360,7 +1361,31 @@
         }
       }
 
-      async function updateDisplayName(event) {
+      async function updateWorkspaceDisplayName(event) {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const displayName = String(form.get("displayName") || "").trim();
+        if (!displayName) return;
+        const workspaceId = state.activeWorkspaceId;
+        if (!workspaceId) return;
+        try {
+          const body = await api("/v1/thane-cli/profile", {
+            method: "POST",
+            body: JSON.stringify({ displayName, workspaceId, scope: "workspace" })
+          });
+          saveSession({ ...state.session, ...(body.account || {}) });
+          state.workspaceProfileDraft = body.workspaceDisplayName || body.displayName || displayName;
+          state.status = `Workspace name: ${body.workspaceDisplayName || body.displayName || displayName}`;
+          state.error = "";
+          await sync();
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
+      async function updateAccountDisplayName(event) {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
         const displayName = String(form.get("displayName") || "").trim();
@@ -1368,11 +1393,11 @@
         try {
           const body = await api("/v1/thane-cli/profile", {
             method: "POST",
-            body: JSON.stringify({ displayName })
+            body: JSON.stringify({ displayName, scope: "account" })
           });
-          saveSession({ ...state.session, ...(body.account || {}), displayName: body.displayName || displayName });
-          state.profileDraft = body.displayName || displayName;
-          state.status = `Display name: ${body.displayName || displayName}`;
+          saveSession({ ...state.session, ...(body.account || {}), displayName: body.accountDisplayName || body.displayName || displayName });
+          state.accountProfileDraft = body.accountDisplayName || body.displayName || displayName;
+          state.status = `Account default name: ${body.accountDisplayName || body.displayName || displayName}`;
           state.error = "";
           await sync();
         } catch (error) {
@@ -1478,7 +1503,9 @@
       }
 
       function openSettingsMenu() {
-        state.profileDraft = state.session?.displayName || "";
+        const currentUser = (state.snapshot?.users || []).find((user) => user.email === state.session?.email);
+        state.workspaceProfileDraft = currentUser?.displayName || state.session?.displayName || "";
+        state.accountProfileDraft = state.session?.displayName || "";
         state.settingsMenuOpen = true;
         state.settingsMenuScrollTop = 0;
         render();
@@ -1486,7 +1513,8 @@
 
       function closeSettingsMenu() {
         state.settingsMenuOpen = false;
-        state.profileDraft = null;
+        state.workspaceProfileDraft = null;
+        state.accountProfileDraft = null;
         state.settingsMenuScrollTop = 0;
         render();
       }
@@ -1541,7 +1569,8 @@
           billingPlan,
           isTeamPlan,
           privateChannels,
-          inviteResult
+          inviteResult,
+          currentUser
         } = input;
         return `
           <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="settings-menu-title" onclick="if(event.target===this) closeSettingsMenu()">
@@ -1556,9 +1585,13 @@
               <div class="modal-body settings-grid">
                 <section class="settings-group">
                   <h3>Profile</h3>
-                  <form class="list" onsubmit="updateDisplayName(event)">
-                    <input name="displayName" value="${esc(state.profileDraft ?? state.session.displayName ?? "")}" placeholder="Display name" oninput="state.profileDraft=this.value" />
-                    <button>Update name</button>
+                  <form class="list" onsubmit="updateWorkspaceDisplayName(event)">
+                    <input name="displayName" value="${esc(state.workspaceProfileDraft ?? currentUser?.displayName ?? "")}" placeholder="Workspace display name" oninput="state.workspaceProfileDraft=this.value" />
+                    <button>Update workspace name</button>
+                  </form>
+                  <form class="list" onsubmit="updateAccountDisplayName(event)">
+                    <input name="displayName" value="${esc(state.accountProfileDraft ?? state.session.displayName ?? "")}" placeholder="Account default name" oninput="state.accountProfileDraft=this.value" />
+                    <button>Update account default</button>
                   </form>
                   <div class="kv">
                     <div>MFA: ${esc(state.mfaStatus || "unknown")}</div>
@@ -1798,7 +1831,7 @@
                 <div class="section-head"><span>Workspace</span></div>
                 <div class="kv">
                   <div class="cmdline">${esc(workspace?.name || "No workspace")}</div>
-                  <div>${esc(state.session.displayName || state.session.email)}</div>
+                  <div>${esc(currentUser?.displayName || state.session.displayName || state.session.email)}</div>
                   <div>role: ${esc(role || "member")}</div>
                   <div>${snap.users.length} member${snap.users.length === 1 ? "" : "s"}</div>
                   <div>${snap.channels.length} channel${snap.channels.length === 1 ? "" : "s"}</div>
@@ -1828,7 +1861,7 @@
               </section>
             </aside>
           </div>
-          ${renderSettingsMenuModal({ workspace, snap, role, isAdmin, askThane, billingPlan, isTeamPlan, privateChannels, inviteResult })}
+          ${renderSettingsMenuModal({ workspace, snap, role, isAdmin, askThane, billingPlan, isTeamPlan, privateChannels, inviteResult, currentUser })}
           ${renderCliInstallModal()}`;
         requestAnimationFrame(() => {
           const scroller = document.querySelector(".messages");
@@ -1868,7 +1901,8 @@
       window.createInviteLink = createInviteLink;
       window.openBilling = openBilling;
       window.setAskThaneEnabled = setAskThaneEnabled;
-      window.updateDisplayName = updateDisplayName;
+      window.updateWorkspaceDisplayName = updateWorkspaceDisplayName;
+      window.updateAccountDisplayName = updateAccountDisplayName;
       window.refreshMfaStatus = refreshMfaStatus;
       window.startMfaSetup = startMfaSetup;
       window.verifyMfaSetup = verifyMfaSetup;

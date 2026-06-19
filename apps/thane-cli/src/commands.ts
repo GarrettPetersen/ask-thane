@@ -51,8 +51,14 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Accounts",
     command: "thane profile name <display-name> [--json]",
-    description: "Change your display name across Thane workspaces.",
+    description: "Change your display name in the active workspace.",
     examples: ["thane profile name \"Garrett Petersen\"", "thane profile name GP --json"]
+  },
+  {
+    category: "Accounts",
+    command: "thane profile account-name <display-name> [--json]",
+    description: "Change your default display name for newly joined workspaces.",
+    examples: ["thane profile account-name \"Garrett Petersen\"", "thane profile account-name GP --json"]
   },
   {
     category: "Accounts",

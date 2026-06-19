@@ -493,10 +493,31 @@ async function updateDisplayName(store: ThaneStore, displayName: string): Promis
     return "Usage: /name <display-name>";
   }
   const token = requireHostedAuthToken(store);
-  const response = await postThaneApiWithAuth<{ displayName: string }>("/v1/thane-cli/profile", token, { displayName: cleaned });
-  await store.setDisplayName(response.displayName);
+  const response = await postThaneApiWithAuth<{ displayName: string; workspaceDisplayName?: string }>("/v1/thane-cli/profile", token, {
+    displayName: cleaned,
+    workspaceId: store.activeWorkspace.id,
+    scope: "workspace"
+  });
+  const workspaceDisplayName = response.workspaceDisplayName ?? response.displayName;
+  await store.setWorkspaceDisplayName(workspaceDisplayName);
   await syncHostedStore(store);
-  return `Display name: ${response.displayName}`;
+  return `Workspace name: ${workspaceDisplayName}`;
+}
+
+async function updateAccountDisplayName(store: ThaneStore, displayName: string): Promise<string> {
+  const cleaned = displayName.trim();
+  if (!cleaned) {
+    return "Usage: /account-name <display-name>";
+  }
+  const token = requireHostedAuthToken(store);
+  const response = await postThaneApiWithAuth<{ displayName: string; accountDisplayName?: string }>("/v1/thane-cli/profile", token, {
+    displayName: cleaned,
+    scope: "account"
+  });
+  const accountDisplayName = response.accountDisplayName ?? response.displayName;
+  await store.setAccountDisplayName(accountDisplayName);
+  await syncHostedStore(store);
+  return `Account default name: ${accountDisplayName}`;
 }
 
 async function mfaStatus(store: ThaneStore): Promise<string> {
@@ -922,6 +943,15 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     }
     if (trimmed.startsWith("/name ")) {
       status = await updateDisplayName(store, trimmed.slice("/name ".length));
+      showHelp = false;
+      showMenu = false;
+      sidePanelLines = undefined;
+      workspacePickerOpen = false;
+      showReactionPicker = false;
+      return;
+    }
+    if (trimmed.startsWith("/account-name ")) {
+      status = await updateAccountDisplayName(store, trimmed.slice("/account-name ".length));
       showHelp = false;
       showMenu = false;
       sidePanelLines = undefined;
