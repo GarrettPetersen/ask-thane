@@ -2,6 +2,7 @@ import { createLlmClient } from "@ask-thane/ai";
 import { D1TaskRepository } from "@ask-thane/data";
 import type { MessageEvent } from "@ask-thane/domain";
 import { ingestMessageForTasks } from "@ask-thane/workflows";
+import { DurableObject } from "cloudflare:workers";
 
 interface Env {
   DB: D1Database;
@@ -147,8 +148,12 @@ interface ThaneChatPushEvent {
   occurredAt: string;
 }
 
-export class ThaneChatEvents {
+export class ThaneChatEvents extends DurableObject {
   private readonly sockets = new Set<WebSocket>();
+
+  constructor(state: DurableObjectState, env: Env) {
+    super(state, env);
+  }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);

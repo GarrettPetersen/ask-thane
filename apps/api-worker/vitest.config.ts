@@ -10,7 +10,8 @@ export default defineConfig({
       "@ask-thane/ai": path.join(repoRoot, "packages/ai/src/index.ts"),
       "@ask-thane/data": path.join(repoRoot, "packages/data/src/index.ts"),
       "@ask-thane/domain": path.join(repoRoot, "packages/domain/src/index.ts"),
-      "@ask-thane/workflows": path.join(repoRoot, "packages/workflows/src/index.ts")
+      "@ask-thane/workflows": path.join(repoRoot, "packages/workflows/src/index.ts"),
+      "cloudflare:workers": path.join(repoRoot, "apps/api-worker/test/cloudflare-workers-shim.ts")
     }
   },
   test: {
