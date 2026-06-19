@@ -163,15 +163,15 @@ export class ThaneChatEvents extends DurableObject {
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return new Response("Expected WebSocket upgrade", { status: 426 });
     }
-    const pair = new WebSocketPair();
-    const client = pair[0];
-    const server = pair[1];
+    const [client, server] = Object.values(new WebSocketPair());
+    if (!client || !server) {
+      return new Response("Unable to create WebSocket pair", { status: 500 });
+    }
     server.accept();
     this.sockets.add(server);
     const close = () => this.sockets.delete(server);
     server.addEventListener("close", close);
     server.addEventListener("error", close);
-    server.send(JSON.stringify({ type: "connected", occurredAt: nowIso() }));
     return new Response(null, { status: 101, webSocket: client });
   }
 
