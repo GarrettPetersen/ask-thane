@@ -403,6 +403,23 @@ async function postThaneApiWithAuth<T>(path: string, authToken: string, body: Re
   return payload;
 }
 
+async function getThaneApiWithAuth<T>(path: string, authToken: string): Promise<T> {
+  const baseUrl = thaneApiBaseUrl();
+  if (!baseUrl) {
+    throw new Error("Set THANE_API_BASE_URL to use hosted Thane Chat.");
+  }
+  const response = await fetch(`${baseUrl}${path}`, {
+    headers: {
+      authorization: `Bearer ${authToken}`
+    }
+  });
+  const payload = (await response.json()) as { ok?: boolean; error?: string } & T;
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.error ?? `Thane API request failed with status ${response.status}`);
+  }
+  return payload;
+}
+
 function requireHostedAuthToken(store: ThaneStore): string {
   const token = store.currentAccount?.authToken;
   if (!token) {
@@ -452,6 +469,30 @@ async function updateDisplayName(store: ThaneStore, displayName: string): Promis
   }
   const updated = await store.setDisplayName(cleaned);
   return `Display name: ${updated.user.displayName}`;
+}
+
+async function mfaStatus(store: ThaneStore): Promise<string> {
+  const token = requireHostedAuthToken(store);
+  const status = await getThaneApiWithAuth<{ enabled: boolean }>("/v1/thane-cli/mfa/status", token);
+  return status.enabled ? "MFA enabled" : "MFA disabled";
+}
+
+async function startMfaSetup(store: ThaneStore): Promise<string> {
+  const token = requireHostedAuthToken(store);
+  const setup = await postThaneApiWithAuth<{ factorId: string; secret: string; otpauthUrl: string }>("/v1/thane-cli/mfa/setup/start", token);
+  return `MFA setup started\nfactor: ${setup.factorId}\nsecret: ${setup.secret}\notpauth: ${setup.otpauthUrl}\nfinish: /mfa-verify ${setup.factorId} 123456`;
+}
+
+async function verifyMfaSetup(store: ThaneStore, factorId: string, code: string): Promise<string> {
+  const token = requireHostedAuthToken(store);
+  const verified = await postThaneApiWithAuth<{ enabled: boolean }>("/v1/thane-cli/mfa/setup/verify", token, { factorId, code });
+  return verified.enabled ? "MFA enabled" : "MFA setup incomplete";
+}
+
+async function disableMfa(store: ThaneStore, code: string): Promise<string> {
+  const token = requireHostedAuthToken(store);
+  await postThaneApiWithAuth<{ enabled: boolean }>("/v1/thane-cli/mfa/disable", token, { code });
+  return "MFA disabled";
 }
 
 function renderScreen(inputText: string, state: {
@@ -783,6 +824,38 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = "Checking for updates...";
       await refreshUpdateStatus(true);
       status = renderUpdateStatus(updateStatus).replace(/\n/g, " ");
+      return;
+    }
+    if (trimmed === "/mfa") {
+      status = await mfaStatus(store);
+      return;
+    }
+    if (trimmed === "/mfa-setup") {
+      sidePanelLines = [`${BOLD}MFA Setup${RESET}`, "", ...(await startMfaSetup(store)).split("\n")];
+      showHelp = false;
+      showMenu = false;
+      workspacePickerOpen = false;
+      showReactionPicker = false;
+      status = "Add the secret to your authenticator app.";
+      return;
+    }
+    if (trimmed.startsWith("/mfa-verify ")) {
+      const match = trimmed.match(/^\/mfa-verify\s+(\S+)\s+(\d{6})$/);
+      if (!match?.[1] || !match[2]) {
+        status = "Usage: /mfa-verify <factor-id> <code>";
+        return;
+      }
+      status = await verifyMfaSetup(store, match[1], match[2]);
+      sidePanelLines = undefined;
+      return;
+    }
+    if (trimmed.startsWith("/mfa-disable ")) {
+      const code = trimmed.slice("/mfa-disable ".length).trim();
+      if (!/^\d{6}$/.test(code)) {
+        status = "Usage: /mfa-disable <code>";
+        return;
+      }
+      status = await disableMfa(store, code);
       return;
     }
     if (trimmed === "/workspace-art") {

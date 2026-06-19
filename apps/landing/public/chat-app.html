@@ -449,6 +449,8 @@
         authStep: "email",
         email: "",
         mfaChallengeToken: "",
+        mfaStatus: null,
+        mfaSetup: null,
         inviteToken: inviteMatch ? decodeURIComponent(inviteMatch[1]) : "",
         invitePreview: null,
         inviteAccepted: false,
@@ -931,6 +933,73 @@
         }
       }
 
+      async function refreshMfaStatus() {
+        try {
+          const body = await api("/v1/thane-cli/mfa/status", { method: "GET" });
+          state.mfaStatus = body.enabled ? "enabled" : "disabled";
+          state.error = "";
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
+      async function startMfaSetup() {
+        try {
+          const body = await api("/v1/thane-cli/mfa/setup/start", { method: "POST", body: JSON.stringify({}) });
+          state.mfaSetup = body;
+          state.mfaStatus = "setup";
+          state.error = "";
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
+      async function verifyMfaSetup(event) {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const code = String(form.get("code") || "").trim();
+        if (!state.mfaSetup?.factorId || !code) return;
+        try {
+          const body = await api("/v1/thane-cli/mfa/setup/verify", {
+            method: "POST",
+            body: JSON.stringify({ factorId: state.mfaSetup.factorId, code })
+          });
+          state.mfaSetup = null;
+          state.mfaStatus = body.enabled ? "enabled" : "disabled";
+          state.status = body.enabled ? "MFA enabled" : "MFA setup incomplete";
+          state.error = "";
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
+      async function disableMfa(event) {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const code = String(form.get("code") || "").trim();
+        if (!code) return;
+        try {
+          await api("/v1/thane-cli/mfa/disable", {
+            method: "POST",
+            body: JSON.stringify({ code })
+          });
+          state.mfaSetup = null;
+          state.mfaStatus = "disabled";
+          state.status = "MFA disabled";
+          state.error = "";
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
       function parseExpiresInput(value) {
         const match = String(value || "").trim().toLowerCase().match(/^(\d+)\s*([hd])?$/);
         if (!match) return 24 * 7;
@@ -1091,6 +1160,20 @@
                   <input name="displayName" value="${esc(state.session.displayName || "")}" placeholder="Display name" />
                   <button>Update name</button>
                 </form>
+                <div class="kv">
+                  <div>MFA: ${esc(state.mfaStatus || "unknown")}</div>
+                  <button onclick="refreshMfaStatus()">Check MFA</button>
+                  <button onclick="startMfaSetup()">Start MFA setup</button>
+                  ${state.mfaSetup ? `<div class="cmdline">${esc(`secret: ${state.mfaSetup.secret}\notpauth: ${state.mfaSetup.otpauthUrl}`)}</div>
+                    <form class="list" onsubmit="verifyMfaSetup(event)">
+                      <input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" />
+                      <button>Verify MFA</button>
+                    </form>` : ""}
+                  <form class="list" onsubmit="disableMfa(event)">
+                    <input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="disable code" />
+                    <button>Disable MFA</button>
+                  </form>
+                </div>
               </section>
               <section class="section">
                 <div class="section-head"><span>New workspace</span></div>
@@ -1166,6 +1249,10 @@
       window.invite = invite;
       window.createInviteLink = createInviteLink;
       window.updateDisplayName = updateDisplayName;
+      window.refreshMfaStatus = refreshMfaStatus;
+      window.startMfaSetup = startMfaSetup;
+      window.verifyMfaSetup = verifyMfaSetup;
+      window.disableMfa = disableMfa;
       window.copyText = copyText;
       window.sync = sync;
       window.render = render;
