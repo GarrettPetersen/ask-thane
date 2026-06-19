@@ -611,9 +611,9 @@ function renderScreen(inputText: string, state: {
     ? `${DIM}Tab completes:${RESET} ${matches.map((candidate) => candidate.label).join("  ")}`
     : "";
   const modePrefix = state.composerMode === "reply" && targetMessage
-    ? `Replying to @${targetMessage.author}. `
+    ? `Replying to ${targetMessage.author}. `
     : state.composerMode === "react" && targetMessage
-    ? `Reacting to @${targetMessage.author}. `
+    ? `Reacting to ${targetMessage.author}. `
     : "";
   const defaultStatus = state.focus === "sidebar"
     ? `${DIM}Up/down chooses a channel or DM. Down at the bottom types. Enter opens.${RESET}`
@@ -796,7 +796,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     composerMode = "reply";
     inputText = "";
     focus = "composer";
-    status = `Replying to @${message.author}`;
+    status = `Replying to ${message.author}`;
   };
 
   const startReact = (): void => {
@@ -809,7 +809,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     composerMode = "react";
     inputText = "";
     showReactionPicker = true;
-    status = `Reacting to @${message.author}`;
+    status = `Reacting to ${message.author}`;
   };
 
   const applyReaction = async (emoji: string): Promise<void> => {

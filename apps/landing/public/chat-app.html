@@ -1693,17 +1693,22 @@
           </main>`;
       }
 
+      function userDisplayLabel(user) {
+        return user?.displayName?.trim() || (user?.handle ? `@${user.handle}` : "unknown");
+      }
+
       function renderMessage(message, users, repliesByRoot, isReply = false) {
         const user = users.get(message.authorId);
         const replies = repliesByRoot.get(message.id) || [];
         const stamp = time(message.createdAt);
         const branch = isReply ? `<span class="msg-branch">└─</span> ` : "";
+        const author = userDisplayLabel(user);
         const sourceMarker = message.source === "terminal" ? " 🤖" : "";
         const reactionText = (message.reactions || []).map((reaction) => reaction.emoji).join(" ");
         const menuOpen = state.reactionMenuMessageId === message.id;
         const quickReactions = ["👍", "❤️", "😂", "🎉", "👀"];
         return `<article class="message ${isReply ? "reply" : ""} ${menuOpen ? "show-reactions" : ""}" ontouchstart="startLongPress(event, ${jsString(message.id)})" ontouchmove="markTouchMoved()" ontouchend="cancelLongPress()" ontouchcancel="cancelLongPress()" oncontextmenu="openReactionMenu(event, ${jsString(message.id)})">
-          <span class="message-meta">${branch}<span class="msg-marker">  ${esc(stamp)}</span> <span class="message-author">@${esc(user?.handle || "unknown")}${sourceMarker}</span>: </span><span class="message-text">${esc(message.text)}</span>${replies.length && !isReply ? `<span class="thread-count"> (${replies.length} repl${replies.length === 1 ? "y" : "ies"})</span>` : ""}${reactionText ? `<span class="thread-count"> ${esc(reactionText)}</span>` : ""}
+          <span class="message-meta">${branch}<span class="msg-marker">  ${esc(stamp)}</span> <span class="message-author">${esc(author)}${sourceMarker}</span>: </span><span class="message-text">${esc(message.text)}</span>${replies.length && !isReply ? `<span class="thread-count"> (${replies.length} repl${replies.length === 1 ? "y" : "ies"})</span>` : ""}${reactionText ? `<span class="thread-count"> ${esc(reactionText)}</span>` : ""}
           <span class="message-actions"><button class="message-action" title="React" onclick="openReactionMenu(event, ${jsString(message.id)})">+</button>${!isReply ? `<button class="message-action" title="Reply" onclick="event.stopPropagation(); replyTo(${jsString(message.id)})">↵</button>` : ""}</span>
           ${menuOpen ? `<span class="reaction-menu">${quickReactions.map((emoji) => `<button onclick="reactTo(${jsString(message.id)}, ${jsString(emoji)})">${esc(emoji)}</button>`).join("")}<form class="reaction-custom" onsubmit="customReaction(event, ${jsString(message.id)})"><input name="emoji" maxlength="12" placeholder="+"/><button>ok</button></form><button title="Close" onclick="closeReactionMenu()">x</button></span>` : ""}
           ${!isReply && replies.length ? replies.map((reply) => renderMessage(reply, users, repliesByRoot, true)).join("") : ""}
@@ -1780,7 +1785,7 @@
               </section>
               <div class="statusbar"><span><strong>${channel?.kind === "dm" ? "@" : "#"}${esc(channel?.name || "general")}</strong> Up messages. Left channels. Right messages.</span><span>${messages.length} msg${messages.length === 1 ? "" : "s"} · ${state.realtimeStatus === "live" ? "live" : "sync 30s"}</span></div>
               <div class="composer-wrap">
-                ${replyTarget ? `<div class="reply-target"><span>replying to @${esc(users.get(replyTarget.authorId)?.handle || "unknown")}: ${esc(replyTarget.text.slice(0, 80))}</span><button onclick="state.replyToId=''; render()">cancel</button></div>` : ""}
+                ${replyTarget ? `<div class="reply-target"><span>replying to ${esc(userDisplayLabel(users.get(replyTarget.authorId)))}: ${esc(replyTarget.text.slice(0, 80))}</span><button onclick="state.replyToId=''; render()">cancel</button></div>` : ""}
                 <form class="composer" onsubmit="sendMessage(event)">
                   <span class="prompt-symbol">${replyTarget ? "reply>" : ">"}</span>
                   <textarea name="text" oninput="updateDraft(this.value)" placeholder="${replyTarget ? "Type a reply" : `Type a message for #${esc(channel?.name || "general")}`}">${esc(state.draftText)}</textarea>
@@ -1812,7 +1817,7 @@
                 <form class="list" onsubmit="submitSearch(event)">
                   <input name="search" value="${esc(state.searchQuery)}" oninput="updateSearch(this.value)" placeholder="Search messages" />
                   <button>Search messages</button>
-                  ${searchQuery ? `<div class="kv">${searchResults.length ? searchResults.map((message) => `<button type="button" class="item" onclick="state.activeChannelId=${jsString(message.channelId)}; state.searchQuery=''; render()">#${esc(snap.channels.find((item) => item.id === message.channelId)?.name || "channel")} ${esc((users.get(message.authorId)?.handle || "unknown") + ": " + message.text.slice(0, 80))}</button>`).join("") : `<div class="muted small">No results</div>`}</div>` : ""}
+                  ${searchQuery ? `<div class="kv">${searchResults.length ? searchResults.map((message) => `<button type="button" class="item" onclick="state.activeChannelId=${jsString(message.channelId)}; state.searchQuery=''; render()">#${esc(snap.channels.find((item) => item.id === message.channelId)?.name || "channel")} ${esc(userDisplayLabel(users.get(message.authorId)) + ": " + message.text.slice(0, 80))}</button>`).join("") : `<div class="muted small">No results</div>`}</div>` : ""}
                 </form>
               </section>
               <section class="section">

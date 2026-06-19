@@ -59,6 +59,13 @@ function displayNameFromEmail(email: string): string {
   return handle.charAt(0).toUpperCase() + handle.slice(1);
 }
 
+function userDisplayLabel(user: ThaneUser | undefined, fallback: string): string {
+  if (!user) {
+    return fallback;
+  }
+  return user.displayName.trim() || `@${user.handle}`;
+}
+
 function makeLoginCode(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
@@ -1604,7 +1611,7 @@ export class ThaneStore {
         unreadCount: inboxUnread,
         mentionCount,
         ...(latest ? { latestMessageAt: latest.createdAt } : {}),
-        ...(latest ? { latestAuthor: users.get(latest.authorId)?.handle ?? latest.authorId } : {}),
+        ...(latest ? { latestAuthor: userDisplayLabel(users.get(latest.authorId), latest.authorId) } : {}),
         ...(latest ? { latestText: latest.text } : {})
       });
     }
@@ -1784,9 +1791,7 @@ export class ThaneStore {
         .filter((channel) => channel.workspaceId === workspaceId)
         .map((channel) => [channel.id, channel])
     );
-    const users = new Map(
-      this.data.users.filter((user) => user.workspaceId === workspaceId).map((user) => [user.id, user.handle])
-    );
+    const users = new Map(this.data.users.filter((user) => user.workspaceId === workspaceId).map((user) => [user.id, user]));
     const repliesByRoot = new Map<string, number>();
     for (const message of this.data.messages) {
       if (message.workspaceId === workspaceId && message.threadRootId) {
@@ -1799,7 +1804,7 @@ export class ThaneStore {
       workspace: workspace?.slug ?? workspaceId,
       channel: channels.get(message.channelId)?.name ?? message.channelId,
       conversationKind: channels.get(message.channelId)?.kind ?? "channel",
-      author: users.get(message.authorId) ?? message.authorId,
+      author: userDisplayLabel(users.get(message.authorId), message.authorId),
       text: message.text,
       createdAt: message.createdAt,
       ...(message.source ? { source: message.source } : {}),
