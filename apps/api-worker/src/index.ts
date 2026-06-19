@@ -8,6 +8,7 @@ interface Env {
   THANE_CLI_AUTH_SECRET?: string;
   THANE_CLI_EMAIL_FROM?: string;
   THANE_CLI_INVITE_BASE_URL?: string;
+  THANE_CLI_WEB_INVITE_BASE_URL?: string;
   BUILD_ENV?: string;
   BUILD_GIT_SHA?: string;
   BUILD_DEPLOYED_AT?: string;
@@ -539,6 +540,10 @@ function inviteBaseUrl(env: Env, request: Request): string {
   return `${url.origin}/invite`;
 }
 
+function webInviteBaseUrl(env: Env): string {
+  return env.THANE_CLI_WEB_INVITE_BASE_URL?.trim().replace(/\/+$/g, "") || "https://chat.askthane.com/invite";
+}
+
 function extractInviteToken(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -842,6 +847,7 @@ async function handleThaneCliWorkspaceInviteLanding(token: string, env: Env, req
 
   const inviteUrl = new URL(request.url);
   const inviteLink = `${inviteUrl.origin}/invite/${encodeURIComponent(token)}`;
+  const webInviteLink = `${webInviteBaseUrl(env)}/${encodeURIComponent(token)}`;
   const installCommand = "npm install -g @ask-thane/thane-cli";
   const initCommand = "thane init";
   const acceptCommand = `thane invite-link accept ${inviteLink}`;
@@ -862,6 +868,7 @@ async function handleThaneCliWorkspaceInviteLanding(token: string, env: Env, req
     .eyebrow { margin: 0 0 12px; color: #7a7166; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
     h1 { margin: 0; font-size: clamp(32px, 6vw, 54px); line-height: 1.02; letter-spacing: 0; }
     .sub { margin: 16px 0 26px; color: #625a51; font-size: 18px; line-height: 1.55; max-width: 58ch; }
+    .primary { display: inline-flex; align-items: center; justify-content: center; min-height: 46px; border-radius: 8px; background: #2d2a26; color: #fff; padding: 0 18px; text-decoration: none; font-weight: 700; margin-bottom: 26px; }
     .meta { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 28px; }
     .pill { border: 1px solid #ded9cf; border-radius: 999px; padding: 7px 11px; color: #5b534a; background: #fbfaf8; font-size: 14px; }
     .steps { display: grid; gap: 14px; }
@@ -881,12 +888,13 @@ async function handleThaneCliWorkspaceInviteLanding(token: string, env: Env, req
     <section>
       <p class="eyebrow">Thane Chat Invite</p>
       <h1>Join ${escapeHtml(row!.workspace_name)}</h1>
-      <p class="sub">You have been invited to the ${escapeHtml(row!.workspace_name)} workspace in Thane Chat, a team chat interface that runs in your terminal.</p>
+      <p class="sub">You have been invited to the ${escapeHtml(row!.workspace_name)} workspace in Thane Chat.</p>
       <div class="meta">
         <span class="pill">Workspace: ${escapeHtml(row!.workspace_slug)}</span>
         <span class="pill">Role: ${escapeHtml(row!.role)}</span>
         <span class="pill">Expires: ${escapeHtml(expires)} UTC</span>
       </div>
+      <a class="primary" href="${escapeHtml(webInviteLink)}">Accept in Thane Chat</a>
       <div class="steps">
         <div class="step">
           <h2>1. Install the CLI</h2>
@@ -901,7 +909,7 @@ async function handleThaneCliWorkspaceInviteLanding(token: string, env: Env, req
           <div class="command-row"><pre><code>${escapeHtml(acceptCommand)}</code></pre><button data-copy="${escapeHtml(acceptCommand)}">Copy</button></div>
         </div>
       </div>
-      <p class="note">Already have Thane Chat installed? Run the accept command. Need the product page? Visit <a href="https://askthane.com/chat">askthane.com/chat</a>.</p>
+      <p class="note">No install is required for the web app. Already have Thane Chat installed? Run the accept command instead.</p>
     </section>
   </main>
   <script>
@@ -943,7 +951,16 @@ async function sendVerificationEmail(env: Env, input: { email: string; code: str
 
 async function sendWorkspaceInviteEmail(
   env: Env,
-  input: { email: string; invitedBy: string; workspaceName: string; workspaceSlug: string; role: "admin" | "member"; url: string; expiresAt: string }
+  input: {
+    email: string;
+    invitedBy: string;
+    workspaceName: string;
+    workspaceSlug: string;
+    role: "admin" | "member";
+    url: string;
+    cliUrl?: string;
+    expiresAt: string;
+  }
 ): Promise<boolean> {
   if (!env.EMAIL) {
     return false;
@@ -955,9 +972,8 @@ async function sendWorkspaceInviteEmail(
     subject: `${input.invitedBy} invited you to ${input.workspaceName} on Thane Chat`,
     text:
       `${input.invitedBy} invited you to join ${input.workspaceName} (${input.workspaceSlug}) on Thane Chat as ${input.role}.\n\n` +
-      `Accept the invite:\n${input.url}\n\n` +
-      `Install the CLI first if needed:\nnpm install -g @ask-thane/thane-cli\n\n` +
-      `Then run:\nthane init\nthane invite-link accept ${input.url}\n\n` +
+      `Accept the invite in your browser:\n${input.url}\n\n` +
+      `CLI fallback:\nnpm install -g @ask-thane/thane-cli\nthane init\nthane invite-link accept ${input.cliUrl ?? input.url}\n\n` +
       `This invite expires ${input.expiresAt}.`
   });
   return true;
@@ -1582,6 +1598,7 @@ async function handleThaneCliWorkspaceInviteCreate(request: Request, env: Env): 
     .run();
 
   const url = `${inviteBaseUrl(env, request)}/${token}`;
+  const webUrl = `${webInviteBaseUrl(env)}/${token}`;
   const emailSent = inviteeEmail
     ? await sendWorkspaceInviteEmail(env, {
         email: inviteeEmail,
@@ -1589,7 +1606,8 @@ async function handleThaneCliWorkspaceInviteCreate(request: Request, env: Env): 
         workspaceName: workspace.name,
         workspaceSlug: workspace.slug,
         role,
-        url,
+        url: webUrl,
+        cliUrl: url,
         expiresAt
       })
     : false;
@@ -1601,6 +1619,7 @@ async function handleThaneCliWorkspaceInviteCreate(request: Request, env: Env): 
     invite: {
       url,
       token,
+      webUrl,
       workspace,
       role,
       expiresAt,

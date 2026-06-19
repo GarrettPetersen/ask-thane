@@ -390,11 +390,15 @@
       const API = "https://api.askthane.com";
       const storageKey = "thane.web.session";
       const root = document.querySelector("#root");
+      const inviteMatch = location.pathname.match(/^\/invite\/([^/?#]+)/);
       const state = {
         session: JSON.parse(localStorage.getItem(storageKey) || "null"),
         authStep: "email",
         email: "",
         mfaChallengeToken: "",
+        inviteToken: inviteMatch ? decodeURIComponent(inviteMatch[1]) : "",
+        invitePreview: null,
+        inviteAccepted: false,
         snapshot: null,
         activeWorkspaceId: "",
         activeChannelId: "",
@@ -421,6 +425,39 @@
         const body = await res.json().catch(() => ({}));
         if (!res.ok || body.ok === false) throw new Error(body.error || `HTTP ${res.status}`);
         return body;
+      }
+
+      async function previewInvite() {
+        if (!state.inviteToken || state.invitePreview) return;
+        const body = await api(`/v1/thane-cli/workspace-invites/${encodeURIComponent(state.inviteToken)}`, {
+          headers: { "content-type": "application/json" }
+        });
+        state.invitePreview = body.invite;
+      }
+
+      async function acceptPendingInvite() {
+        if (!state.inviteToken || !state.session?.authToken || state.inviteAccepted) return false;
+        const body = await api("/v1/thane-cli/workspace-invites/accept", {
+          method: "POST",
+          body: JSON.stringify({ token: state.inviteToken })
+        });
+        state.inviteAccepted = true;
+        state.activeWorkspaceId = body.workspace?.id || state.activeWorkspaceId;
+        state.activeChannelId = "";
+        state.replyToId = "";
+        state.status = `Joined ${body.workspace?.slug || "workspace"}`;
+        history.replaceState(null, "", "/");
+        await sync();
+        return true;
+      }
+
+      async function finishSignIn(account) {
+        saveSession(account);
+        if (state.inviteToken) {
+          await acceptPendingInvite();
+        } else {
+          await sync();
+        }
       }
 
       function esc(value) {
@@ -560,8 +597,7 @@
             state.mfaChallengeToken = body.mfaChallengeToken;
             state.status = "Enter your authenticator code.";
           } else {
-            saveSession(body.account);
-            await sync();
+            await finishSignIn(body.account);
           }
         } catch (error) {
           state.error = error.message;
@@ -580,8 +616,7 @@
             method: "POST",
             body: JSON.stringify({ challengeToken: state.mfaChallengeToken, code })
           });
-          saveSession(body.account);
-          await sync();
+          await finishSignIn(body.account);
         } catch (error) {
           state.error = error.message;
         } finally {
@@ -725,12 +760,14 @@
 
       function renderLogin() {
         const codeForm = state.authStep === "code" || state.authStep === "mfa";
+        const invite = state.invitePreview;
         root.innerHTML = `
           <main class="login">
             <section class="login-card">
               <div class="brand">
                 <div class="sig">╭─ THANE CHAT ─╮\n│              │\n╰─ ONLINE     ─╯</div>
-                <div class="title"><h1>Sign in</h1><span class="state">hosted</span></div>
+                <div class="title"><h1>${invite ? `Join ${esc(invite.workspace?.name || "workspace")}` : "Sign in"}</h1><span class="state">hosted</span></div>
+                ${invite ? `<p class="muted small">Workspace: ${esc(invite.workspace?.slug || "")} · role: ${esc(invite.role || "member")}</p>` : ""}
               </div>
               <form class="login-form" onsubmit="${codeForm ? (state.authStep === "mfa" ? "verifyMfa(event)" : "verifyLogin(event)") : "startLogin(event)"}">
                 ${codeForm ? `<p class="muted small">${esc(state.status)}</p>` : ""}
@@ -880,7 +917,14 @@
       window.state = state;
 
       if (state.session?.authToken) {
-        sync().catch((error) => { state.error = error.message; saveSession(null); }).finally(render);
+        Promise.resolve()
+          .then(() => state.inviteToken ? previewInvite().catch(() => {}) : undefined)
+          .then(() => state.inviteToken ? acceptPendingInvite() : sync())
+          .catch((error) => {
+            state.error = error.message;
+            if (!state.inviteToken) saveSession(null);
+          })
+          .finally(render);
         setInterval(() => {
           const composerActive = document.activeElement?.matches?.(".composer textarea");
           sync()
@@ -891,7 +935,11 @@
             .catch(() => {});
         }, 5000);
       } else {
-        render();
+        if (state.inviteToken) {
+          previewInvite().catch((error) => { state.error = error.message; }).finally(render);
+        } else {
+          render();
+        }
       }
     </script>
   </body>

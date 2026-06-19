@@ -439,12 +439,15 @@ describe("@ask-thane/api-worker", () => {
       }
     });
     expect(body.invite.url).toContain("https://api.askthane.com/invite/");
+    expect(body.invite.webUrl).toContain("https://chat.askthane.com/invite/");
     expect(sendEmail).toHaveBeenCalledWith({
       from: "Thane <noreply@askthane.com>",
       to: "alex@example.com",
       subject: expect.stringContaining("invited you to Acme Inc"),
-      text: expect.stringContaining("thane invite-link accept")
+      text: expect.stringContaining("Accept the invite in your browser:")
     });
+    expect(sendEmail.mock.calls[0]?.[0].text).toContain("https://chat.askthane.com/invite/");
+    expect(sendEmail.mock.calls[0]?.[0].text).toContain("thane invite-link accept https://api.askthane.com/invite/");
     expect(prepare).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO thane_cli_workspace_invites"));
     const inviteInsert = calls.find((call) => call.sql.includes("INSERT INTO thane_cli_workspace_invites"));
     expect(inviteInsert?.args[2]).toBe("wsp_1");
@@ -542,6 +545,8 @@ describe("@ask-thane/api-worker", () => {
     expect(res.headers.get("content-type")).toContain("text/html");
     const html = await res.text();
     expect(html).toContain("Join Acme Inc");
+    expect(html).toContain("Accept in Thane Chat");
+    expect(html).toContain("https://chat.askthane.com/invite/token_123");
     expect(html).toContain("npm install -g @ask-thane/thane-cli");
     expect(html).toContain("thane init");
     expect(html).toContain("thane invite-link accept https://api.askthane.com/invite/token_123");
