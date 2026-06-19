@@ -218,6 +218,7 @@
         display: grid;
         grid-template-columns: 1fr auto;
         gap: 10px;
+        align-items: end;
       }
       .composer-wrap {
         border-top: 1px solid var(--line);
@@ -226,9 +227,14 @@
         bottom: 0;
         z-index: 10;
         box-shadow: 0 -12px 28px rgba(0, 0, 0, 0.24);
+        min-height: 69px;
       }
       .composer-wrap .composer {
         border-top: 0;
+      }
+      .composer textarea {
+        display: block;
+        min-height: 44px;
       }
       .reply-target {
         display: flex;
@@ -273,13 +279,6 @@
         color: var(--muted);
         padding: 18px;
         text-align: center;
-      }
-      .empty-compose {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 10px;
-        margin-top: 14px;
-        text-align: left;
       }
 
       @media (max-width: 980px) {
@@ -654,7 +653,7 @@
                 <button onclick="saveSession(null); location.reload()">sign out</button>
               </header>
               <section class="messages">
-                ${rootMessages.length ? rootMessages.map((message) => renderMessage(message, users, repliesByRoot)).join("") : `<div class="empty">No messages in this channel yet.<form class="empty-compose" onsubmit="sendMessage(event)"><textarea name="text" placeholder="Type a message for #${esc(channel?.name || "general")}"></textarea><button>send</button></form></div>`}
+                ${rootMessages.length ? rootMessages.map((message) => renderMessage(message, users, repliesByRoot)).join("") : `<div class="empty">No messages in this channel yet.</div>`}
               </section>
               <div class="composer-wrap">
                 ${replyTarget ? `<div class="reply-target"><span>replying to @${esc(users.get(replyTarget.authorId)?.handle || "unknown")}: ${esc(replyTarget.text.slice(0, 80))}</span><button onclick="state.replyToId=''; render()">cancel</button></div>` : ""}
