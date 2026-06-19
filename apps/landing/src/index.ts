@@ -336,6 +336,13 @@ export default {
       return handleWaitlistSignup(request, env);
     }
 
+    if (!isChatHost && (url.pathname === "/" || url.pathname === "")) {
+      const assetUrl = new URL(request.url);
+      assetUrl.pathname = "/index.html";
+      const assetRequest = new Request(assetUrl.toString(), request);
+      return env.ASSETS.fetch(assetRequest);
+    }
+
     if (isChatHost && (request.method === "GET" || request.method === "HEAD") && !url.pathname.includes(".")) {
       const assetUrl = new URL(request.url);
       assetUrl.pathname = "/chat-app.html";

@@ -179,18 +179,19 @@ describe("@ask-thane/landing", () => {
     expect(db.prepare).toHaveBeenCalledTimes(1);
   });
 
-  it("falls through to static assets for unknown routes", async () => {
-    const assetResponse = new Response("asset page", { status: 200 });
+  it("serves the landing page at the apex root", async () => {
+    const assetResponse = new Response("landing page", { status: 200 });
     const fetchAssets = vi.fn(async () => assetResponse);
     const env = {
       DB: makeDbStub(),
       ASSETS: { fetch: fetchAssets }
     };
 
-    const req = new Request("https://site.local/");
-    const res = await worker.fetch(req, env as never);
-    expect(fetchAssets).toHaveBeenCalledWith(req);
-    expect(await res.text()).toBe("asset page");
+    const res = await worker.fetch(new Request("https://askthane.com/"), env as never);
+    expect(fetchAssets).toHaveBeenCalledTimes(1);
+    const calledRequest = fetchAssets.mock.calls[0]?.[0] as Request;
+    expect(new URL(calledRequest.url).pathname).toBe("/index.html");
+    expect(await res.text()).toBe("landing page");
   });
 
   it("serves the hosted chat app from the chat custom domain", async () => {
