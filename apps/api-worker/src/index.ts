@@ -2054,7 +2054,16 @@ async function handleThaneCliEvents(request: Request, env: Env): Promise<Respons
   if (!stub) {
     return Response.json({ ok: false, error: "events_unavailable" }, { status: 503 });
   }
-  return stub.fetch(request);
+  try {
+    return await stub.fetch(request);
+  } catch (error) {
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    if (url.searchParams.get("debug") === "1") {
+      return Response.json({ ok: false, error: "events_upgrade_failed", message }, { status: 500 });
+    }
+    console.error("Thane Chat events upgrade failed", message);
+    return Response.json({ ok: false, error: "events_upgrade_failed" }, { status: 500 });
+  }
 }
 
 async function handleThaneCliChannelCreate(request: Request, env: Env): Promise<Response> {
