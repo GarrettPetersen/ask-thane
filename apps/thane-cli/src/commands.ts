@@ -166,7 +166,7 @@ export const cliCommands: CliCommand[] = [
     category: "Members",
     command: "thane invite-link accept <link-or-token> [--json]",
     description: "Accept a workspace invite link and switch to that workspace.",
-    examples: ["thane invite-link accept https://api.askthane.com/invite/abc123"]
+    examples: ["thane invite-link accept https://api.askthane.com/invite/abc123", "thane invite-link accept https://chat.askthane.com/invite/abc123"]
   },
   {
     category: "Members",

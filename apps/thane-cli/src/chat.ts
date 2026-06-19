@@ -417,6 +417,7 @@ async function createWorkspaceInviteLink(store: ThaneStore, role: "admin" | "mem
   const response = await postThaneApiWithAuth<{
     invite: {
       url: string;
+      webUrl?: string;
       role: "admin" | "member";
       expiresAt: string;
       inviteeEmail?: string;
@@ -433,7 +434,8 @@ async function createWorkspaceInviteLink(store: ThaneStore, role: "admin" | "mem
   if (response.invite.inviteeEmail) {
     return `${response.invite.emailSent ? "Sent" : "Created"} invite for ${response.invite.inviteeEmail} (${response.invite.role}, expires ${response.invite.expiresAt})`;
   }
-  return `${response.invite.url} (${response.invite.role}, expires ${response.invite.expiresAt})`;
+  const webUrl = response.invite.webUrl ?? response.invite.url;
+  return `web: ${webUrl}\ncli: ${response.invite.url} (${response.invite.role}, expires ${response.invite.expiresAt})`;
 }
 
 function renderScreen(inputText: string, state: {

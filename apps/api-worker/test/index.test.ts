@@ -455,7 +455,11 @@ describe("@ask-thane/api-worker", () => {
     expect(inviteInsert?.args[6]).toBe("owner@example.com");
   });
 
-  it("accepts valid Thane CLI workspace invite links", async () => {
+  it.each([
+    ["raw token", "token_123"],
+    ["API invite URL", "https://api.askthane.com/invite/token_123"],
+    ["web invite URL", "https://chat.askthane.com/invite/token_123"]
+  ])("accepts valid Thane CLI workspace invite links from a %s", async (_label, inviteToken) => {
     const inviteRow = {
       id: "inv_1",
       workspace_id: "wsp_1",
@@ -498,7 +502,7 @@ describe("@ask-thane/api-worker", () => {
       new Request("https://api.local/v1/thane-cli/workspace-invites/accept", {
         method: "POST",
         headers: { Authorization: `Bearer ${await signAuthToken("alex@example.com")}` },
-        body: JSON.stringify({ token: "https://api.askthane.com/invite/token_123" })
+        body: JSON.stringify({ token: inviteToken })
       }),
       authEnv
     );

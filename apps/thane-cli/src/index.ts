@@ -1073,6 +1073,7 @@ async function main(): Promise<void> {
       const response = await postThaneApiWithAuth<{
         invite: {
           url: string;
+          webUrl?: string;
           token: string;
           workspace: { id: string; slug: string; name: string };
           role: "admin" | "member";
@@ -1094,6 +1095,8 @@ async function main(): Promise<void> {
         ? printJson(response)
         : process.stdout.write(
             `sent invite to ${email} for ${response.invite.workspace.slug}\n` +
+              `web link: ${response.invite.webUrl ?? response.invite.url}\n` +
+              `cli link: ${response.invite.url}\n` +
               `role: ${response.invite.role}\n` +
               `expires: ${response.invite.expiresAt}\n`
           );
@@ -1118,6 +1121,7 @@ async function main(): Promise<void> {
     const response = await postThaneApiWithAuth<{
       invite: {
         url: string;
+        webUrl?: string;
         token: string;
         workspace: { id: string; slug: string; name: string };
         role: "admin" | "member";
@@ -1135,7 +1139,9 @@ async function main(): Promise<void> {
     wantsJson(args)
       ? printJson(response)
       : process.stdout.write(
-          `invite link for ${response.invite.workspace.slug}: ${response.invite.url}\n` +
+          `invite link for ${response.invite.workspace.slug}\n` +
+            `web link: ${response.invite.webUrl ?? response.invite.url}\n` +
+            `cli link: ${response.invite.url}\n` +
             `role: ${response.invite.role}\n` +
             `expires: ${response.invite.expiresAt}\n`
         );
