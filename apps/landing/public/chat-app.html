@@ -568,6 +568,7 @@
         channelMenuOpen: localStorage.getItem("thane.web.channelMenuOpen") === "true",
         cliInstallOpen: false,
         settingsMenuOpen: false,
+        settingsMenuScrollTop: 0,
         realtimeSocket: null,
         realtimeWorkspaceId: "",
         realtimeReconnectTimer: null,
@@ -1476,12 +1477,14 @@
       function openSettingsMenu() {
         state.profileDraft = state.session?.displayName || "";
         state.settingsMenuOpen = true;
+        state.settingsMenuScrollTop = 0;
         render();
       }
 
       function closeSettingsMenu() {
         state.settingsMenuOpen = false;
         state.profileDraft = null;
+        state.settingsMenuScrollTop = 0;
         render();
       }
 
@@ -1539,7 +1542,7 @@
         } = input;
         return `
           <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="settings-menu-title" onclick="if(event.target===this) closeSettingsMenu()">
-            <section class="modal">
+            <section class="modal" data-settings-modal onscroll="state.settingsMenuScrollTop=this.scrollTop">
               <div class="modal-head">
                 <div class="modal-title">
                   <h2 id="settings-menu-title">Menu</h2>
@@ -1705,6 +1708,9 @@
       }
 
       function renderApp() {
+        const settingsMenuScrollTop = state.settingsMenuOpen
+          ? document.querySelector("[data-settings-modal]")?.scrollTop ?? state.settingsMenuScrollTop
+          : 0;
         const snap = state.snapshot || { workspaces: [], channels: [], messages: [], users: [] };
         const workspace = snap.workspaces.find((item) => item.id === state.activeWorkspaceId) || snap.workspaces[0];
         const channel = snap.channels.find((item) => item.id === state.activeChannelId) || snap.channels[0];
@@ -1819,6 +1825,8 @@
         requestAnimationFrame(() => {
           const scroller = document.querySelector(".messages");
           if (scroller) scroller.scrollTop = scroller.scrollHeight;
+          const settingsModal = document.querySelector("[data-settings-modal]");
+          if (settingsModal instanceof HTMLElement) settingsModal.scrollTop = settingsMenuScrollTop;
         });
       }
 
