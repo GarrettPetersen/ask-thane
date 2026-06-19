@@ -649,6 +649,19 @@ function webInviteBaseUrl(env: Env): string {
   return env.THANE_CLI_WEB_INVITE_BASE_URL?.trim().replace(/\/+$/g, "") || "https://chat.askthane.com/invite";
 }
 
+function appendInviteeEmailToUrl(url: string, inviteeEmail?: string | null): string {
+  if (!inviteeEmail) {
+    return url;
+  }
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.set("email", inviteeEmail);
+    return parsed.toString();
+  } catch (_error) {
+    return url;
+  }
+}
+
 function extractInviteToken(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -680,11 +693,12 @@ async function inviteByToken(env: Env, token: string): Promise<{
   revoked_at?: string | null;
   accepted_count?: number | null;
   max_uses?: number | null;
+  invitee_email?: string | null;
 } | null> {
   try {
     return await env.DB
       .prepare(
-        `SELECT id, workspace_id, workspace_slug, workspace_name, role, expires_at, revoked_at, accepted_count, max_uses
+        `SELECT id, workspace_id, workspace_slug, workspace_name, role, expires_at, revoked_at, accepted_count, max_uses, invitee_email
          FROM thane_cli_workspace_invites
          WHERE token_hash = ?
          LIMIT 1`
@@ -700,9 +714,32 @@ async function inviteByToken(env: Env, token: string): Promise<{
         revoked_at?: string | null;
         accepted_count?: number | null;
         max_uses?: number | null;
+        invitee_email?: string | null;
       }>();
   } catch (error) {
-    if (String(error).toLowerCase().includes("no such table")) {
+    const message = String(error).toLowerCase();
+    if (message.includes("no such column") && message.includes("invitee_email")) {
+      return await env.DB
+        .prepare(
+          `SELECT id, workspace_id, workspace_slug, workspace_name, role, expires_at, revoked_at, accepted_count, max_uses
+           FROM thane_cli_workspace_invites
+           WHERE token_hash = ?
+           LIMIT 1`
+        )
+        .bind(await hashInviteToken(token))
+        .first<{
+          id: string;
+          workspace_id: string;
+          workspace_slug: string;
+          workspace_name: string;
+          role: "admin" | "member";
+          expires_at: string;
+          revoked_at?: string | null;
+          accepted_count?: number | null;
+          max_uses?: number | null;
+        }>();
+    }
+    if (message.includes("no such table")) {
       return null;
     }
     throw error;
@@ -1300,7 +1337,7 @@ async function handleThaneCliWorkspaceInviteLanding(token: string, env: Env, req
 
   const inviteUrl = new URL(request.url);
   const inviteLink = `${inviteUrl.origin}/invite/${encodeURIComponent(token)}`;
-  const webInviteLink = `${webInviteBaseUrl(env)}/${encodeURIComponent(token)}`;
+  const webInviteLink = appendInviteeEmailToUrl(`${webInviteBaseUrl(env)}/${encodeURIComponent(token)}`, row!.invitee_email);
   const installCommand = "npm install -g @ask-thane/thane-cli";
   const initCommand = "thane init";
   const acceptCommand = `thane invite-link accept ${inviteLink}`;
@@ -2644,18 +2681,36 @@ async function handleThaneCliWorkspaceInviteCreate(request: Request, env: Env): 
   const token = makeInviteToken();
   const createdAt = nowIso();
   const expiresAt = new Date(Date.now() + expiresInHours * 60 * 60 * 1000).toISOString();
-  await env.DB
-    .prepare(
-      `INSERT INTO thane_cli_workspace_invites (
-         id, token_hash, workspace_id, workspace_slug, workspace_name, role,
-         created_by_email, created_at, expires_at, max_uses
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .bind(makeId("inv"), await hashInviteToken(token), workspace.id, workspace.slug, workspace.name, role, email, createdAt, expiresAt, maxUses)
-    .run();
+  const inviteId = makeId("inv");
+  const tokenHash = await hashInviteToken(token);
+  try {
+    await env.DB
+      .prepare(
+        `INSERT INTO thane_cli_workspace_invites (
+           id, token_hash, workspace_id, workspace_slug, workspace_name, role,
+           created_by_email, created_at, expires_at, max_uses, invitee_email
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(inviteId, tokenHash, workspace.id, workspace.slug, workspace.name, role, email, createdAt, expiresAt, maxUses, inviteeEmail)
+      .run();
+  } catch (error) {
+    const message = String(error).toLowerCase();
+    if (!message.includes("no such column") || !message.includes("invitee_email")) {
+      throw error;
+    }
+    await env.DB
+      .prepare(
+        `INSERT INTO thane_cli_workspace_invites (
+           id, token_hash, workspace_id, workspace_slug, workspace_name, role,
+           created_by_email, created_at, expires_at, max_uses
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(inviteId, tokenHash, workspace.id, workspace.slug, workspace.name, role, email, createdAt, expiresAt, maxUses)
+      .run();
+  }
 
   const url = `${inviteBaseUrl(env, request)}/${token}`;
-  const webUrl = `${webInviteBaseUrl(env)}/${token}`;
+  const webUrl = appendInviteeEmailToUrl(`${webInviteBaseUrl(env)}/${token}`, inviteeEmail);
   const emailSent = inviteeEmail
     ? await sendWorkspaceInviteEmail(env, {
         email: inviteeEmail,
@@ -2697,7 +2752,8 @@ async function handleThaneCliWorkspaceInvitePreview(token: string, env: Env): Pr
     invite: {
       workspace: renderInviteWorkspace(row!),
       role: row!.role,
-      expiresAt: row!.expires_at
+      expiresAt: row!.expires_at,
+      ...(row!.invitee_email ? { inviteeEmail: row!.invitee_email } : {})
     }
   });
 }
@@ -2719,6 +2775,9 @@ async function handleThaneCliWorkspaceInviteAccept(request: Request, env: Env): 
   }
   if (await isThaneCliWorkspaceBanned(env, row!.workspace_id, email)) {
     return Response.json({ ok: false, error: "workspace_banned" }, { status: 403 });
+  }
+  if (row!.invitee_email && normalizeEmail(row!.invitee_email) !== email) {
+    return Response.json({ ok: false, error: "invite_email_mismatch" }, { status: 403 });
   }
   const existingMember = await requireThaneCliWorkspaceMember(env, row!.workspace_id, email);
   if (!existingMember) {

@@ -29,6 +29,8 @@ export const slashCommands: SlashCommand[] = [
   { name: "/channel-invite", usage: "/channel-invite <handle-or-email>", description: "Add a member to the focused channel.", needsArgument: true },
   { name: "/channel-remove", usage: "/channel-remove <handle-or-email>", description: "Admin: remove a member from the focused channel.", needsArgument: true },
   { name: "/members", usage: "/members", description: "Show members of the focused channel.", needsArgument: false },
+  { name: "/channel-members", usage: "/channel-members", description: "Show members of the focused channel.", needsArgument: false },
+  { name: "/workspace-members", usage: "/workspace-members", description: "Show members of the active workspace.", needsArgument: false },
   { name: "/member-remove", usage: "/member-remove <handle-or-email>", description: "Admin: remove a workspace member.", needsArgument: true },
   { name: "/member-role", usage: "/member-role <handle-or-email> <admin|member>", description: "Admin: change a member role.", needsArgument: true },
   { name: "/member-ban", usage: "/member-ban <handle-or-email>", description: "Admin: ban a workspace member.", needsArgument: true },

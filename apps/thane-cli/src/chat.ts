@@ -18,7 +18,7 @@ import {
   syncHostedStore,
   unbanHostedWorkspaceMember
 } from "./hosted.js";
-import { renderChannels, renderInbox, renderMessages, renderUsers } from "./render.js";
+import { renderChannels, renderInbox, renderMembers, renderMessages, renderUsers } from "./render.js";
 import { completeSlashCommand, renderSlashCommands, slashCommands } from "./slash-commands.js";
 import { ThaneStore } from "./store.js";
 import type { ConversationSummary, MessageView, ThaneChannel, ThaneWorkspace } from "./model.js";
@@ -952,7 +952,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = "Channels in this workspace.";
       return;
     }
-    if (trimmed === "/members") {
+    if (trimmed === "/members" || trimmed === "/channel-members") {
       const members = activeChannel.kind === "channel" ? store.channelMembers(activeChannel.name) : store.listUsers();
       sidePanelLines = [`${BOLD}Members: ${channelLabel(activeChannel)}${RESET}`, "", ...renderUsers(members).split("\n")];
       workspacePickerOpen = false;
@@ -960,6 +960,15 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       showMenu = false;
       showReactionPicker = false;
       status = `Members in ${channelLabel(activeChannel)}.`;
+      return;
+    }
+    if (trimmed === "/workspace-members") {
+      sidePanelLines = [`${BOLD}Workspace Members: ${store.activeWorkspace.slug}${RESET}`, "", ...renderMembers(store.listMembers()).split("\n")];
+      workspacePickerOpen = false;
+      showHelp = false;
+      showMenu = false;
+      showReactionPicker = false;
+      status = `Members in workspace ${store.activeWorkspace.slug}.`;
       return;
     }
     if (trimmed === "/inbox" || trimmed === "/inbox all") {

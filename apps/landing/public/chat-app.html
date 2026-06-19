@@ -536,10 +536,11 @@
       const storageKey = "thane.web.session";
       const root = document.querySelector("#root");
       const inviteMatch = location.pathname.match(/^\/invite\/([^/?#]+)/);
+      const inviteEmail = new URLSearchParams(location.search).get("email") || "";
       const state = {
         session: JSON.parse(localStorage.getItem(storageKey) || "null"),
         authStep: "email",
-        email: "",
+        email: inviteEmail,
         mfaChallengeToken: "",
         mfaStatus: null,
         mfaSetup: null,
@@ -588,6 +589,9 @@
           headers: { "content-type": "application/json" }
         });
         state.invitePreview = body.invite;
+        if (body.invite?.inviteeEmail && !state.email) {
+          state.email = body.invite.inviteeEmail;
+        }
       }
 
       async function acceptPendingInvite() {
@@ -648,6 +652,39 @@
       function canAdminWorkspace() {
         const role = currentWorkspaceRole();
         return role === "owner" || role === "admin";
+      }
+
+      function memberRoleForUser(user) {
+        const snap = currentSnapshot();
+        return (snap.workspaceMembers || []).find((member) => member.userId === user?.id)?.role || "member";
+      }
+
+      function currentUser() {
+        const snap = currentSnapshot();
+        return (snap.users || []).find((user) => user.email === state.session?.email);
+      }
+
+      function currentChannelMembers() {
+        const snap = currentSnapshot();
+        const channel = currentChannel();
+        const ids = new Set(channel?.memberIds || []);
+        return (snap.users || []).filter((user) => ids.has(user.id));
+      }
+
+      function renderMemberRows(users, options = {}) {
+        const snap = currentSnapshot();
+        const activeUser = currentUser();
+        const isAdmin = canAdminWorkspace();
+        const channel = currentChannel();
+        const channelMemberIds = new Set(channel?.memberIds || []);
+        const includeChannelControls = options.includeChannelControls !== false;
+        return users.map((user) => {
+          const memberRole = memberRoleForUser(user);
+          const target = user.email || user.handle;
+          const canManage = isAdmin && user.id !== activeUser?.id;
+          const inChannel = channelMemberIds.has(user.id);
+          return `<div class="item">@${esc(user.handle)} - ${esc(user.displayName || user.handle)} (${esc(memberRole)})${canManage ? ` <button onclick="setWorkspaceMemberRole(${jsString(target)}, ${jsString(memberRole === "admin" ? "member" : "admin")})">${memberRole === "admin" ? "make member" : "make admin"}</button>${includeChannelControls && inChannel ? ` <button onclick="removeChannelMember(${jsString(target)})">channel remove</button>` : ""} <button onclick="removeWorkspaceMember(${jsString(target)}, false)">kick</button> <button onclick="removeWorkspaceMember(${jsString(target)}, true)">ban</button>` : ""}</div>`;
+        }).join("") || `<div class="muted small">No members</div>`;
       }
 
       function currentBillingPlan(workspaceId) {
@@ -1430,6 +1467,14 @@
                 </section>
                 <section class="settings-group">
                   <h3>Members</h3>
+                  <div class="kv">
+                    <div class="muted small">Workspace members</div>
+                    ${renderMemberRows(snap.users || [], { includeChannelControls: false })}
+                  </div>
+                  <div class="kv">
+                    <div class="muted small">Current channel members</div>
+                    ${renderMemberRows(currentChannelMembers())}
+                  </div>
                   ${isAdmin ? `
                     <form class="list" onsubmit="addChannelMember(event)">
                       <input name="target" placeholder="handle or email" />
@@ -1439,15 +1484,7 @@
                       <input name="email" type="email" placeholder="banned@example.com" />
                       <button>Unban email</button>
                     </form>
-                    <div class="kv">
-                      ${(snap.users || []).map((user) => {
-                        const memberRole = (snap.workspaceMembers || []).find((member) => member.userId === user.id)?.role || "member";
-                        const target = user.email || user.handle;
-                        const canManage = user.id !== (snap.users || []).find((candidate) => candidate.email === state.session?.email)?.id;
-                        return `<div>@${esc(user.handle)} (${esc(memberRole)})${canManage ? ` <button onclick="setWorkspaceMemberRole(${jsString(target)}, ${jsString(memberRole === "admin" ? "member" : "admin")})">${memberRole === "admin" ? "make member" : "make admin"}</button> <button onclick="removeWorkspaceMember(${jsString(target)}, false)">kick</button> <button onclick="removeWorkspaceMember(${jsString(target)}, true)">ban</button>` : ""}</div>`;
-                      }).join("")}
-                    </div>
-                  ` : `<div class="muted small">admin required</div>`}
+                  ` : `<div class="muted small">admin required for member changes</div>`}
                 </section>
                 <section class="settings-group">
                   <h3>Invites</h3>
@@ -1521,7 +1558,7 @@
                 ${codeForm ? `<p class="muted small">${esc(state.status)}</p>` : ""}
                 <div class="row">
                   <label>${codeForm ? (state.authStep === "mfa" ? "Authenticator code" : "Email code") : "Email"}</label>
-                  <input name="${codeForm ? "code" : "email"}" autocomplete="${codeForm ? "one-time-code" : "email"}" required ${state.busy ? "disabled" : ""} />
+                  <input name="${codeForm ? "code" : "email"}" autocomplete="${codeForm ? "one-time-code" : "email"}" value="${codeForm ? "" : esc(state.email)}" required ${state.busy ? "disabled" : ""} />
                 </div>
                 <button ${state.busy ? "disabled" : ""}>${codeForm ? "Verify" : "Send code"}</button>
                 <p class="error small">${esc(state.error)}</p>
@@ -1652,12 +1689,7 @@
               <section class="section">
                 <div class="section-head"><span>Members</span></div>
                 <div class="list">
-                  ${snap.users.map((user) => {
-                    const memberRole = (snap.workspaceMembers || []).find((member) => member.userId === user.id)?.role || "member";
-                    const target = user.email || user.handle;
-                    const canManage = isAdmin && user.id !== currentUser?.id;
-                    return `<div class="item">@${esc(user.handle)} - ${esc(user.displayName || user.handle)} (${esc(memberRole)})${canManage ? ` <button onclick="setWorkspaceMemberRole(${jsString(target)}, ${jsString(memberRole === "admin" ? "member" : "admin")})">${memberRole === "admin" ? "make member" : "make admin"}</button> <button onclick="removeChannelMember(${jsString(target)})">channel remove</button> <button onclick="removeWorkspaceMember(${jsString(target)}, false)">kick</button> <button onclick="removeWorkspaceMember(${jsString(target)}, true)">ban</button>` : ""}</div>`;
-                  }).join("") || `<div class="muted small">No members</div>`}
+                  ${renderMemberRows(snap.users || [])}
                 </div>
               </section>
             </aside>

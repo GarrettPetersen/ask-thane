@@ -495,6 +495,7 @@ describe("@ask-thane/api-worker", () => {
     });
     expect(body.invite.url).toContain("https://api.askthane.com/invite/");
     expect(body.invite.webUrl).toContain("https://chat.askthane.com/invite/");
+    expect(body.invite.webUrl).toContain("email=alex%40example.com");
     expect(sendEmail).toHaveBeenCalledWith({
       from: "Thane <noreply@askthane.com>",
       to: "alex@example.com",
@@ -508,6 +509,7 @@ describe("@ask-thane/api-worker", () => {
     expect(inviteInsert?.args[2]).toBe("wsp_1");
     expect(inviteInsert?.args[3]).toBe("acme-inc");
     expect(inviteInsert?.args[6]).toBe("owner@example.com");
+    expect(inviteInsert?.args[10]).toBe("alex@example.com");
   });
 
   it("rejects Thane CLI workspace invite creation by non-admin members", async () => {
@@ -808,6 +810,50 @@ describe("@ask-thane/api-worker", () => {
       error: "thane_chat_member_limit_reached",
       limit: 100
     });
+    expect(prepare).not.toHaveBeenCalledWith(expect.stringContaining("UPDATE thane_cli_workspace_invites"));
+  });
+
+  it("rejects targeted invite acceptance from a different email", async () => {
+    const inviteRow = {
+      id: "inv_1",
+      workspace_id: "wsp_1",
+      workspace_slug: "acme",
+      workspace_name: "Acme Inc",
+      role: "member",
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      revoked_at: null,
+      accepted_count: 0,
+      max_uses: 1,
+      invitee_email: "alex@example.com"
+    };
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("SELECT id, workspace_id")) {
+        return inviteRow;
+      }
+      return null;
+    });
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn(() => ({ run, first: first.bind({ sql }) }))
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/workspace-invites/accept", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("different@example.com")}` },
+        body: JSON.stringify({ token: "token_123" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({ ok: false, error: "invite_email_mismatch" });
     expect(prepare).not.toHaveBeenCalledWith(expect.stringContaining("UPDATE thane_cli_workspace_invites"));
   });
 
@@ -1233,7 +1279,8 @@ describe("@ask-thane/api-worker", () => {
       expires_at: new Date(Date.now() + 60_000).toISOString(),
       revoked_at: null,
       accepted_count: 0,
-      max_uses: null
+      max_uses: null,
+      invitee_email: "alex@example.com"
     };
     const first = vi.fn(async () => inviteRow);
     const prepare = vi.fn(() => ({
@@ -1252,7 +1299,7 @@ describe("@ask-thane/api-worker", () => {
     const html = await res.text();
     expect(html).toContain("Join Acme Inc");
     expect(html).toContain("Accept in Thane Chat");
-    expect(html).toContain("https://chat.askthane.com/invite/token_123");
+    expect(html).toContain("https://chat.askthane.com/invite/token_123?email=alex%40example.com");
     expect(html).toContain("npm install -g @ask-thane/thane-cli");
     expect(html).toContain("thane init");
     expect(html).toContain("thane invite-link accept https://api.askthane.com/invite/token_123");
