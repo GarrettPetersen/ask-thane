@@ -19,6 +19,7 @@
         --cyan: #7dd3fc;
         --danger: #ff7a90;
         --shadow: rgba(0, 0, 0, 0.4);
+        --rail-closed: 46px;
         font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
       }
 
@@ -40,7 +41,7 @@
 
       button {
         border: 1px solid var(--line);
-        background: var(--panel-2);
+        background: #0a0f0c;
         color: var(--ink);
         min-height: 34px;
         padding: 0 12px;
@@ -66,6 +67,10 @@
         height: 100vh;
         height: 100dvh;
         overflow: hidden;
+        border: 1px solid rgba(122, 255, 159, 0.18);
+      }
+      .app.sidebar-collapsed {
+        grid-template-columns: var(--rail-closed) minmax(0, 1fr) 310px;
       }
 
       .rail, .side, .main {
@@ -73,22 +78,48 @@
         height: 100%;
       }
       .rail, .side {
-        background: rgba(16, 22, 18, 0.92);
+        background: rgba(7, 12, 9, 0.96);
         border-right: 1px solid var(--line);
         overflow: auto;
       }
       .side { border-right: 0; border-left: 1px solid var(--line); }
+      .rail {
+        position: relative;
+      }
 
       .brand {
-        padding: 18px;
+        padding: 14px;
         border-bottom: 1px solid var(--line);
       }
       .sig {
         color: var(--green);
         white-space: pre;
         line-height: 1.05;
-        font-size: 12px;
+        font-size: 11px;
         margin-bottom: 12px;
+        min-height: 82px;
+      }
+      .rail-tab {
+        display: none;
+        width: 100%;
+        min-height: 100vh;
+        padding: 10px 0;
+        color: var(--green);
+        background: transparent;
+        border: 0;
+        writing-mode: vertical-rl;
+        text-orientation: mixed;
+        letter-spacing: 0;
+      }
+      .sidebar-collapsed .rail {
+        overflow: hidden;
+      }
+      .sidebar-collapsed .rail-tab {
+        display: block;
+      }
+      .sidebar-collapsed .brand,
+      .sidebar-collapsed .section {
+        display: none;
       }
       .title {
         display: flex;
@@ -103,7 +134,7 @@
       .small { font-size: 12px; }
 
       .section {
-        padding: 14px;
+        padding: 12px 10px;
         border-bottom: 1px solid var(--line);
       }
       .section-head {
@@ -125,16 +156,21 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+        background: transparent;
+        border-color: transparent;
       }
       .item.active {
         border-color: var(--green);
         color: var(--green);
         background: rgba(122, 255, 159, 0.06);
       }
+      .item .cursor {
+        color: var(--amber);
+      }
 
       .main {
         display: grid;
-        grid-template-rows: auto 1fr auto;
+        grid-template-rows: auto 1fr auto auto;
         min-width: 0;
         min-height: 0;
       }
@@ -143,29 +179,52 @@
         justify-content: space-between;
         align-items: center;
         gap: 12px;
-        padding: 14px 18px;
+        padding: 10px 12px;
         border-bottom: 1px solid var(--line);
         background: rgba(7, 10, 8, 0.78);
       }
+      .topbar-left {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .icon-button {
+        width: 34px;
+        padding: 0;
+        text-align: center;
+      }
       .channel-name { font-size: 18px; color: var(--green); }
+      .prompt-line {
+        color: var(--muted);
+        font-size: 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
       .messages {
         overflow: auto;
         min-height: 0;
-        padding: 18px 18px 22px;
+        padding: 10px 12px 14px;
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 8px;
+        background:
+          linear-gradient(90deg, rgba(122, 255, 159, 0.04) 1px, transparent 1px),
+          transparent;
+        background-size: 8px 100%;
       }
       .message {
-        border: 1px solid rgba(47, 59, 51, 0.75);
-        background: rgba(16, 22, 18, 0.72);
-        box-shadow: 0 10px 30px var(--shadow);
-        padding: 12px;
+        border: 0;
+        border-left: 2px solid rgba(125, 211, 252, 0.38);
+        background: rgba(8, 12, 9, 0.76);
+        box-shadow: none;
+        padding: 9px 10px;
       }
       .message.reply {
-        margin-left: 24px;
+        margin-left: 18px;
         border-left-color: var(--amber);
-        background: rgba(21, 29, 24, 0.58);
+        background: rgba(21, 29, 24, 0.5);
       }
       .message-meta {
         display: flex;
@@ -192,6 +251,7 @@
         min-height: 28px;
         padding: 0 8px;
         font-size: 12px;
+        background: transparent;
       }
       .reaction {
         border-color: rgba(125, 211, 252, 0.42);
@@ -213,7 +273,7 @@
       }
       .composer {
         border-top: 1px solid var(--line);
-        padding: 12px;
+        padding: 10px 12px;
         background: rgba(7, 10, 8, 0.92);
         display: grid;
         grid-template-columns: 1fr auto;
@@ -235,6 +295,20 @@
       .composer textarea {
         display: block;
         min-height: 44px;
+      }
+      .statusbar {
+        border-top: 1px solid var(--line);
+        padding: 6px 12px;
+        color: var(--muted);
+        background: #070a08;
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 12px;
+      }
+      .statusbar strong {
+        color: var(--green);
+        font-weight: 400;
       }
       .reply-target {
         display: flex;
@@ -283,11 +357,14 @@
 
       @media (max-width: 980px) {
         .app { grid-template-columns: 230px minmax(0, 1fr); }
+        .app.sidebar-collapsed { grid-template-columns: var(--rail-closed) minmax(0, 1fr); }
         .side { display: none; }
       }
       @media (max-width: 720px) {
         body { overflow: auto; }
         .app { grid-template-columns: 1fr; height: auto; min-height: 100vh; min-height: 100dvh; overflow: visible; }
+        .app.sidebar-collapsed { grid-template-columns: 1fr; }
+        .sidebar-collapsed .rail { display: none; }
         .rail { min-height: auto; border-right: 0; }
         .rail, .side, .main { height: auto; }
         .main { min-height: 72vh; }
@@ -311,6 +388,7 @@
         activeChannelId: "",
         replyToId: "",
         draftText: "",
+        sidebarCollapsed: localStorage.getItem("thane.web.sidebarCollapsed") === "true",
         status: "",
         error: "",
         busy: false
@@ -370,6 +448,34 @@
           groups.set(reaction.emoji, group);
         }
         return [...groups.values()];
+      }
+
+      function workspaceInitials(workspace) {
+        const source = workspace?.name || workspace?.slug || "chat";
+        const words = source.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+        return (words.length > 1 ? words.map((word) => word[0]).join("") : source).slice(0, 4).toUpperCase();
+      }
+
+      function generatedCrest(workspace) {
+        const slug = (workspace?.slug || "chat").slice(0, 16);
+        const initials = workspaceInitials(workspace).padEnd(4, " ");
+        return [
+          "╭────────────╮",
+          `│ ${initials}       │`,
+          "│  THANE     │",
+          "╰────────────╯",
+          slug
+        ].join("\n");
+      }
+
+      function workspaceCrest(workspace) {
+        return (workspace?.asciiArt || "").trim() || generatedCrest(workspace);
+      }
+
+      function toggleSidebar() {
+        state.sidebarCollapsed = !state.sidebarCollapsed;
+        localStorage.setItem("thane.web.sidebarCollapsed", String(state.sidebarCollapsed));
+        render();
       }
 
       async function startLogin(event) {
@@ -634,33 +740,38 @@
         const rootMessages = messages.filter((message) => !message.threadRootId);
         const replyTarget = messageById(state.replyToId);
         root.innerHTML = `
-          <div class="app">
+          <div class="app ${state.sidebarCollapsed ? "sidebar-collapsed" : ""}">
             <aside class="rail">
+              <button class="rail-tab" onclick="toggleSidebar()" title="Expand sidebar">THANE / ${esc(workspace?.slug || "chat")}</button>
               <div class="brand">
-                <div class="sig">╭─ THANE ─╮\n│ ${esc((workspace?.slug || "chat").slice(0, 10)).padEnd(10, " ")} │\n╰─ CHAT  ─╯</div>
+                <div class="sig">${esc(workspaceCrest(workspace))}</div>
                 <div class="title"><h1>Thane Chat</h1><span class="state">online</span></div>
                 <p class="muted small">${esc(state.session.email)}</p>
               </div>
               <section class="section">
                 <div class="section-head"><span>Workspaces</span><button onclick="sync().then(render)">sync</button></div>
-                <div class="list">${snap.workspaces.map((item) => `<button class="item ${item.id === state.activeWorkspaceId ? "active" : ""}" onclick="chooseWorkspace(${jsString(item.id)})">${esc(item.slug)}</button>`).join("") || `<div class="empty">No workspaces yet</div>`}</div>
+                <div class="list">${snap.workspaces.map((item) => `<button class="item ${item.id === state.activeWorkspaceId ? "active" : ""}" onclick="chooseWorkspace(${jsString(item.id)})"><span class="cursor">${item.id === state.activeWorkspaceId ? ">" : " "}</span> ${esc(item.slug)}</button>`).join("") || `<div class="empty">No workspaces yet</div>`}</div>
               </section>
               <section class="section">
                 <div class="section-head"><span>Channels</span></div>
-                <div class="list">${snap.channels.map((item) => `<button class="item ${item.id === state.activeChannelId ? "active" : ""}" onclick="state.activeChannelId=${jsString(item.id)}; state.replyToId=''; render()">#${esc(item.name)}</button>`).join("") || `<div class="empty">No channels yet</div>`}</div>
+                <div class="list">${snap.channels.map((item) => `<button class="item ${item.id === state.activeChannelId ? "active" : ""}" onclick="state.activeChannelId=${jsString(item.id)}; state.replyToId=''; render()"><span class="cursor">${item.id === state.activeChannelId ? ">" : " "}</span> #${esc(item.name)}</button>`).join("") || `<div class="empty">No channels yet</div>`}</div>
               </section>
             </aside>
             <main class="main">
               <header class="topbar">
-                <div>
-                  <h2 class="channel-name">#${esc(channel?.name || "general")}</h2>
-                  <p class="muted small">${esc(channel?.topic || "Community-wide conversation")}</p>
+                <div class="topbar-left">
+                  <button class="icon-button" onclick="toggleSidebar()" title="${state.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}">${state.sidebarCollapsed ? ">" : "<"}</button>
+                  <div>
+                    <h2 class="channel-name">#${esc(channel?.name || "general")}</h2>
+                    <p class="prompt-line">thane://${esc(workspace?.slug || "chat")}/${esc(channel?.name || "general")}</p>
+                  </div>
                 </div>
                 <button onclick="saveSession(null); location.reload()">sign out</button>
               </header>
               <section class="messages">
                 ${rootMessages.length ? rootMessages.map((message) => renderMessage(message, users, repliesByRoot)).join("") : `<div class="empty">No messages in this channel yet.</div>`}
               </section>
+              <div class="statusbar"><span><strong>${esc(workspace?.slug || "chat")}</strong> / #${esc(channel?.name || "general")}</span><span>${messages.length} msg${messages.length === 1 ? "" : "s"} · sync 5s</span></div>
               <div class="composer-wrap">
                 ${replyTarget ? `<div class="reply-target"><span>replying to @${esc(users.get(replyTarget.authorId)?.handle || "unknown")}: ${esc(replyTarget.text.slice(0, 80))}</span><button onclick="state.replyToId=''; render()">cancel</button></div>` : ""}
                 <form class="composer" onsubmit="sendMessage(event)">
@@ -720,6 +831,7 @@
       window.chooseWorkspace = chooseWorkspace;
       window.sendMessage = sendMessage;
       window.updateDraft = updateDraft;
+      window.toggleSidebar = toggleSidebar;
       window.replyTo = replyTo;
       window.reactTo = reactTo;
       window.customReaction = customReaction;
