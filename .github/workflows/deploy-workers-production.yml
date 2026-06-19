@@ -1,6 +1,10 @@
 name: Deploy Workers Production
 
 on:
+  workflow_run:
+    workflows: ["Deploy Workers Staging"]
+    types: [completed]
+    branches: [master]
   workflow_dispatch:
     inputs:
       git_ref:
@@ -40,24 +44,111 @@ permissions:
 jobs:
   resolve-ref:
     runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.git_ref }}
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.git_ref }}
 
       - name: Resolve deploy SHA
         id: resolve
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-  verify-staging:
+  detect-targets:
     runs-on: ubuntu-latest
     needs: resolve-ref
-    if: ${{ inputs.deploy_bot || inputs.deploy_api || inputs.deploy_payments }}
+    outputs:
+      bot: ${{ steps.detect.outputs.bot }}
+      api: ${{ steps.detect.outputs.api }}
+      payments: ${{ steps.detect.outputs.payments }}
+      landing: ${{ steps.detect.outputs.landing }}
     steps:
+      - name: Detect manual deploy targets
+        id: manual
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        env:
+          MANUAL_DEPLOY_BOT: ${{ inputs.deploy_bot || false }}
+          MANUAL_DEPLOY_API: ${{ inputs.deploy_api || false }}
+          MANUAL_DEPLOY_PAYMENTS: ${{ inputs.deploy_payments || false }}
+          MANUAL_DEPLOY_LANDING: ${{ inputs.deploy_landing || false }}
+        run: |
+          echo "bot=$MANUAL_DEPLOY_BOT" >> "$GITHUB_OUTPUT"
+          echo "api=$MANUAL_DEPLOY_API" >> "$GITHUB_OUTPUT"
+          echo "payments=$MANUAL_DEPLOY_PAYMENTS" >> "$GITHUB_OUTPUT"
+          echo "landing=$MANUAL_DEPLOY_LANDING" >> "$GITHUB_OUTPUT"
+
+      - name: Detect staged deploy targets
+        id: staged
+        if: ${{ github.event_name == 'workflow_run' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const run_id = context.payload.workflow_run.id;
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              owner,
+              repo,
+              run_id,
+              per_page: 100
+            });
+
+            const succeeded = new Set(
+              jobs
+                .filter((job) => job.conclusion === "success")
+                .map((job) => job.name)
+            );
+            const chatApp = succeeded.has("deploy-api") || succeeded.has("deploy-landing");
+
+            core.setOutput("bot", "false");
+            core.setOutput("api", chatApp ? "true" : "false");
+            core.setOutput("payments", "false");
+            core.setOutput("landing", chatApp ? "true" : "false");
+
+            if (chatApp) {
+              core.info("Staging deployed API or landing, so production will promote both.");
+            } else {
+              core.info("Staging did not deploy API or landing; production promotion is skipped.");
+            }
+
+      - name: Set production deploy targets
+        id: detect
+        shell: bash
+        env:
+          MANUAL_BOT: ${{ steps.manual.outputs.bot }}
+          MANUAL_API: ${{ steps.manual.outputs.api }}
+          MANUAL_PAYMENTS: ${{ steps.manual.outputs.payments }}
+          MANUAL_LANDING: ${{ steps.manual.outputs.landing }}
+          STAGED_BOT: ${{ steps.staged.outputs.bot }}
+          STAGED_API: ${{ steps.staged.outputs.api }}
+          STAGED_PAYMENTS: ${{ steps.staged.outputs.payments }}
+          STAGED_LANDING: ${{ steps.staged.outputs.landing }}
+        run: |
+          echo "bot=${MANUAL_BOT:-${STAGED_BOT:-false}}" >> "$GITHUB_OUTPUT"
+          echo "api=${MANUAL_API:-${STAGED_API:-false}}" >> "$GITHUB_OUTPUT"
+          echo "payments=${MANUAL_PAYMENTS:-${STAGED_PAYMENTS:-false}}" >> "$GITHUB_OUTPUT"
+          echo "landing=${MANUAL_LANDING:-${STAGED_LANDING:-false}}" >> "$GITHUB_OUTPUT"
+
+  verify-staging:
+    runs-on: ubuntu-latest
+    needs: [resolve-ref, detect-targets]
+    if: >
+      needs.detect-targets.outputs.bot == 'true' ||
+      needs.detect-targets.outputs.api == 'true' ||
+      needs.detect-targets.outputs.payments == 'true'
+    steps:
+      - name: Accept triggering staging workflow run
+        if: ${{ github.event_name == 'workflow_run' }}
+        run: echo "Staging gate passed via ${{ github.event.workflow_run.html_url }}."
+
       - name: Require successful staging workflow run for target SHA
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         uses: actions/github-script@v7
         with:
           script: |
@@ -82,13 +173,17 @@ jobs:
 
   test-suite:
     runs-on: ubuntu-latest
-    needs: resolve-ref
-    if: ${{ inputs.deploy_bot || inputs.deploy_api || inputs.deploy_payments || inputs.deploy_landing }}
+    needs: [resolve-ref, detect-targets]
+    if: >
+      needs.detect-targets.outputs.bot == 'true' ||
+      needs.detect-targets.outputs.api == 'true' ||
+      needs.detect-targets.outputs.payments == 'true' ||
+      needs.detect-targets.outputs.landing == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.git_ref }}
+          ref: ${{ needs.resolve-ref.outputs.sha }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -109,14 +204,16 @@ jobs:
 
   apply-migrations:
     runs-on: ubuntu-latest
-    needs: [resolve-ref, verify-staging, test-suite]
-    if: ${{ inputs.deploy_bot || inputs.deploy_api }}
+    needs: [resolve-ref, detect-targets, verify-staging, test-suite]
+    if: >
+      needs.detect-targets.outputs.bot == 'true' ||
+      needs.detect-targets.outputs.api == 'true'
     environment: production
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.git_ref }}
+          ref: ${{ needs.resolve-ref.outputs.sha }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -153,14 +250,14 @@ jobs:
 
   deploy-bot:
     runs-on: ubuntu-latest
-    needs: [resolve-ref, verify-staging, test-suite, apply-migrations]
-    if: ${{ inputs.deploy_bot }}
+    needs: [resolve-ref, detect-targets, verify-staging, test-suite, apply-migrations]
+    if: ${{ needs.detect-targets.outputs.bot == 'true' }}
     environment: production
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.git_ref }}
+          ref: ${{ needs.resolve-ref.outputs.sha }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -191,14 +288,14 @@ jobs:
 
   deploy-api:
     runs-on: ubuntu-latest
-    needs: [resolve-ref, verify-staging, test-suite, apply-migrations]
-    if: ${{ inputs.deploy_api }}
+    needs: [resolve-ref, detect-targets, verify-staging, test-suite, apply-migrations]
+    if: ${{ needs.detect-targets.outputs.api == 'true' }}
     environment: production
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.git_ref }}
+          ref: ${{ needs.resolve-ref.outputs.sha }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -229,14 +326,14 @@ jobs:
 
   deploy-payments:
     runs-on: ubuntu-latest
-    needs: [resolve-ref, verify-staging, test-suite]
-    if: ${{ inputs.deploy_payments }}
+    needs: [resolve-ref, detect-targets, verify-staging, test-suite]
+    if: ${{ needs.detect-targets.outputs.payments == 'true' }}
     environment: production
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.git_ref }}
+          ref: ${{ needs.resolve-ref.outputs.sha }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -267,14 +364,14 @@ jobs:
 
   deploy-landing:
     runs-on: ubuntu-latest
-    needs: [resolve-ref, test-suite]
-    if: ${{ inputs.deploy_landing }}
+    needs: [resolve-ref, detect-targets, test-suite]
+    if: ${{ needs.detect-targets.outputs.landing == 'true' }}
     environment: production
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.git_ref }}
+          ref: ${{ needs.resolve-ref.outputs.sha }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
