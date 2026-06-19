@@ -24,7 +24,7 @@ export function renderUsers(users: ThaneUser[]): string {
   if (users.length === 0) {
     return "No users yet.";
   }
-  return users.map((user) => `@${user.handle} - ${user.displayName}`).join("\n");
+  return users.map((user) => `${user.displayName || `@${user.handle}`} @${user.handle}`).join("\n");
 }
 
 export function renderMembers(
@@ -34,7 +34,10 @@ export function renderMembers(
     return "No members yet.";
   }
   return members
-    .map((member) => `@${member.user.handle} (${member.role}) - ${member.account?.email ?? member.user.email ?? "no email"}`)
+    .map((member) => {
+      const email = member.account?.email ?? member.user.email;
+      return `${member.user.displayName || `@${member.user.handle}`} @${member.user.handle} (${member.role})${email ? ` - ${email}` : ""}`;
+    })
     .join("\n");
 }
 

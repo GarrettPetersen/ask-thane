@@ -50,13 +50,13 @@ function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
-function handleFromEmail(email: string): string {
-  return normalizeEmail(email).split("@")[0]?.replace(/[^a-z0-9._-]+/gi, "-").toLowerCase() || "user";
+function handleFromAccountId(accountId: string): string {
+  return `user-${accountId.replace(/^acct_/, "").replace(/[^a-z0-9]+/gi, "").slice(0, 8).toLowerCase() || "member"}`;
 }
 
-function displayNameFromEmail(email: string): string {
-  const handle = handleFromEmail(email);
-  return handle.charAt(0).toUpperCase() + handle.slice(1);
+function displayNameFromAccountId(accountId: string): string {
+  const suffix = accountId.replace(/^acct_/, "").replace(/[^a-z0-9]+/gi, "").slice(0, 6).toUpperCase();
+  return suffix ? `Member ${suffix}` : "Member";
 }
 
 function userDisplayLabel(user: ThaneUser | undefined, fallback: string): string {
@@ -256,7 +256,7 @@ function normalizeChannelName(name: string): string {
 }
 
 function normalizeHandle(handle: string): string {
-  return handle.trim().replace(/^@/, "").toLowerCase();
+  return handle.trim().replace(/^@/, "").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
 function extractMentions(text: string): string[] {
@@ -515,6 +515,23 @@ export class ThaneStore {
       throw new Error("Current workspace user is missing. Run `thane sync` or `thane workspaces` to refresh.");
     }
     user.displayName = cleaned.slice(0, 120);
+    await saveData(this.data);
+    return { user };
+  }
+
+  async setWorkspaceHandle(handle: string, workspaceId = this.activeWorkspace.id): Promise<{ user: ThaneUser }> {
+    const cleaned = normalizeHandle(handle);
+    if (!cleaned) {
+      throw new Error("Handle must contain at least one character.");
+    }
+    const account = this.currentAccount;
+    const user =
+      (account && this.data.users.find((candidate) => candidate.workspaceId === workspaceId && candidate.accountId === account.id)) ||
+      this.data.users.find((candidate) => candidate.workspaceId === workspaceId && candidate.id === this.data.currentUserId);
+    if (!user) {
+      throw new Error("Current workspace user is missing. Run `thane sync` or `thane workspaces` to refresh.");
+    }
+    user.handle = cleaned.slice(0, 32);
     await saveData(this.data);
     return { user };
   }
@@ -1062,8 +1079,8 @@ export class ThaneStore {
         id: id("usr"),
         workspaceId,
         accountId: account.id,
-        handle: handleFromEmail(account.email),
-        displayName: account.displayName,
+        handle: handleFromAccountId(account.id),
+        displayName: account.displayName || displayNameFromAccountId(account.id),
         email: account.email
       };
       this.data.users.push(user);
@@ -1228,10 +1245,11 @@ export class ThaneStore {
     }
     let account = this.data.accounts.find((candidate) => candidate.email === normalized);
     if (!account) {
+      const accountId = id("acct");
       account = {
-        id: id("acct"),
+        id: accountId,
         email: normalized,
-        displayName: displayNameFromEmail(normalized),
+        displayName: displayNameFromAccountId(accountId),
         createdAt: nowIso()
       };
       this.data.accounts.push(account);

@@ -20,9 +20,9 @@ export const cliCommands: CliCommand[] = [
   },
   {
     category: "Accounts",
-    command: "thane init [--email <email>] [--name \"...\"]",
-    description: "Start first-run setup, prompt for email, and verify the account.",
-    examples: ["thane init"]
+    command: "thane init [--email <email>] [--name \"...\"] [--handle <handle>]",
+    description: "Start first-run setup, prompt for email and optional handle, and verify the account.",
+    examples: ["thane init", "thane init --handle garrett"]
   },
   {
     category: "Accounts",
@@ -71,6 +71,12 @@ export const cliCommands: CliCommand[] = [
     command: "thane profile name <display-name> [--json]",
     description: "Change your display name in the active workspace.",
     examples: ["thane profile name \"Garrett Petersen\"", "thane profile name GP --json"]
+  },
+  {
+    category: "Accounts",
+    command: "thane profile handle <handle> [--json]",
+    description: "Change your @handle in the active workspace.",
+    examples: ["thane profile handle garrett", "thane profile handle dr-dad --json"]
   },
   {
     category: "Accounts",

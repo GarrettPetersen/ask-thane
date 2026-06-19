@@ -574,7 +574,9 @@
         inviteLinkResult: null,
         billingBusy: false,
         workspaceProfileDraft: null,
+        workspaceHandleDraft: null,
         accountProfileDraft: null,
+        pendingHandle: "",
         searchQuery: "",
         draftText: "",
         sidebarCollapsed: localStorage.getItem("thane.web.sidebarCollapsed") === "true",
@@ -659,6 +661,7 @@
         } else {
           await sync();
         }
+        await applyPendingHandle();
       }
 
       function esc(value) {
@@ -687,7 +690,7 @@
 
       function currentWorkspaceRole() {
         const snap = currentSnapshot();
-        const user = (snap.users || []).find((candidate) => candidate.email === state.session?.email);
+        const user = currentUser();
         return (snap.workspaceMembers || []).find((member) => member.userId === user?.id)?.role || "";
       }
 
@@ -703,7 +706,7 @@
 
       function currentUser() {
         const snap = currentSnapshot();
-        return (snap.users || []).find((user) => user.email === state.session?.email);
+        return (snap.users || []).find((user) => user.email === state.session?.email || user.accountId === state.session?.id);
       }
 
       function currentChannelMembers() {
@@ -725,7 +728,8 @@
           const target = user.email || user.handle;
           const canManage = isAdmin && user.id !== activeUser?.id;
           const inChannel = channelMemberIds.has(user.id);
-          return `<div class="item">@${esc(user.handle)} - ${esc(user.displayName || user.handle)} (${esc(memberRole)})${canManage ? ` <button onclick="setWorkspaceMemberRole(${jsString(target)}, ${jsString(memberRole === "admin" ? "member" : "admin")})">${memberRole === "admin" ? "make member" : "make admin"}</button>${includeChannelControls && inChannel ? ` <button onclick="removeChannelMember(${jsString(target)})">channel remove</button>` : ""} <button onclick="removeWorkspaceMember(${jsString(target)}, false)">kick</button> <button onclick="removeWorkspaceMember(${jsString(target)}, true)">ban</button>` : ""}</div>`;
+          const emailText = isAdmin && user.email ? ` - ${esc(user.email)}` : "";
+          return `<div class="item">${esc(user.displayName || user.handle)} @${esc(user.handle)} (${esc(memberRole)})${emailText}${canManage ? ` <button onclick="setWorkspaceMemberRole(${jsString(target)}, ${jsString(memberRole === "admin" ? "member" : "admin")})">${memberRole === "admin" ? "make member" : "make admin"}</button>${includeChannelControls && inChannel ? ` <button onclick="removeChannelMember(${jsString(target)})">channel remove</button>` : ""} <button onclick="removeWorkspaceMember(${jsString(target)}, false)">kick</button> <button onclick="removeWorkspaceMember(${jsString(target)}, true)">ban</button>` : ""}</div>`;
         }).join("") || `<div class="muted small">No members</div>`;
       }
 
@@ -824,8 +828,9 @@
         render();
       }
 
-      async function requestLoginCodeForEmail(email) {
+      async function requestLoginCodeForEmail(email, handle = "") {
         state.email = String(email || "").trim();
+        state.pendingHandle = String(handle || "").trim().replace(/^@/, "");
         if (!state.email) {
           return;
         }
@@ -848,7 +853,7 @@
       async function startLogin(event) {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
-        await requestLoginCodeForEmail(form.get("email"));
+        await requestLoginCodeForEmail(form.get("email"), form.get("handle"));
       }
 
       async function verifyLogin(event) {
@@ -1397,6 +1402,47 @@
         }
       }
 
+      async function updateWorkspaceHandleValue(handle) {
+        const cleaned = String(handle || "").trim().replace(/^@/, "");
+        if (!cleaned) return null;
+        const workspaceId = state.activeWorkspaceId;
+        if (!workspaceId) return null;
+        const body = await api("/v1/thane-cli/profile", {
+          method: "POST",
+          body: JSON.stringify({ handle: cleaned, workspaceId, scope: "workspace" })
+        });
+        saveSession({ ...state.session, ...(body.account || {}) });
+        const workspaceHandle = body.workspaceHandle || body.handle || cleaned;
+        state.workspaceHandleDraft = workspaceHandle;
+        state.status = `Workspace handle: @${workspaceHandle}`;
+        state.error = "";
+        await sync();
+        return body;
+      }
+
+      async function applyPendingHandle() {
+        const handle = state.pendingHandle;
+        if (!handle || !state.session?.authToken) return;
+        try {
+          await updateWorkspaceHandleValue(handle);
+          state.pendingHandle = "";
+        } catch (error) {
+          state.error = error.message;
+        }
+      }
+
+      async function updateWorkspaceHandle(event) {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        try {
+          await updateWorkspaceHandleValue(form.get("handle"));
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
       async function updateAccountDisplayName(event) {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
@@ -1515,8 +1561,9 @@
       }
 
       function openSettingsMenu() {
-        const currentUser = (state.snapshot?.users || []).find((user) => user.email === state.session?.email);
-        state.workspaceProfileDraft = currentUser?.displayName || state.session?.displayName || "";
+        const user = currentUser();
+        state.workspaceProfileDraft = user?.displayName || state.session?.displayName || "";
+        state.workspaceHandleDraft = user?.handle || "";
         state.accountProfileDraft = state.session?.displayName || "";
         state.settingsMenuOpen = true;
         state.settingsMenuScrollTop = 0;
@@ -1526,6 +1573,7 @@
       function closeSettingsMenu() {
         state.settingsMenuOpen = false;
         state.workspaceProfileDraft = null;
+        state.workspaceHandleDraft = null;
         state.accountProfileDraft = null;
         state.settingsMenuScrollTop = 0;
         render();
@@ -1600,6 +1648,10 @@
                   <form class="list" onsubmit="updateWorkspaceDisplayName(event)">
                     <input name="displayName" value="${esc(state.workspaceProfileDraft ?? currentUser?.displayName ?? "")}" placeholder="Workspace display name" oninput="state.workspaceProfileDraft=this.value" />
                     <button>Update workspace name</button>
+                  </form>
+                  <form class="list" onsubmit="updateWorkspaceHandle(event)">
+                    <input name="handle" value="${esc(state.workspaceHandleDraft ?? currentUser?.handle ?? "")}" placeholder="Workspace handle" oninput="state.workspaceHandleDraft=this.value" />
+                    <button>Update workspace handle</button>
                   </form>
                   <form class="list" onsubmit="updateAccountDisplayName(event)">
                     <input name="displayName" value="${esc(state.accountProfileDraft ?? state.session.displayName ?? "")}" placeholder="Account default name" oninput="state.accountProfileDraft=this.value" />
@@ -1736,6 +1788,10 @@
                   <label>${codeForm ? (state.authStep === "mfa" ? "Authenticator code" : "Email code") : "Email"}</label>
                   <input name="${codeForm ? "code" : "email"}" autocomplete="${codeForm ? "one-time-code" : "email"}" value="${codeForm ? "" : esc(state.email)}" required ${state.busy ? "disabled" : ""} />
                 </div>
+                ${codeForm ? "" : `<div class="row">
+                  <label>Handle</label>
+                  <input name="handle" autocomplete="username" value="${esc(state.pendingHandle)}" placeholder="optional, shown as @handle" ${state.busy ? "disabled" : ""} />
+                </div>`}
                 <button ${state.busy ? "disabled" : ""}>${codeForm ? "Verify" : "Send code"}</button>
                 <p class="error small">${esc(state.error)}</p>
               </form>
@@ -1773,7 +1829,7 @@
         const workspace = snap.workspaces.find((item) => item.id === state.activeWorkspaceId) || snap.workspaces[0];
         const channel = snap.channels.find((item) => item.id === state.activeChannelId) || snap.channels[0];
         const users = new Map((snap.users || []).map((user) => [user.id, user]));
-        const currentUser = (snap.users || []).find((user) => user.email === state.session?.email);
+        const activeUser = currentUser();
         const messages = (snap.messages || []).filter((message) => message.channelId === channel?.id);
         const searchQuery = state.searchQuery.trim().toLowerCase();
         const searchResults = searchQuery
@@ -1804,7 +1860,7 @@
               <div class="brand">
                 <div class="sig">${esc(workspaceCrest(workspace))}</div>
                 <div class="title"><h1>Thane Chat</h1><span class="state">online</span></div>
-                <p class="muted small">${esc(state.session.email)}</p>
+                <p class="muted small">${esc(userDisplayLabel(activeUser))}${activeUser?.handle ? ` @${esc(activeUser.handle)}` : ""}</p>
               </div>
               <section class="section">
                 <div class="section-head"><button class="section-toggle" data-menu-toggle="workspaces" type="button"><span class="menu-caret">${state.workspaceMenuOpen ? "v" : ">"}</span><span>Workspaces</span><span class="summary">${esc(workspace?.slug || "none")}</span></button><button onclick="sync().then(render)">sync</button></div>
@@ -1848,7 +1904,7 @@
                 <div class="section-head"><span>Workspace</span></div>
                 <div class="kv">
                   <div class="cmdline">${esc(workspace?.name || "No workspace")}</div>
-                  <div>${esc(currentUser?.displayName || state.session.displayName || state.session.email)}</div>
+                  <div>${esc(userDisplayLabel(activeUser))}${activeUser?.handle ? ` @${esc(activeUser.handle)}` : ""}</div>
                   <div>role: ${esc(role || "member")}</div>
                   <div>${snap.users.length} member${snap.users.length === 1 ? "" : "s"}</div>
                   <div>${snap.channels.length} channel${snap.channels.length === 1 ? "" : "s"}</div>
@@ -1878,7 +1934,7 @@
               </section>
             </aside>
           </div>
-          ${renderSettingsMenuModal({ workspace, snap, role, isAdmin, askThane, billingPlan, isTeamPlan, privateChannels, inviteResult, currentUser })}
+          ${renderSettingsMenuModal({ workspace, snap, role, isAdmin, askThane, billingPlan, isTeamPlan, privateChannels, inviteResult, currentUser: activeUser })}
           ${renderCliInstallModal()}`;
         requestAnimationFrame(() => {
           const scroller = document.querySelector(".messages");
@@ -1919,6 +1975,7 @@
       window.openBilling = openBilling;
       window.setAskThaneEnabled = setAskThaneEnabled;
       window.updateWorkspaceDisplayName = updateWorkspaceDisplayName;
+      window.updateWorkspaceHandle = updateWorkspaceHandle;
       window.updateAccountDisplayName = updateAccountDisplayName;
       window.refreshMfaStatus = refreshMfaStatus;
       window.startMfaSetup = startMfaSetup;

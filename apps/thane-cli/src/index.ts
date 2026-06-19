@@ -217,6 +217,23 @@ async function startHostedAuth(email: string, displayName?: string): Promise<{
   });
 }
 
+async function setHostedWorkspaceHandle(store: ThaneStore, handle: string): Promise<string> {
+  const cleaned = handle.trim().replace(/^@/, "");
+  if (!cleaned) {
+    throw new Error("Handle must contain at least one character.");
+  }
+  const token = requireHostedAuthToken(store);
+  const response = await postThaneApiWithAuth<{ handle: string; workspaceHandle?: string }>("/v1/thane-cli/profile", token, {
+    handle: cleaned,
+    workspaceId: store.activeWorkspace.id,
+    scope: "workspace"
+  });
+  const workspaceHandle = response.workspaceHandle ?? response.handle;
+  await store.setWorkspaceHandle(workspaceHandle);
+  await syncHostedStore(store, { workspaceId: store.activeWorkspace.id });
+  return workspaceHandle;
+}
+
 async function verifyHostedAuth(email: string, code: string): Promise<
   | { account: ThaneAccount; mfaRequired?: false }
   | { email: string; mfaRequired: true; mfaChallengeToken: string }
@@ -376,12 +393,13 @@ Interactive:
   thane dm <handle>
 
 Accounts:
-  thane init [--email <email>] [--name "..."]
+  thane init [--email <email>] [--name "..."] [--handle <handle>]
   thane signup <email> [--name "..."]
   thane login <email>
   thane verify <email> <code>
   thane whoami [--json]
   thane profile name <display-name> [--json]
+  thane profile handle <handle> [--json]
   thane profile account-name <display-name> [--json]
   thane logout
 
@@ -765,9 +783,10 @@ async function main(): Promise<void> {
     try {
       const email = second ?? flagString(args, "email") ?? (prompts ? await prompts.ask("Email: ") : undefined);
       if (!email) {
-        throw new Error("Usage: thane init --email <email> [--name \"...\"] --json");
+        throw new Error("Usage: thane init --email <email> [--name \"...\"] [--handle <handle>] --json");
       }
       const displayName = flagString(args, "name") ?? (prompts ? await prompts.ask("Name (optional): ") : undefined);
+      const handle = flagString(args, "handle") ?? (prompts ? await prompts.ask("Handle (optional, shown as @handle): ") : undefined);
       const started = await startHostedAuth(email, displayName || undefined);
       if (wantsJson(args)) {
         printJson(started);
@@ -776,6 +795,9 @@ async function main(): Promise<void> {
       process.stdout.write(`${renderHostedAuthStart(started)}Enter the code to finish setup.\n`);
       const enteredCode = await prompts?.ask("Code: ");
       const verified = await finishHostedAuth({ store, email: started.email, code: enteredCode ?? "", prompts });
+      if (handle && store.hasActiveWorkspace()) {
+        await setHostedWorkspaceHandle(store, handle);
+      }
       process.stdout.write(`signed in as ${verified.email}\nopen chat: thane chat general\n`);
     } finally {
       prompts?.close();
@@ -848,6 +870,18 @@ async function main(): Promise<void> {
     wantsJson(args)
       ? printJson({ account: response.account, workspaceDisplayName, workspace: store.activeWorkspace })
       : process.stdout.write(`workspace display name: ${workspaceDisplayName}\n`);
+    return;
+  }
+
+  if (command === "profile" && second === "handle") {
+    const handle = args.positionals.slice(2).join(" ").trim();
+    if (!handle) {
+      throw new Error("Usage: thane profile handle <handle>");
+    }
+    const workspaceHandle = await setHostedWorkspaceHandle(store, handle);
+    wantsJson(args)
+      ? printJson({ handle: workspaceHandle, workspace: store.activeWorkspace })
+      : process.stdout.write(`workspace handle: @${workspaceHandle}\n`);
     return;
   }
 

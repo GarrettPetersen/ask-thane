@@ -20,7 +20,7 @@ import {
   watchHostedWorkspaceEvents
 } from "./hosted.js";
 import { renderChannels, renderInbox, renderMembers, renderMessages, renderUsers } from "./render.js";
-import { completeSlashCommand, renderSlashCommands, slashCommands } from "./slash-commands.js";
+import { completeSlashCommand, renderSlashCommands, slashCommandsForRole } from "./slash-commands.js";
 import { ThaneStore } from "./store.js";
 import type { ConversationSummary, MessageView, ThaneChannel, ThaneWorkspace } from "./model.js";
 import type { SlashCommand } from "./slash-commands.js";
@@ -284,13 +284,23 @@ function renderMessage(message: MessageView, width: number, selected = false): s
   return lines.map((line, index) => (index === 0 ? `${prefix}${line}` : `${" ".repeat(visibleLength(prefix))}${line}`));
 }
 
-function commandMatches(inputText: string): SlashCommand[] {
+function canAdminWorkspace(store: ThaneStore): boolean {
+  const role = store.currentMember()?.role;
+  return role === "owner" || role === "admin";
+}
+
+function availableSlashCommands(store: ThaneStore): SlashCommand[] {
+  return slashCommandsForRole({ isAdmin: canAdminWorkspace(store) });
+}
+
+function commandMatches(store: ThaneStore, inputText: string): SlashCommand[] {
   if (!inputText.startsWith("/")) {
     return [];
   }
-  const [names] = completeSlashCommand(inputText);
+  const commands = availableSlashCommands(store);
+  const [names] = completeSlashCommand(inputText, { isAdmin: canAdminWorkspace(store) });
   return names
-    .map((name) => slashCommands.find((command) => command.name === name))
+    .map((name) => commands.find((command) => command.name === name))
     .filter((command): command is SlashCommand => Boolean(command));
 }
 
@@ -333,7 +343,7 @@ function completionCandidates(store: ThaneStore, inputText: string): CompletionC
       .filter((user) => user.handle.startsWith(prefix))
       .map((user) => ({ label: `@${user.handle}`, value: replaceTrailingToken(inputText, `@${user.handle}`) }));
   }
-  return commandMatches(inputText).map((command) => ({
+  return commandMatches(store, inputText).map((command) => ({
     label: command.usage,
     value: commandInput(command)
   }));
@@ -355,20 +365,21 @@ function updateMenuDescription(updateStatus: UpdateStatus): { description: strin
   return { description: "Checking for updates...", dim: true };
 }
 
-function renderMenuLines(selectedIndex: number, availableRows: number, updateStatus: UpdateStatus): string[] {
+function renderMenuLines(commands: SlashCommand[], selectedIndex: number, availableRows: number, updateStatus: UpdateStatus): string[] {
   const visibleRows = Math.max(1, availableRows - 4);
-  const start = Math.max(0, Math.min(selectedIndex - Math.floor(visibleRows / 2), slashCommands.length - visibleRows));
-  const visibleCommands = slashCommands.slice(start, start + visibleRows);
+  const clampedIndex = Math.max(0, Math.min(selectedIndex, commands.length - 1));
+  const start = Math.max(0, Math.min(clampedIndex - Math.floor(visibleRows / 2), commands.length - visibleRows));
+  const visibleCommands = commands.slice(start, start + visibleRows);
   return [
     `${BOLD}Command Menu${RESET}`,
     `${DIM}Use arrows, Return to choose, Esc to close.${RESET}`,
     "",
     ...visibleCommands.map((command, index) => {
       const actualIndex = start + index;
-      const pointer = actualIndex === selectedIndex ? "> " : "  ";
+      const pointer = actualIndex === clampedIndex ? "> " : "  ";
       const update = command.name === "/update" ? updateMenuDescription(updateStatus) : undefined;
       const row = `${pointer}${command.usage.padEnd(26)} ${update?.description ?? command.description}`;
-      if (actualIndex === selectedIndex) {
+      if (actualIndex === clampedIndex) {
         return `${INVERSE}${row}${RESET}`;
       }
       return update?.dim ? `${DIM}${row}${RESET}` : row;
@@ -504,6 +515,23 @@ async function updateDisplayName(store: ThaneStore, displayName: string): Promis
   return `Workspace name: ${workspaceDisplayName}`;
 }
 
+async function updateHandle(store: ThaneStore, handle: string): Promise<string> {
+  const cleaned = handle.trim().replace(/^@/, "");
+  if (!cleaned) {
+    return "Usage: /handle <handle>";
+  }
+  const token = requireHostedAuthToken(store);
+  const response = await postThaneApiWithAuth<{ handle: string; workspaceHandle?: string }>("/v1/thane-cli/profile", token, {
+    handle: cleaned,
+    workspaceId: store.activeWorkspace.id,
+    scope: "workspace"
+  });
+  const workspaceHandle = response.workspaceHandle ?? response.handle;
+  await store.setWorkspaceHandle(workspaceHandle);
+  await syncHostedStore(store);
+  return `Workspace handle: @${workspaceHandle}`;
+}
+
 async function updateAccountDisplayName(store: ThaneStore, displayName: string): Promise<string> {
   const cleaned = displayName.trim();
   if (!cleaned) {
@@ -598,7 +626,7 @@ function renderScreen(inputText: string, state: {
     ? Math.max(0, Math.min(state.conversationIndex - Math.floor(conversationRows / 2), items.length - conversationRows))
     : 0;
   const helpLines = state.showMenu
-    ? renderMenuLines(state.menuIndex, contentRows, state.updateStatus)
+    ? renderMenuLines(availableSlashCommands(state.store), state.menuIndex, contentRows, state.updateStatus)
     : state.showReactionPicker
     ? renderReactionPickerLines(state.reactionIndex)
     : state.sidePanelLines
@@ -609,7 +637,7 @@ function renderScreen(inputText: string, state: {
         "/join <channel>   /dm <handle>   /workspace <slug>",
         "/commands         /help          /quit",
         "",
-        ...renderSlashCommands().split("\n").slice(0, Math.max(0, contentRows - 5))
+        ...renderSlashCommands({ isAdmin: canAdminWorkspace(state.store) }).split("\n").slice(0, Math.max(0, contentRows - 5))
       ]
     : renderedMessages.slice(-contentRows);
 
@@ -954,6 +982,15 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     }
     if (trimmed.startsWith("/name ")) {
       status = await updateDisplayName(store, trimmed.slice("/name ".length));
+      showHelp = false;
+      showMenu = false;
+      sidePanelLines = undefined;
+      workspacePickerOpen = false;
+      showReactionPicker = false;
+      return;
+    }
+    if (trimmed.startsWith("/handle ")) {
+      status = await updateHandle(store, trimmed.slice("/handle ".length));
       showHelp = false;
       showMenu = false;
       sidePanelLines = undefined;
@@ -1351,9 +1388,10 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     if (prefix.length > inputText.length) {
       inputText = prefix;
     } else {
-      const firstCommand = commandMatches(inputText)[0];
+      const menuCommands = availableSlashCommands(store);
+      const firstCommand = commandMatches(store, inputText)[0];
       if (firstCommand) {
-        menuIndex = Math.max(0, slashCommands.findIndex((command) => command.name === firstCommand.name));
+        menuIndex = Math.max(0, menuCommands.findIndex((command) => command.name === firstCommand.name));
         showMenu = true;
         showHelp = false;
         sidePanelLines = undefined;
@@ -1381,15 +1419,17 @@ export async function runChat(initialChannel = "general"): Promise<void> {
           return;
         }
         if (showMenu) {
+          const menuCommands = availableSlashCommands(store);
+          menuIndex = Math.max(0, Math.min(menuIndex, menuCommands.length - 1));
           if (key.name === "escape") {
             showMenu = false;
             status = "";
           } else if (key.name === "up") {
-            menuIndex = menuIndex === 0 ? slashCommands.length - 1 : menuIndex - 1;
+            menuIndex = menuIndex === 0 ? menuCommands.length - 1 : menuIndex - 1;
           } else if (key.name === "down" || key.name === "tab") {
-            menuIndex = menuIndex === slashCommands.length - 1 ? 0 : menuIndex + 1;
+            menuIndex = menuIndex === menuCommands.length - 1 ? 0 : menuIndex + 1;
           } else if (key.name === "return") {
-            const selected = slashCommands[menuIndex];
+            const selected = menuCommands[menuIndex];
             if (!selected) {
               showMenu = false;
               status = "";

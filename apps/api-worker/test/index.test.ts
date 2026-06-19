@@ -395,6 +395,67 @@ describe("@ask-thane/api-worker", () => {
     expect(calls.some((call) => call.sql.includes("UPDATE thane_cli_workspace_members SET display_name = ?, updated_at = ? WHERE email = ?"))).toBe(false);
   });
 
+  it("updates only the active workspace handle when a handle is provided", async () => {
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("WHERE workspace_id = ? AND email = ?")) {
+        return {
+          id: "member_1",
+          account_id: "acct_1",
+          email: "garrett@example.com",
+          display_name: "Garrett",
+          handle: "garrett",
+          role: "owner"
+        };
+      }
+      return null;
+    });
+    const all = vi.fn(async () => ({
+      results: [
+        {
+          id: "member_2",
+          account_id: "acct_2",
+          email: "danika@example.com",
+          handle: "danika"
+        }
+      ]
+    }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        if (sql.includes("WHERE workspace_id = ? AND email != ?")) return { all };
+        return sql.startsWith("SELECT") ? { first: first.bind({ sql }) } : { run };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/profile", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("garrett@example.com")}` },
+        body: JSON.stringify({ handle: " Dr Dad ", workspaceId: "wsp_1", scope: "workspace" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      scope: "workspace",
+      workspaceId: "wsp_1",
+      handle: "dr-dad",
+      workspaceHandle: "dr-dad"
+    });
+    const update = calls.find((call) => call.sql.startsWith("UPDATE thane_cli_workspace_members SET handle = ?"));
+    expect(update?.args).toEqual(["dr-dad", expect.any(String), "wsp_1", "garrett@example.com"]);
+  });
+
   it("updates the account default display name without rewriting workspace memberships", async () => {
     const calls: Array<{ sql: string; args: unknown[] }> = [];
     const run = vi.fn(async () => ({ meta: { changes: 1 } }));
@@ -601,6 +662,84 @@ describe("@ask-thane/api-worker", () => {
         createdAt: "2026-06-18T00:01:00.000Z"
       }
     ]);
+  });
+
+  it("redacts other member emails and masks legacy email-derived handles in member sync responses", async () => {
+    const first = vi.fn(async () => null);
+    const all = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members m")) {
+        return {
+          results: [
+            {
+              id: "wsp_1",
+              workspace_slug: "acme",
+              workspace_name: "Acme",
+              ascii_art: null,
+              plan_tier: "free",
+              created_at: "2026-06-18T00:00:00.000Z",
+              updated_at: "2026-06-18T00:00:00.000Z",
+              role: "member"
+            }
+          ]
+        };
+      }
+      if (sql.includes("FROM thane_cli_workspace_members") && !sql.includes("JOIN")) {
+        return {
+          results: [
+            {
+              id: "tcm_owner",
+              account_id: "acct_ownerabcdef",
+              email: "garrett.m.petersen@gmail.com",
+              display_name: "garrett.m.petersen",
+              handle: "garrett.m.petersen",
+              role: "owner",
+              joined_at: "2026-06-18T00:00:00.000Z"
+            },
+            {
+              id: "tcm_alex",
+              account_id: "acct_alexabcdef",
+              email: "alex@example.com",
+              display_name: "Alex",
+              handle: "alex",
+              role: "member",
+              joined_at: "2026-06-18T00:00:00.000Z"
+            }
+          ]
+        };
+      }
+      return { results: [] };
+    });
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn(() => (sql.includes("SELECT display_name") ? { first } : { all: all.bind({ sql }) }))
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/sync?workspaceId=wsp_1", {
+        headers: { Authorization: `Bearer ${await signAuthToken("alex@example.com")}` }
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const owner = body.users.find((user: { id: string }) => user.id === "tcm_owner");
+    const alex = body.users.find((user: { id: string }) => user.id === "tcm_alex");
+    expect(owner).toMatchObject({
+      handle: "user-ownerabc",
+      displayName: "Member OWNERA"
+    });
+    expect(owner.email).toBeUndefined();
+    expect(alex).toMatchObject({
+      email: "alex@example.com",
+      handle: "alex",
+      displayName: "Alex"
+    });
   });
 
   it("creates Thane CLI workspace invite links", async () => {

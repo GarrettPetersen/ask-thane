@@ -3,6 +3,7 @@ export interface SlashCommand {
   usage: string;
   description: string;
   needsArgument: boolean;
+  adminOnly?: boolean;
 }
 
 export const slashCommands: SlashCommand[] = [
@@ -21,21 +22,22 @@ export const slashCommands: SlashCommand[] = [
   { name: "/workspace-leave", usage: "/workspace-leave", description: "Leave the active workspace.", needsArgument: false },
   { name: "/workspace-art", usage: "/workspace-art", description: "Show workspace art setup command.", needsArgument: false },
   { name: "/name", usage: "/name <display-name>", description: "Change your display name in this workspace.", needsArgument: true },
+  { name: "/handle", usage: "/handle <handle>", description: "Change your @handle in this workspace.", needsArgument: true },
   { name: "/account-name", usage: "/account-name <display-name>", description: "Change your default name for new workspaces.", needsArgument: true },
-  { name: "/invite", usage: "/invite <email>", description: "Email a workspace invite.", needsArgument: true },
-  { name: "/invite-link", usage: "/invite-link", description: "Create a workspace invite link.", needsArgument: false },
+  { name: "/invite", usage: "/invite <email>", description: "Admin: email a workspace invite.", needsArgument: true, adminOnly: true },
+  { name: "/invite-link", usage: "/invite-link", description: "Admin: create a workspace invite link.", needsArgument: false, adminOnly: true },
   { name: "/channels", usage: "/channels", description: "List channels in this workspace.", needsArgument: false },
   { name: "/join", usage: "/join <channel>", description: "Switch to a channel.", needsArgument: true },
   { name: "/leave", usage: "/leave", description: "Leave the focused channel.", needsArgument: false },
-  { name: "/channel-invite", usage: "/channel-invite <handle-or-email>", description: "Add a member to the focused channel.", needsArgument: true },
-  { name: "/channel-remove", usage: "/channel-remove <handle-or-email>", description: "Admin: remove a member from the focused channel.", needsArgument: true },
+  { name: "/channel-invite", usage: "/channel-invite <handle-or-email>", description: "Admin: add a member to the focused channel.", needsArgument: true, adminOnly: true },
+  { name: "/channel-remove", usage: "/channel-remove <handle-or-email>", description: "Admin: remove a member from the focused channel.", needsArgument: true, adminOnly: true },
   { name: "/members", usage: "/members", description: "Show members of the focused channel.", needsArgument: false },
   { name: "/channel-members", usage: "/channel-members", description: "Show members of the focused channel.", needsArgument: false },
   { name: "/workspace-members", usage: "/workspace-members", description: "Show members of the active workspace.", needsArgument: false },
-  { name: "/member-remove", usage: "/member-remove <handle-or-email>", description: "Admin: remove a workspace member.", needsArgument: true },
-  { name: "/member-role", usage: "/member-role <handle-or-email> <admin|member>", description: "Admin: change a member role.", needsArgument: true },
-  { name: "/member-ban", usage: "/member-ban <handle-or-email>", description: "Admin: ban a workspace member.", needsArgument: true },
-  { name: "/member-unban", usage: "/member-unban <email>", description: "Admin: unban an email.", needsArgument: true },
+  { name: "/member-remove", usage: "/member-remove <handle-or-email>", description: "Admin: remove a workspace member.", needsArgument: true, adminOnly: true },
+  { name: "/member-role", usage: "/member-role <handle-or-email> <admin|member>", description: "Admin: change a member role.", needsArgument: true, adminOnly: true },
+  { name: "/member-ban", usage: "/member-ban <handle-or-email>", description: "Admin: ban a workspace member.", needsArgument: true, adminOnly: true },
+  { name: "/member-unban", usage: "/member-unban <email>", description: "Admin: unban an email.", needsArgument: true, adminOnly: true },
   { name: "/dm", usage: "/dm <handle>", description: "Switch to a DM.", needsArgument: true },
   { name: "/recent", usage: "/recent", description: "Show recent messages in the focused conversation.", needsArgument: false },
   { name: "/thread", usage: "/thread <message-id>", description: "Show a message thread.", needsArgument: true },
@@ -46,19 +48,24 @@ export const slashCommands: SlashCommand[] = [
   { name: "/exit", usage: "/exit", description: "Leave chat.", needsArgument: false }
 ];
 
-export function renderSlashCommands(): string {
-  return slashCommands
+export function slashCommandsForRole(input: { isAdmin: boolean }): SlashCommand[] {
+  return slashCommands.filter((command) => input.isAdmin || !command.adminOnly);
+}
+
+export function renderSlashCommands(input: { isAdmin: boolean } = { isAdmin: true }): string {
+  return slashCommandsForRole(input)
     .map((command) => `${command.usage.padEnd(28)} ${command.description}`)
     .join("\n");
 }
 
-export function completeSlashCommand(line: string): [string[], string] {
+export function completeSlashCommand(line: string, input: { isAdmin: boolean } = { isAdmin: true }): [string[], string] {
   if (!line.startsWith("/")) {
     return [[], line];
   }
   const commandPrefix = line.match(/^\/\S*/)?.[0] ?? line;
-  const hits = slashCommands
+  const commands = slashCommandsForRole(input);
+  const hits = commands
     .map((command) => command.name)
     .filter((name) => name.startsWith(commandPrefix));
-  return [hits.length > 0 ? hits : slashCommands.map((command) => command.name), line];
+  return [hits.length > 0 ? hits : commands.map((command) => command.name), line];
 }

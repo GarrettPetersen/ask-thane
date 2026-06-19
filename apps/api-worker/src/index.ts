@@ -35,6 +35,7 @@ interface AuthStartPayload {
 
 interface ProfileUpdatePayload {
   displayName?: unknown;
+  handle?: unknown;
   scope?: unknown;
   workspaceId?: unknown;
 }
@@ -313,6 +314,68 @@ function normalizeChannelName(value: unknown): string | null {
 
 function normalizeHandleFromEmail(email: string): string {
   return email.split("@")[0]?.replace(/[^a-z0-9._-]+/gi, "-").toLowerCase().replace(/^-+|-+$/g, "").slice(0, 80) || "user";
+}
+
+function normalizeHandle(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const handle = value.trim().replace(/^@/, "").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return handle ? handle.slice(0, 32) : null;
+}
+
+function publicHandleForAccountId(accountId: string): string {
+  return `user-${accountId.replace(/^acct_/, "").slice(0, 8) || "member"}`;
+}
+
+function fallbackDisplayNameForAccountId(accountId: string): string {
+  const suffix = accountId.replace(/^acct_/, "").slice(0, 6).toUpperCase();
+  return suffix ? `Member ${suffix}` : "Member";
+}
+
+function emailLocalPartLooksIdentifying(localPart: string): boolean {
+  return /[._+-]|\d/.test(localPart) || localPart.length > 16;
+}
+
+function isLegacyEmailDerivedIdentity(email: string, value: string | null | undefined): boolean {
+  const trimmed = value?.trim().toLowerCase();
+  if (!trimmed) {
+    return false;
+  }
+  const localPart = email.split("@")[0]?.trim().toLowerCase() || "";
+  if (!emailLocalPartLooksIdentifying(localPart)) {
+    return false;
+  }
+  const normalizedLegacy = normalizeHandleFromEmail(email);
+  const normalizedValue = normalizeHandle(trimmed);
+  return trimmed === localPart || normalizedValue === normalizedLegacy;
+}
+
+function publicHandleForMember(member: { account_id?: string | null | undefined; email?: string | null | undefined; handle?: string | null | undefined }): string {
+  const normalized = normalizeHandle(member.handle ?? "");
+  if (!member.account_id || !member.email) {
+    return normalized || "user-member";
+  }
+  if (normalized && !isLegacyEmailDerivedIdentity(member.email, normalized)) {
+    return normalized;
+  }
+  return publicHandleForAccountId(member.account_id);
+}
+
+function publicDisplayNameForMember(member: {
+  account_id?: string | null | undefined;
+  email?: string | null | undefined;
+  display_name?: string | null | undefined;
+  handle?: string | null | undefined;
+}): string {
+  const displayName = member.display_name?.trim();
+  if (!member.account_id || !member.email) {
+    return displayName || publicHandleForMember(member);
+  }
+  if (displayName && !isLegacyEmailDerivedIdentity(member.email, displayName)) {
+    return displayName.slice(0, 120);
+  }
+  return fallbackDisplayNameForAccountId(member.account_id);
 }
 
 function normalizeChatText(value: unknown): string | null {
@@ -651,10 +714,11 @@ async function accountIdForEmail(email: string): Promise<string> {
 }
 
 async function buildAccount(env: Env, input: { email: string; displayName?: string | null }): Promise<Record<string, string>> {
+  const accountId = await accountIdForEmail(input.email);
   const savedDisplayName = input.displayName?.trim() || (await profileDisplayNameForEmail(env, input.email));
-  const displayName = savedDisplayName || input.email.split("@")[0] || input.email;
+  const displayName = savedDisplayName || fallbackDisplayNameForAccountId(accountId);
   return {
-    id: await accountIdForEmail(input.email),
+    id: accountId,
     email: input.email,
     displayName,
     createdAt: nowIso(),
@@ -672,7 +736,8 @@ async function accountProfileDisplayNameForEmail(env: Env, email: string): Promi
       .prepare("SELECT display_name FROM thane_cli_account_profiles WHERE email = ? LIMIT 1")
       .bind(email)
       .first<{ display_name?: string | null }>();
-    return row?.display_name?.trim() || null;
+    const displayName = row?.display_name?.trim() || null;
+    return displayName && !isLegacyEmailDerivedIdentity(email, displayName) ? displayName : null;
   } catch (error) {
     if (String(error).toLowerCase().includes("no such table")) {
       return null;
@@ -697,7 +762,8 @@ async function profileDisplayNameForEmail(env: Env, email: string): Promise<stri
       )
       .bind(email)
       .first<{ display_name?: string | null }>();
-    return row?.display_name?.trim() || null;
+    const displayName = row?.display_name?.trim() || null;
+    return displayName && !isLegacyEmailDerivedIdentity(email, displayName) ? displayName : null;
   } catch (error) {
     if (String(error).toLowerCase().includes("no such table")) {
       return null;
@@ -1003,8 +1069,10 @@ async function ensureThaneCliMember(env: Env, input: {
   role: "owner" | "admin" | "member";
 }): Promise<{ id: string; accountId: string; email: string; handle: string; displayName: string; role: string }> {
   const accountId = await accountIdForEmail(input.email);
-  const handle = normalizeHandleFromEmail(input.email);
-  const displayName = input.displayName?.trim() || handle.charAt(0).toUpperCase() + handle.slice(1);
+  const handle = publicHandleForAccountId(accountId);
+  const legacyHandle = normalizeHandleFromEmail(input.email);
+  const legacyDisplayName = input.email.split("@")[0]?.trim() || legacyHandle;
+  const displayName = input.displayName?.trim() || fallbackDisplayNameForAccountId(accountId);
   const now = nowIso();
   await env.DB
     .prepare(
@@ -1013,15 +1081,21 @@ async function ensureThaneCliMember(env: Env, input: {
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(workspace_id, email) DO UPDATE SET
          account_id = excluded.account_id,
-         display_name = COALESCE(NULLIF(thane_cli_workspace_members.display_name, ''), excluded.display_name),
-         handle = excluded.handle,
+         display_name = CASE
+           WHEN thane_cli_workspace_members.display_name = ? THEN excluded.display_name
+           ELSE COALESCE(NULLIF(thane_cli_workspace_members.display_name, ''), excluded.display_name)
+         END,
+         handle = CASE
+           WHEN thane_cli_workspace_members.handle = ? THEN excluded.handle
+           ELSE COALESCE(NULLIF(thane_cli_workspace_members.handle, ''), excluded.handle)
+         END,
          role = CASE
            WHEN thane_cli_workspace_members.role = 'owner' THEN 'owner'
            ELSE excluded.role
          END,
          updated_at = excluded.updated_at`
     )
-    .bind(makeId("tcm"), input.workspaceId, accountId, input.email, displayName, handle, input.role, now, now)
+    .bind(makeId("tcm"), input.workspaceId, accountId, input.email, displayName, handle, input.role, now, now, legacyDisplayName, legacyHandle)
     .run();
   const row = await env.DB
     .prepare(
@@ -1039,8 +1113,8 @@ async function ensureThaneCliMember(env: Env, input: {
     id: row.id,
     accountId: row.account_id,
     email: row.email,
-    handle: row.handle,
-    displayName: row.display_name || row.handle,
+    handle: publicHandleForMember({ account_id: row.account_id, email: row.email, handle: row.handle }),
+    displayName: publicDisplayNameForMember({ account_id: row.account_id, email: row.email, display_name: row.display_name, handle: row.handle }),
     role: row.role
   };
 }
@@ -1155,7 +1229,7 @@ async function resolveThaneCliWorkspaceMember(env: Env, input: {
   if (!target) {
     return null;
   }
-  const normalizedHandle = normalizeHandleFromEmail(target);
+  const normalizedHandle = normalizeHandle(target) || "";
   return env.DB
     .prepare(
       `SELECT id, account_id, email, display_name, handle, role
@@ -1758,7 +1832,6 @@ async function handleThaneCliAuthVerify(request: Request, env: Env): Promise<Res
     typeof authRow.display_name === "string" && authRow.display_name.trim()
       ? authRow.display_name.trim()
       : null;
-  const displayName = verifiedDisplayName ?? email.split("@")[0] ?? email;
   if (verifiedDisplayName) {
     await setAccountProfileDisplayName(env, email, verifiedDisplayName);
   }
@@ -1783,7 +1856,7 @@ async function handleThaneCliAuthVerify(request: Request, env: Env): Promise<Res
 
   return Response.json({
     ok: true,
-    account: await buildAccount(env, { email, displayName })
+    account: await buildAccount(env, { email, displayName: verifiedDisplayName })
   });
 }
 
@@ -1911,12 +1984,13 @@ async function handleThaneCliProfileUpdate(request: Request, env: Env): Promise<
   }
   const payload = await parseJsonObject<ProfileUpdatePayload>(request);
   const displayName = normalizeDisplayName(payload?.displayName);
-  if (!displayName) {
-    return Response.json({ ok: false, error: "display_name_required" }, { status: 400 });
+  const handle = normalizeHandle(payload?.handle);
+  if (!displayName && !handle) {
+    return Response.json({ ok: false, error: "profile_update_required" }, { status: 400 });
   }
   const scope = typeof payload?.scope === "string" ? payload.scope.trim().toLowerCase() : "";
   const workspaceId = typeof payload?.workspaceId === "string" && payload.workspaceId.trim() ? payload.workspaceId.trim().slice(0, 120) : null;
-  if (scope === "workspace" || workspaceId) {
+  if (scope === "workspace" || workspaceId || handle) {
     if (!workspaceId) {
       return Response.json({ ok: false, error: "workspace_id_required" }, { status: 400 });
     }
@@ -1924,18 +1998,47 @@ async function handleThaneCliProfileUpdate(request: Request, env: Env): Promise<
     if (!member) {
       return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
     }
+    if (handle) {
+      const existingRows = await env.DB
+        .prepare(
+          `SELECT id, account_id, email, handle
+           FROM thane_cli_workspace_members
+           WHERE workspace_id = ? AND email != ?`
+        )
+        .bind(workspaceId, email)
+        .all<{ id: string; account_id: string; email: string; handle: string | null }>();
+      const existing = (existingRows.results ?? []).find((candidate) => publicHandleForMember(candidate) === handle);
+      if (existing) {
+        return Response.json({ ok: false, error: "handle_taken" }, { status: 409 });
+      }
+    }
+    const assignments: string[] = [];
+    const values: unknown[] = [];
+    if (displayName) {
+      assignments.push("display_name = ?");
+      values.push(displayName);
+    }
+    if (handle) {
+      assignments.push("handle = ?");
+      values.push(handle);
+    }
+    assignments.push("updated_at = ?");
+    values.push(nowIso(), workspaceId, email);
     await env.DB
-      .prepare("UPDATE thane_cli_workspace_members SET display_name = ?, updated_at = ? WHERE workspace_id = ? AND email = ?")
-      .bind(displayName, nowIso(), workspaceId, email)
+      .prepare(`UPDATE thane_cli_workspace_members SET ${assignments.join(", ")} WHERE workspace_id = ? AND email = ?`)
+      .bind(...values)
       .run();
     return Response.json({
       ok: true,
       scope: "workspace",
       workspaceId,
       account: await buildAccount(env, { email }),
-      displayName,
-      workspaceDisplayName: displayName
+      ...(displayName ? { displayName, workspaceDisplayName: displayName } : {}),
+      ...(handle ? { handle, workspaceHandle: handle } : {})
     });
+  }
+  if (!displayName) {
+    return Response.json({ ok: false, error: "display_name_required" }, { status: 400 });
   }
   if (scope === "account") {
     await setAccountProfileDisplayName(env, email, displayName);
@@ -2053,13 +2156,14 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
   const members = memberRows.results ?? [];
   const memberIds = members.map((member) => member.id);
   const currentMember = members.find((member) => member.email === email);
+  const canSeeMemberEmails = isThaneCliWorkspaceAdmin(currentMember?.role);
   const users = members.map((member) => ({
     id: member.id,
     workspaceId: activeWorkspace.id,
     accountId: member.account_id,
-    handle: member.handle,
-    displayName: member.display_name || member.handle,
-    email: member.email
+    handle: publicHandleForMember(member),
+    displayName: publicDisplayNameForMember(member),
+    ...(canSeeMemberEmails || member.email === email ? { email: member.email } : {})
   }));
   const workspaceMembers = members.map((member) => ({
     id: member.id,
@@ -2145,19 +2249,19 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
   if (messageIds.length > 0) {
     const reactionRows = await env.DB
       .prepare(
-        `SELECT reaction.message_id, reaction.emoji, reaction.created_at, member.handle
+        `SELECT reaction.message_id, reaction.emoji, reaction.created_at, member.account_id, member.email, member.handle
          FROM thane_cli_message_reactions reaction
          JOIN thane_cli_workspace_members member ON member.id = reaction.member_id
          WHERE reaction.message_id IN (${messageIds.map(() => "?").join(", ")})
          ORDER BY reaction.created_at ASC`
       )
       .bind(...messageIds)
-      .all<{ message_id: string; emoji: string; created_at: string; handle: string }>();
+      .all<{ message_id: string; emoji: string; created_at: string; account_id: string; email: string; handle: string | null }>();
     for (const reaction of reactionRows.results ?? []) {
       const reactions = reactionsByMessage.get(reaction.message_id) ?? [];
       reactions.push({
         emoji: reaction.emoji,
-        by: reaction.handle,
+        by: publicHandleForMember(reaction),
         createdAt: reaction.created_at
       });
       reactionsByMessage.set(reaction.message_id, reactions);
@@ -2444,7 +2548,7 @@ async function handleThaneCliChannelMemberRemove(request: Request, env: Env): Pr
 async function recentThaneChatContext(env: Env, input: { workspaceId: string; channelId: string; threadRootId?: string | null }): Promise<string> {
   const messageRows = await env.DB
     .prepare(
-      `SELECT msg.id, msg.text, msg.created_at, msg.thread_root_id, member.handle
+      `SELECT msg.id, msg.text, msg.created_at, msg.thread_root_id, member.account_id, member.email, member.handle
        FROM thane_cli_chat_messages msg
        JOIN thane_cli_workspace_members member ON member.id = msg.author_member_id
        WHERE msg.workspace_id = ?
@@ -2453,14 +2557,14 @@ async function recentThaneChatContext(env: Env, input: { workspaceId: string; ch
        LIMIT 40`
     )
     .bind(input.workspaceId, input.channelId)
-    .all<{ id: string; text: string; created_at: string; thread_root_id: string | null; handle: string }>();
+    .all<{ id: string; text: string; created_at: string; thread_root_id: string | null; account_id: string; email: string; handle: string | null }>();
   const rows = (messageRows.results ?? []).reverse();
   const focusedRows = input.threadRootId
     ? rows.filter((row) => row.id === input.threadRootId || row.thread_root_id === input.threadRootId)
     : rows;
   return focusedRows
     .slice(-30)
-    .map((row) => `[${row.created_at}] @${row.handle}: ${row.text}`)
+    .map((row) => `[${row.created_at}] @${publicHandleForMember(row)}: ${row.text}`)
     .join("\n");
 }
 
