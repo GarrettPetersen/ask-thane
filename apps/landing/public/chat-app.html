@@ -310,6 +310,7 @@
         activeWorkspaceId: "",
         activeChannelId: "",
         replyToId: "",
+        draftText: "",
         status: "",
         error: "",
         busy: false
@@ -457,9 +458,10 @@
       async function sendMessage(event) {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
-        const text = String(form.get("text") || "").trim();
+        const text = String(state.draftText || form.get("text") || "").trim();
         if (!text || !state.activeChannelId) return;
         event.currentTarget.reset();
+        state.draftText = "";
         const replyTarget = messageById(state.replyToId);
         const threadRootId = replyTarget ? (replyTarget.threadRootId || replyTarget.id) : "";
         await api("/v1/thane-cli/messages", {
@@ -481,6 +483,10 @@
         state.replyToId = id;
         render();
         requestAnimationFrame(() => document.querySelector(".composer textarea")?.focus());
+      }
+
+      function updateDraft(value) {
+        state.draftText = value;
       }
 
       async function reactTo(messageId, emoji) {
@@ -658,7 +664,7 @@
               <div class="composer-wrap">
                 ${replyTarget ? `<div class="reply-target"><span>replying to @${esc(users.get(replyTarget.authorId)?.handle || "unknown")}: ${esc(replyTarget.text.slice(0, 80))}</span><button onclick="state.replyToId=''; render()">cancel</button></div>` : ""}
                 <form class="composer" onsubmit="sendMessage(event)">
-                  <textarea name="text" placeholder="${replyTarget ? "Type a reply" : `Type a message for #${esc(channel?.name || "general")}`}"></textarea>
+                  <textarea name="text" oninput="updateDraft(this.value)" placeholder="${replyTarget ? "Type a reply" : `Type a message for #${esc(channel?.name || "general")}`}">${esc(state.draftText)}</textarea>
                   <button>${replyTarget ? "reply" : "send"}</button>
                 </form>
               </div>
@@ -713,6 +719,7 @@
       window.verifyMfa = verifyMfa;
       window.chooseWorkspace = chooseWorkspace;
       window.sendMessage = sendMessage;
+      window.updateDraft = updateDraft;
       window.replyTo = replyTo;
       window.reactTo = reactTo;
       window.customReaction = customReaction;
@@ -725,7 +732,15 @@
 
       if (state.session?.authToken) {
         sync().catch((error) => { state.error = error.message; saveSession(null); }).finally(render);
-        setInterval(() => sync().then(render).catch(() => {}), 5000);
+        setInterval(() => {
+          const composerActive = document.activeElement?.matches?.(".composer textarea");
+          sync()
+            .then(() => {
+              if (composerActive && state.draftText) return;
+              render();
+            })
+            .catch(() => {});
+        }, 5000);
       } else {
         render();
       }
