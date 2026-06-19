@@ -610,8 +610,7 @@ async function ensureThaneCliWorkspace(env: Env, input: {
     displayName: normalizeHandleFromEmail(input.email),
     role: input.role
   });
-  await ensureThaneCliChannel(env, workspace.id, "general", "Default team chat");
-  await ensureThaneCliChannel(env, workspace.id, "engineering", "Build notes and review requests");
+  await ensureThaneCliChannel(env, workspace.id, "general", "Community-wide conversation");
 
   return {
     id: workspace.id,

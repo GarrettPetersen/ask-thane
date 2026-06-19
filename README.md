@@ -163,7 +163,7 @@ pnpm thane:build
 
 Run interactive chat:
 ```bash
-pnpm thane chat engineering
+pnpm thane chat general
 ```
 
 Navigate inside chat:
@@ -177,7 +177,7 @@ Navigate inside chat:
 /workspace acme     switch workspace and focus #general
 /workspace-art      show workspace ASCII art setup commands
 /channels           list channels in the active workspace
-/join engineering   switch to a channel
+/join book-club     switch to a channel
 /leave              leave the focused channel
 /members            list focused channel members/subscribers
 /dm alex            switch to a DM
@@ -299,8 +299,9 @@ pnpm thane commands --json
 pnpm thane inbox --json
 pnpm thane inbox --all-workspaces --json
 pnpm thane channels --json
-pnpm thane send engineering "Shipping the patch now"
-pnpm thane recent engineering --json
+pnpm thane channel create book-club --topic "Books, links, and plans"
+pnpm thane send general "Hello everyone"
+pnpm thane recent general --json
 pnpm thane mentions --since yesterday --json
 pnpm thane reply <message-id> "I can review this afternoon"
 ```
@@ -309,7 +310,7 @@ Manage users, mentions, and DMs:
 ```bash
 pnpm thane users --json
 pnpm thane user add alex --name "Alex"
-pnpm thane send engineering "@alex can you review this?"
+pnpm thane send general "@alex can you review this?"
 pnpm thane dm alex
 pnpm thane dm-send alex "This is private"
 pnpm thane dm-recent alex --json
@@ -320,7 +321,7 @@ Enable the optional Ask Thane integration:
 pnpm thane init
 pnpm thane ask-thane enable
 pnpm thane notify location thane_cli
-pnpm thane send engineering "@thane can you track this review?"
+pnpm thane send general "@thane can you track this review?"
 pnpm thane thread <message-id> --json
 ```
 
@@ -339,15 +340,15 @@ pnpm thane notify location both
 
 You can also ask `@thane` conversationally:
 ```bash
-pnpm thane send engineering "@thane ping me here"
-pnpm thane send engineering "@thane send reminders in Slack"
-pnpm thane send engineering "@thane notify me in both places"
+pnpm thane send general "@thane ping me here"
+pnpm thane send general "@thane send reminders in Slack"
+pnpm thane send general "@thane notify me in both places"
 ```
 
 For clean JSON in scripts or agents, build once and call the compiled CLI directly:
 ```bash
 pnpm thane:build
-node apps/thane-cli/dist/index.js recent engineering --json
+node apps/thane-cli/dist/index.js recent general --json
 ```
 
 By default, MVP data is stored at `~/.thane/store.json`, so agents launched from arbitrary project directories read the same user chat store. Override it explicitly for tests, fixtures, or project-local stores:
@@ -359,7 +360,7 @@ THANE_STORE_PATH=/tmp/thane-store.json pnpm thane recent --json
 pnpm thane --store ./.thane/store.json recent --json
 ```
 
-The CLI always scopes channels, messages, threads, unread state, mentions, and search to the active workspace. That keeps `#engineering` in one workspace separate from `#engineering` in another.
+The CLI always scopes channels, messages, threads, unread state, mentions, and search to the active workspace. That keeps `#general` in one workspace separate from `#general` in another.
 
 ## Testing
 - The repo includes a full automated test suite across workers and shared packages, including agent tool-call behavior, workflow logic, Slack payload normalization, and route-level worker behavior.

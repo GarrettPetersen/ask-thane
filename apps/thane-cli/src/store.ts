@@ -120,17 +120,7 @@ function defaultData(): ThaneStoreData {
       kind: "channel",
       visibility: "public",
       memberIds: [user.id],
-      topic: "Default team chat",
-      createdAt
-    },
-    {
-      id: "chn_engineering",
-      workspaceId: workspace.id,
-      name: "engineering",
-      kind: "channel",
-      visibility: "public",
-      memberIds: [user.id],
-      topic: "Build notes and review requests",
+      topic: "Community-wide conversation",
       createdAt
     }
   ];
@@ -1218,7 +1208,7 @@ export class ThaneStore {
         kind: "channel",
         visibility: "public",
         memberIds: [member.userId],
-        topic: "Default team chat",
+        topic: "Community-wide conversation",
         createdAt: nowIso()
       });
     }

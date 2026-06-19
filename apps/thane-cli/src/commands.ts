@@ -214,13 +214,13 @@ export const cliCommands: CliCommand[] = [
     category: "Messages",
     command: "thane send <channel> <message>",
     description: "Send a channel message.",
-    examples: ["thane send engineering \"Shipping the patch now\""]
+    examples: ["thane send general \"Hello everyone\""]
   },
   {
     category: "Messages",
     command: "thane recent [channel] [--limit 20] [--since today] [--json]",
     description: "Show recent messages.",
-    examples: ["thane recent engineering --json"]
+    examples: ["thane recent general --json"]
   },
   {
     category: "Messages",
@@ -268,7 +268,7 @@ export const cliCommands: CliCommand[] = [
     category: "Messages",
     command: "thane mark-read <channel>",
     description: "Mark a channel read.",
-    examples: ["thane mark-read engineering"]
+    examples: ["thane mark-read general"]
   },
   {
     category: "Ask Thane",
