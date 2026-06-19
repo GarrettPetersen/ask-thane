@@ -455,6 +455,58 @@ describe("@ask-thane/api-worker", () => {
     expect(inviteInsert?.args[6]).toBe("owner@example.com");
   });
 
+  it("rejects Thane CLI workspace invite creation by non-admin members", async () => {
+    const sendEmail = vi.fn(async () => ({ messageId: "email_1" }));
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspaces")) {
+        return { id: "wsp_1", workspace_slug: "acme-inc", workspace_name: "Acme Inc", ascii_art: null };
+      }
+      if (sql.includes("FROM thane_cli_workspace_members")) {
+        return {
+          id: "tcm_1",
+          account_id: "acct_1",
+          email: "member@example.com",
+          display_name: "Member",
+          handle: "member",
+          role: "member"
+        };
+      }
+      return null;
+    });
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn(() => ({ run, first: first.bind({ sql }) }))
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret",
+      EMAIL: { send: sendEmail }
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/workspace-invites", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("member@example.com")}` },
+        body: JSON.stringify({
+          workspaceId: "wsp_1",
+          workspaceSlug: "Acme Inc",
+          workspaceName: "Acme Inc",
+          inviteeEmail: "alex@example.com",
+          role: "member",
+          expiresInHours: 24
+        })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({ ok: false, error: "workspace_admin_required" });
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalledWith(expect.stringContaining("INSERT INTO thane_cli_workspace_invites"));
+  });
+
   it.each([
     ["raw token", "token_123"],
     ["API invite URL", "https://api.askthane.com/invite/token_123"],

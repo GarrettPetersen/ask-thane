@@ -763,6 +763,10 @@ async function requireThaneCliWorkspaceMember(
     .first<{ id: string; account_id: string; email: string; display_name: string | null; handle: string; role: string }>();
 }
 
+function isThaneCliWorkspaceAdmin(role: string | null | undefined): boolean {
+  return role === "owner" || role === "admin";
+}
+
 function validateInvite(row: Awaited<ReturnType<typeof inviteByToken>>): Response | null {
   if (!row) {
     return Response.json({ ok: false, error: "invite_not_found" }, { status: 404 });
@@ -1535,13 +1539,31 @@ async function handleThaneCliWorkspaceInviteCreate(request: Request, env: Env): 
     return Response.json({ ok: false, error: "workspace_id_slug_and_name_required" }, { status: 400 });
   }
   const inviteeEmail = normalizeEmail(payload?.inviteeEmail);
-  const workspace = await ensureThaneCliWorkspace(env, {
-    workspaceId,
-    workspaceSlug,
-    workspaceName,
-    email,
-    role: "owner"
-  });
+  const workspaceRow = await env.DB
+    .prepare(
+      `SELECT id, workspace_slug, workspace_name, ascii_art
+       FROM thane_cli_workspaces
+       WHERE id = ?
+       LIMIT 1`
+    )
+    .bind(workspaceId)
+    .first<{ id?: string; workspace_slug?: string; workspace_name?: string | null; ascii_art?: string | null }>();
+  if (!workspaceRow?.id || !workspaceRow.workspace_slug) {
+    return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
+  }
+  const member = await requireThaneCliWorkspaceMember(env, workspaceRow.id, email);
+  if (!member) {
+    return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
+  }
+  if (!isThaneCliWorkspaceAdmin(member.role)) {
+    return Response.json({ ok: false, error: "workspace_admin_required" }, { status: 403 });
+  }
+  const workspace = {
+    id: workspaceRow.id,
+    slug: workspaceRow.workspace_slug,
+    name: workspaceRow.workspace_name || workspaceName || workspaceRow.workspace_slug,
+    asciiArt: workspaceRow.ascii_art ?? null
+  };
 
   const role = normalizeWorkspaceRole(payload?.role);
   const expiresInHours = normalizePositiveInteger(payload?.expiresInHours, 24 * 7, 24 * 30);
