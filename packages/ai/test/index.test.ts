@@ -114,4 +114,48 @@ describe("@ask-thane/ai", () => {
     expect(second?.confidence).toBe(0.55);
     expect(second?.dueAt).toBeUndefined();
   });
+
+  it("uses Thane Chat handles for native task assignees", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  reasoning_summary: "ok",
+                  tasks: [
+                    {
+                      title: "Review the launch copy",
+                      description: null,
+                      assignee_user_id: null,
+                      assignee_name: null,
+                      urgency: "medium",
+                      difficulty: "medium",
+                      status: "incomplete",
+                      confidence: 0.8,
+                      due_at: null
+                    }
+                  ]
+                })
+              }
+            }
+          ]
+        })
+      }))
+    );
+
+    const client = createLlmClient({ provider: "openai", model: "gpt-test", openAiApiKey: "k" });
+    const result = await client.extractTasksFromConversation({
+      ...baseEvent,
+      text: "@danika please review the launch copy",
+      author: { platform: "thane_cli", platformUserId: "garrett" }
+    });
+
+    expect(result.tasks[0]?.assignee.platform).toBe("thane_cli");
+    expect(result.tasks[0]?.assignee.platformUserId).toBe("danika");
+    expect(result.tasks[0]?.assigner.platform).toBe("thane_cli");
+  });
 });

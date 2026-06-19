@@ -16,6 +16,7 @@ import { ConversationAccessResolver } from "./services/conversation-access";
 import { runEvalReplay } from "./services/eval-harness";
 import { runScheduledFollowUpJobs } from "./services/follow-up-jobs";
 import { replayUnprocessedSlackIngestEvents } from "./services/ingest-replay";
+import { runConversationalAgentForThaneChatMessage } from "./services/agent-runtime";
 import { getSlackInstallDiagnostics } from "./services/onboarding-diagnostics";
 import { getOpsSummary, getWorkspaceOpsSummary } from "./services/ops-dashboard";
 import { runScheduledReminderDigests, runWorkspaceReminderDigestsNow } from "./services/reminder-digests";
@@ -121,6 +122,15 @@ async function requireAdmin(request: Request, env: BotEnv): Promise<Response | n
   return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
 }
 
+function requireInternalBearer(request: Request, env: BotEnv): Response | null {
+  const expected = env.INTERNAL_API_BEARER_TOKEN?.trim();
+  const actual = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  if (!expected || actual !== expected) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  return null;
+}
+
 async function parseJsonBody<T>(request: Request): Promise<{ ok: true; value: T } | { ok: false; response: Response }> {
   try {
     const payload = (await request.json()) as T;
@@ -128,6 +138,56 @@ async function parseJsonBody<T>(request: Request): Promise<{ ok: true; value: T 
   } catch {
     return { ok: false, response: Response.json({ ok: false, error: "invalid_json_body" }, { status: 400 }) };
   }
+}
+
+async function ensureNativeAskThaneMember(env: BotEnv, workspaceId: string): Promise<string> {
+  const existing = await env.DB
+    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' LIMIT 1")
+    .bind(workspaceId)
+    .first<{ id?: string }>();
+  if (existing?.id) {
+    return existing.id;
+  }
+  const nowIso = new Date().toISOString();
+  const id = crypto.randomUUID();
+  await env.DB
+    .prepare(
+      `INSERT INTO thane_cli_workspace_members (
+         id, workspace_id, account_id, email, display_name, handle, role, joined_at, updated_at
+       ) VALUES (?, ?, 'acct_thane', 'thane@askthane.com', 'Ask Thane', 'thane', 'member', ?, ?)
+       ON CONFLICT(workspace_id, email) DO UPDATE SET
+         display_name = excluded.display_name,
+         handle = excluded.handle,
+         updated_at = excluded.updated_at`
+    )
+    .bind(id, workspaceId, nowIso, nowIso)
+    .run();
+  const row = await env.DB
+    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' LIMIT 1")
+    .bind(workspaceId)
+    .first<{ id?: string }>();
+  return row?.id ?? id;
+}
+
+async function postNativeAskThaneReply(input: {
+  env: BotEnv;
+  workspaceId: string;
+  channelId: string;
+  text: string;
+  threadRootId?: string | null;
+}): Promise<string> {
+  const botMemberId = await ensureNativeAskThaneMember(input.env, input.workspaceId);
+  const nowIso = new Date().toISOString();
+  const messageId = crypto.randomUUID();
+  await input.env.DB
+    .prepare(
+      `INSERT INTO thane_cli_chat_messages (
+         id, workspace_id, channel_id, author_member_id, text, source, thread_root_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, 'chat', ?, ?, ?)`
+    )
+    .bind(messageId, input.workspaceId, input.channelId, botMemberId, input.text, input.threadRootId ?? null, nowIso, nowIso)
+    .run();
+  return messageId;
 }
 
 async function getPollStatus(env: BotEnv): Promise<Record<string, unknown>> {
@@ -248,6 +308,77 @@ export default {
 
     if (pathname === "/slack/oauth/callback" && request.method === "GET") {
       return handleSlackOAuthCallback(request, env);
+    }
+
+    if (pathname === "/internal/thane-chat/agent-message" && request.method === "POST") {
+      const unauthorized = requireInternalBearer(request, env);
+      if (unauthorized) {
+        return unauthorized;
+      }
+      const parsed = await parseJsonBody<{
+        organizationId?: string;
+        workspaceId?: string;
+        conversationSourceId?: string;
+        channelId?: string;
+        authorExternalUserId?: string;
+        authorEmail?: string;
+        authorDisplayName?: string;
+        messageId?: string;
+        text?: string;
+        threadRootId?: string | null;
+        shouldRespond?: boolean;
+        occurredAt?: string;
+      }>(request);
+      if (!parsed.ok) {
+        return parsed.response;
+      }
+      const payload = parsed.value;
+      if (
+        !payload.organizationId ||
+        !payload.workspaceId ||
+        !payload.conversationSourceId ||
+        !payload.channelId ||
+        !payload.authorExternalUserId ||
+        !payload.messageId ||
+        !payload.text
+      ) {
+        return Response.json({ ok: false, error: "missing_native_agent_fields" }, { status: 400 });
+      }
+      const agentRun = await runConversationalAgentForThaneChatMessage({
+        env,
+        organizationId: payload.organizationId,
+        workspaceId: payload.workspaceId,
+        conversationSourceId: payload.conversationSourceId,
+        channelId: payload.channelId,
+        authorExternalUserId: payload.authorExternalUserId,
+        ...(payload.authorEmail ? { authorEmail: payload.authorEmail } : {}),
+        ...(payload.authorDisplayName ? { authorDisplayName: payload.authorDisplayName } : {}),
+        messageId: payload.messageId,
+        text: payload.text,
+        ...(payload.threadRootId ? { threadRootId: payload.threadRootId } : {}),
+        ...(payload.occurredAt ? { occurredAt: payload.occurredAt } : {}),
+        interactionMode: payload.shouldRespond ? "dm_reply" : "passive_ingest"
+      });
+      let replyMessageId: string | undefined;
+      if (payload.shouldRespond && agentRun.replyText?.trim()) {
+        replyMessageId = await postNativeAskThaneReply({
+          env,
+          workspaceId: payload.workspaceId,
+          channelId: payload.channelId,
+          text: agentRun.replyText.trim(),
+          threadRootId: payload.threadRootId ?? payload.messageId
+        });
+      }
+      return Response.json({
+        ok: true,
+        usedTools: agentRun.usedTools,
+        createdTaskIds: agentRun.createdTaskIds,
+        updatedTaskIds: agentRun.updatedTaskIds,
+        taskActionTypes: agentRun.taskActionTypes,
+        eventTypes: agentRun.eventTypes,
+        ...(agentRun.finalSummary ? { finalSummary: agentRun.finalSummary } : {}),
+        ...(replyMessageId ? { reply: { messageId: replyMessageId, text: agentRun.replyText } } : {})
+      });
     }
 
     if (pathname === "/admin/poll/run" && request.method === "POST") {

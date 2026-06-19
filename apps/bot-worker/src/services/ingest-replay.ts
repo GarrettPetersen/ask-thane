@@ -1,5 +1,5 @@
 import { D1TaskRepository } from "@ask-thane/data";
-import { runConversationalAgentForSlackMessage } from "./agent-runtime";
+import { runConversationalAgent } from "./agent-runtime";
 import { ConversationAccessResolver } from "./conversation-access";
 import { fetchSlackMessageByTs } from "./slack-api";
 import { SlackInstallStore } from "./slack-install-store";
@@ -217,7 +217,7 @@ export async function replayUnprocessedSlackIngestEvents(
         nowIso
       });
 
-      const agent = await runConversationalAgentForSlackMessage({
+      const agent = await runConversationalAgent({
         env,
         organizationId: row.organizationId,
         workspaceId: row.workspaceId,

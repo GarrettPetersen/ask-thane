@@ -2,9 +2,15 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": "../..",
     "lib": ["ES2022", "WebWorker"],
-    "types": ["@cloudflare/workers-types"]
+    "types": ["@cloudflare/workers-types"],
+    "paths": {
+      "@ask-thane/ai": ["../../packages/ai/src/index.ts"],
+      "@ask-thane/data": ["../../packages/data/src/index.ts"],
+      "@ask-thane/domain": ["../../packages/domain/src/index.ts"],
+      "@ask-thane/workflows": ["../../packages/workflows/src/index.ts"]
+    }
   },
   "include": ["src"]
 }

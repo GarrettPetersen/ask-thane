@@ -26,9 +26,18 @@ importers:
 
   apps/api-worker:
     dependencies:
+      '@ask-thane/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@ask-thane/data':
         specifier: workspace:*
         version: link:../../packages/data
+      '@ask-thane/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@ask-thane/workflows':
+        specifier: workspace:*
+        version: link:../../packages/workflows
     devDependencies:
       wrangler:
         specifier: ^4.17.0
@@ -70,6 +79,8 @@ importers:
       wrangler:
         specifier: ^4.17.0
         version: 4.90.0(@cloudflare/workers-types@4.20260510.1)
+
+  apps/thane-cli: {}
 
   packages/ai:
     dependencies:

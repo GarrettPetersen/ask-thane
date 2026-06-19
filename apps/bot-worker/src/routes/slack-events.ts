@@ -5,7 +5,7 @@ import {
   normalizeSlackMembershipEvent,
   type SlackEnvelope
 } from "@ask-thane/integrations";
-import { runConversationalAgentForSlackMessage } from "../services/agent-runtime";
+import { runConversationalAgent } from "../services/agent-runtime";
 import { addSlackReaction, fetchSlackMessageByTs, fetchSlackUserProfile, postSlackMessage } from "../services/slack-api";
 import { mapAgentEventTypesToSlackReactions, mapTaskActionTypesToSlackReactions } from "../services/slack-task-reactions";
 import type { BotEnv } from "../services/task-inference";
@@ -372,7 +372,7 @@ async function processSlackEventsPayload(payload: SlackEnvelope & { type?: strin
       conversationKind: conversationMeta.conversationKind
     });
 
-    const agentRun = await runConversationalAgentForSlackMessage({
+    const agentRun = await runConversationalAgent({
       env,
       organizationId,
       workspaceId: workspaceRef.workspaceId,

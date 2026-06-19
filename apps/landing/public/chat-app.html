@@ -210,6 +210,11 @@
         align-items: center;
         gap: 10px;
       }
+      .topbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
       .icon-button {
         width: 34px;
         padding: 0;
@@ -470,6 +475,40 @@
         color: var(--muted);
         font-size: 12px;
       }
+      .menu-stack {
+        display: grid;
+        gap: 8px;
+      }
+      .menu-button {
+        width: 100%;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        text-align: left;
+      }
+      .menu-button span:last-child {
+        color: var(--amber);
+      }
+      .settings-grid {
+        display: grid;
+        gap: 18px;
+      }
+      .settings-group {
+        display: grid;
+        gap: 10px;
+        padding-top: 14px;
+        border-top: 1px solid var(--line);
+      }
+      .settings-group:first-child {
+        padding-top: 0;
+        border-top: 0;
+      }
+      .settings-group h3 {
+        color: var(--green);
+        font-size: 13px;
+        font-weight: 400;
+      }
 
       @media (max-width: 980px) {
         .app { grid-template-columns: 230px minmax(0, 1fr); }
@@ -481,9 +520,9 @@
         .app { grid-template-columns: 1fr; height: auto; min-height: 100vh; min-height: 100dvh; overflow: visible; }
         .app.sidebar-collapsed { grid-template-columns: 1fr; }
         .sidebar-collapsed .rail { display: none; }
-        .side { display: block; border-left: 0; border-top: 1px solid var(--line); }
+        .side { display: none; }
         .rail { min-height: auto; border-right: 0; }
-        .rail, .side, .main { height: auto; }
+        .rail, .main { height: auto; }
         .main { min-height: 72vh; }
         .brand { padding: 14px; }
       }
@@ -522,6 +561,7 @@
         workspaceMenuOpen: localStorage.getItem("thane.web.workspaceMenuOpen") === "true",
         channelMenuOpen: localStorage.getItem("thane.web.channelMenuOpen") === "true",
         cliInstallOpen: false,
+        settingsMenuOpen: false,
         status: "",
         error: "",
         busy: false
@@ -1135,12 +1175,23 @@
       }
 
       function openCliInstall() {
+        state.settingsMenuOpen = false;
         state.cliInstallOpen = true;
         render();
       }
 
       function closeCliInstall() {
         state.cliInstallOpen = false;
+        render();
+      }
+
+      function openSettingsMenu() {
+        state.settingsMenuOpen = true;
+        render();
+      }
+
+      function closeSettingsMenu() {
+        state.settingsMenuOpen = false;
         render();
       }
 
@@ -1178,6 +1229,120 @@
                   ${inviteCommand ? `<button onclick="copyText(${jsString(inviteCommand)}, 'Invite command')">Copy invite command</button>` : ""}
                 </div>
                 <p class="muted small">After installing, run <span class="ok">thane chat general</span> to open the terminal client.</p>
+              </div>
+            </section>
+          </div>`;
+      }
+
+      function renderSettingsMenuModal(input) {
+        if (!state.settingsMenuOpen) return "";
+        const {
+          workspace,
+          snap,
+          role,
+          isAdmin,
+          askThane,
+          billingPlan,
+          isTeamPlan,
+          privateChannels,
+          inviteResult
+        } = input;
+        return `
+          <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="settings-menu-title" onclick="if(event.target===this) closeSettingsMenu()">
+            <section class="modal">
+              <div class="modal-head">
+                <div class="modal-title">
+                  <h2 id="settings-menu-title">Menu</h2>
+                  <p class="muted small">${esc(workspace?.slug || "workspace")} / ${esc(role || "member")}</p>
+                </div>
+                <button class="icon-button" onclick="closeSettingsMenu()" aria-label="Close menu">x</button>
+              </div>
+              <div class="modal-body settings-grid">
+                <section class="settings-group">
+                  <h3>Profile</h3>
+                  <form class="list" onsubmit="updateDisplayName(event)">
+                    <input name="displayName" value="${esc(state.session.displayName || "")}" placeholder="Display name" />
+                    <button>Update name</button>
+                  </form>
+                  <div class="kv">
+                    <div>MFA: ${esc(state.mfaStatus || "unknown")}</div>
+                    <button onclick="refreshMfaStatus()">Check MFA</button>
+                    <button onclick="startMfaSetup()">Start MFA setup</button>
+                    ${state.mfaSetup ? `<div class="cmdline">${esc(`secret: ${state.mfaSetup.secret}\notpauth: ${state.mfaSetup.otpauthUrl}`)}</div>
+                      <form class="list" onsubmit="verifyMfaSetup(event)">
+                        <input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" />
+                        <button>Verify MFA</button>
+                      </form>` : ""}
+                    <form class="list" onsubmit="disableMfa(event)">
+                      <input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="disable code" />
+                      <button>Disable MFA</button>
+                    </form>
+                  </div>
+                </section>
+                <section class="settings-group">
+                  <h3>Workspace</h3>
+                  <form class="list" onsubmit="createWorkspace(event)">
+                    <input name="name" placeholder="Thane Internal" />
+                    <input name="slug" placeholder="thane-internal" />
+                    <button>Create workspace</button>
+                  </form>
+                  <form class="list" onsubmit="createChannel(event)">
+                    <input name="name" placeholder="book-club" />
+                    <button>Create channel</button>
+                  </form>
+                </section>
+                <section class="settings-group">
+                  <h3>Invites</h3>
+                  ${isAdmin ? `
+                    <form class="list" onsubmit="createInviteLink(event)">
+                      <input name="expires" placeholder="7d" value="7d" />
+                      <input name="maxUses" inputmode="numeric" placeholder="max uses blank=unlimited" />
+                      <select name="role">
+                        <option value="member">member</option>
+                        <option value="admin">admin</option>
+                      </select>
+                      <button>Create invite link</button>
+                    </form>
+                    ${inviteResult ? `<div class="kv">
+                      <div class="cmdline">${esc(inviteResult.webUrl || inviteResult.url)}</div>
+                      <button onclick="copyText(${jsString(inviteResult.webUrl || inviteResult.url)}, 'Web link')">Copy web link</button>
+                      <button onclick="copyText(${jsString(inviteResult.url)}, 'CLI link')">Copy CLI link</button>
+                    </div>` : ""}
+                    <form class="list" onsubmit="invite(event)">
+                      <input name="email" type="email" placeholder="friend@example.com" />
+                      <button>Email single-use invite</button>
+                    </form>
+                  ` : `<div class="muted small">admin required</div>`}
+                </section>
+                <section class="settings-group">
+                  <h3>Ask Thane</h3>
+                  <div class="kv">
+                    <div>status: ${askThane?.enabled ? "enabled" : "disabled"}</div>
+                    <div>mention: @thane</div>
+                    ${isAdmin ? `
+                      <button onclick="setAskThaneEnabled(${askThane?.enabled ? "false" : "true"})">${askThane?.enabled ? "Disable" : "Enable"} Ask Thane</button>
+                    ` : `<div class="muted small">admin required</div>`}
+                  </div>
+                </section>
+                <section class="settings-group">
+                  <h3>Billing</h3>
+                  <div class="kv">
+                    <div>plan: ${esc(billingPlan.planTier || "free")}</div>
+                    <div>status: ${esc(billingPlan.status || "active")}</div>
+                    <div>members: ${snap.users.length}/${isTeamPlan ? "unlimited" : freeLimits.members}</div>
+                    <div>private channels: ${privateChannels}/${isTeamPlan ? "unlimited" : freeLimits.privateChannels}</div>
+                    ${isAdmin ? `
+                      ${isTeamPlan ? `<button onclick="openBilling('portal')" ${state.billingBusy ? "disabled" : ""}>Manage billing</button>` : `<button onclick="openBilling('checkout')" ${state.billingBusy ? "disabled" : ""}>Upgrade workspace</button>`}
+                    ` : `<div class="muted small">admin required</div>`}
+                  </div>
+                </section>
+                <section class="settings-group">
+                  <h3>Terminal app</h3>
+                  <div class="kv">
+                    <div>Use Thane Chat from your shell and local coding agents.</div>
+                    <button onclick="openCliInstall()">Install CLI</button>
+                  </div>
+                </section>
               </div>
             </section>
           </div>`;
@@ -1279,7 +1444,10 @@
                     <p class="prompt-line">${esc(workspace?.slug || "chat")} / typing</p>
                   </div>
                 </div>
-                <button onclick="saveSession(null); location.reload()">sign out</button>
+                <div class="topbar-actions">
+                  <button onclick="openSettingsMenu()">menu</button>
+                  <button onclick="saveSession(null); location.reload()">sign out</button>
+                </div>
               </header>
               <div class="top-rule"></div>
               <section class="messages">
@@ -1308,6 +1476,13 @@
                 </div>
               </section>
               <section class="section">
+                <div class="section-head"><span>Menu</span></div>
+                <div class="menu-stack">
+                  <button class="menu-button" onclick="openSettingsMenu()"><span>Settings and admin</span><span>></span></button>
+                  <button class="menu-button" onclick="openCliInstall()"><span>Terminal app</span><span>></span></button>
+                </div>
+              </section>
+              <section class="section">
                 <div class="section-head"><span>Search</span></div>
                 <form class="list" onsubmit="submitSearch(event)">
                   <input name="search" value="${esc(state.searchQuery)}" oninput="updateSearch(this.value)" placeholder="Search messages" />
@@ -1324,96 +1499,9 @@
                   }).join("") || `<div class="muted small">No members</div>`}
                 </div>
               </section>
-              <section class="section">
-                <div class="section-head"><span>Profile</span></div>
-                <form class="list" onsubmit="updateDisplayName(event)">
-                  <input name="displayName" value="${esc(state.session.displayName || "")}" placeholder="Display name" />
-                  <button>Update name</button>
-                </form>
-                <div class="kv">
-                  <div>MFA: ${esc(state.mfaStatus || "unknown")}</div>
-                  <button onclick="refreshMfaStatus()">Check MFA</button>
-                  <button onclick="startMfaSetup()">Start MFA setup</button>
-                  ${state.mfaSetup ? `<div class="cmdline">${esc(`secret: ${state.mfaSetup.secret}\notpauth: ${state.mfaSetup.otpauthUrl}`)}</div>
-                    <form class="list" onsubmit="verifyMfaSetup(event)">
-                      <input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" />
-                      <button>Verify MFA</button>
-                    </form>` : ""}
-                  <form class="list" onsubmit="disableMfa(event)">
-                    <input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="disable code" />
-                    <button>Disable MFA</button>
-                  </form>
-                </div>
-              </section>
-              <section class="section">
-                <div class="section-head"><span>Terminal app</span></div>
-                <div class="kv">
-                  <div>Use Thane Chat from your shell and local coding agents.</div>
-                  <button onclick="openCliInstall()">Install CLI</button>
-                </div>
-              </section>
-              <section class="section">
-                <div class="section-head"><span>Ask Thane</span></div>
-                <div class="kv">
-                  <div>status: ${askThane?.enabled ? "enabled" : "disabled"}</div>
-                  <div>mention: @thane</div>
-                  ${isAdmin ? `
-                    <button onclick="setAskThaneEnabled(${askThane?.enabled ? "false" : "true"})">${askThane?.enabled ? "Disable" : "Enable"} Ask Thane</button>
-                  ` : `<div class="muted small">admin required</div>`}
-                </div>
-              </section>
-              <section class="section">
-                <div class="section-head"><span>Billing</span></div>
-                <div class="kv">
-                  <div>plan: ${esc(billingPlan.planTier || "free")}</div>
-                  <div>status: ${esc(billingPlan.status || "active")}</div>
-                  <div>members: ${snap.users.length}/${isTeamPlan ? "unlimited" : freeLimits.members}</div>
-                  <div>private channels: ${privateChannels}/${isTeamPlan ? "unlimited" : freeLimits.privateChannels}</div>
-                  ${isAdmin ? `
-                    ${isTeamPlan ? `<button onclick="openBilling('portal')" ${state.billingBusy ? "disabled" : ""}>Manage billing</button>` : `<button onclick="openBilling('checkout')" ${state.billingBusy ? "disabled" : ""}>Upgrade workspace</button>`}
-                  ` : `<div class="muted small">admin required</div>`}
-                </div>
-              </section>
-              <section class="section">
-                <div class="section-head"><span>New workspace</span></div>
-                <form class="list" onsubmit="createWorkspace(event)">
-                  <input name="name" placeholder="Thane Internal" />
-                  <input name="slug" placeholder="thane-internal" />
-                  <button>Create workspace</button>
-                </form>
-              </section>
-              <section class="section">
-                <div class="section-head"><span>New channel</span></div>
-                <form class="list" onsubmit="createChannel(event)">
-                  <input name="name" placeholder="book-club" />
-                  <button>Create channel</button>
-                </form>
-              </section>
-              <section class="section">
-                <div class="section-head"><span>Invites</span></div>
-                ${isAdmin ? `
-                  <form class="list" onsubmit="createInviteLink(event)">
-                    <input name="expires" placeholder="7d" value="7d" />
-                    <input name="maxUses" inputmode="numeric" placeholder="max uses blank=unlimited" />
-                    <select name="role">
-                      <option value="member">member</option>
-                      <option value="admin">admin</option>
-                    </select>
-                    <button>Create invite link</button>
-                  </form>
-                  ${inviteResult ? `<div class="kv">
-                    <div class="cmdline">${esc(inviteResult.webUrl || inviteResult.url)}</div>
-                    <button onclick="copyText(${jsString(inviteResult.webUrl || inviteResult.url)}, 'Web link')">Copy web link</button>
-                    <button onclick="copyText(${jsString(inviteResult.url)}, 'CLI link')">Copy CLI link</button>
-                  </div>` : ""}
-                  <form class="list" onsubmit="invite(event)">
-                    <input name="email" type="email" placeholder="friend@example.com" />
-                    <button>Email single-use invite</button>
-                  </form>
-                ` : `<div class="muted small">admin required</div>`}
-              </section>
             </aside>
           </div>
+          ${renderSettingsMenuModal({ workspace, snap, role, isAdmin, askThane, billingPlan, isTeamPlan, privateChannels, inviteResult })}
           ${renderCliInstallModal()}`;
         requestAnimationFrame(() => {
           const scroller = document.querySelector(".messages");
@@ -1456,6 +1544,8 @@
       window.verifyMfaSetup = verifyMfaSetup;
       window.disableMfa = disableMfa;
       window.copyText = copyText;
+      window.openSettingsMenu = openSettingsMenu;
+      window.closeSettingsMenu = closeSettingsMenu;
       window.openCliInstall = openCliInstall;
       window.closeCliInstall = closeCliInstall;
       window.sync = sync;
@@ -1463,8 +1553,9 @@
       window.state = state;
 
       window.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && state.cliInstallOpen) {
-          closeCliInstall();
+        if (event.key === "Escape") {
+          if (state.cliInstallOpen) closeCliInstall();
+          else if (state.settingsMenuOpen) closeSettingsMenu();
         }
       });
 

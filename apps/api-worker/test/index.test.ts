@@ -3,9 +3,11 @@ import worker from "../src/index";
 
 const listOpenByAssigneeInOrganization = vi.fn();
 const listOpenByAssigneeWithAcl = vi.fn();
+const saveManyTasks = vi.fn();
 
 vi.mock("@ask-thane/data", () => ({
   D1TaskRepository: class {
+    saveMany = saveManyTasks;
     listOpenByAssigneeInOrganization = listOpenByAssigneeInOrganization;
     listOpenByAssigneeWithAcl = listOpenByAssigneeWithAcl;
   }
@@ -638,11 +640,12 @@ describe("@ask-thane/api-worker", () => {
       if (sql.includes("COUNT(*) AS count FROM thane_cli_channels")) {
         return { count: 10 };
       }
-      if (sql.includes("SELECT id, workspace_id, name, visibility, topic, created_at")) {
+      if (sql.includes("SELECT id, workspace_id, name, kind, visibility, topic, created_at")) {
         return {
           id: "tcc_2",
           workspace_id: "wsp_1",
           name: "private-plans",
+          kind: "channel",
           visibility: "private",
           topic: null,
           created_at: "2026-06-18T00:00:00.000Z"
@@ -1020,8 +1023,8 @@ describe("@ask-thane/api-worker", () => {
       if (sql.includes("SELECT id, workspace_name, workspace_slug")) {
         return { id: "wsp_1", workspace_name: "Acme", workspace_slug: "acme" };
       }
-      if (sql.includes("SELECT id, name FROM thane_cli_channels")) {
-        return { id: "tcc_1", name: "general" };
+      if (sql.includes("SELECT id, name, kind, visibility FROM thane_cli_channels")) {
+        return { id: "tcc_1", name: "general", kind: "channel", visibility: "public" };
       }
       if (sql.includes("FROM thane_cli_ask_thane_integrations")) {
         return {
@@ -1102,6 +1105,122 @@ describe("@ask-thane/api-worker", () => {
       "https://api.openai.com/v1/chat/completions",
       expect.objectContaining({ method: "POST" })
     );
+  });
+
+  it("extracts tasks passively from native Thane Chat messages", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    reasoning_summary: "assigned native task",
+                    tasks: [
+                      {
+                        title: "Review onboarding notes",
+                        description: "Look over the draft before launch.",
+                        assignee_user_id: "danika",
+                        assignee_name: "Danika",
+                        urgency: "medium",
+                        difficulty: "medium",
+                        status: "incomplete",
+                        confidence: 0.92,
+                        due_at: null
+                      }
+                    ]
+                  })
+                }
+              }
+            ]
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      )
+    );
+    const first = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members") && sql.includes("email = ?")) {
+        return {
+          id: "tcm_owner",
+          account_id: "acct_owner",
+          email: "owner@example.com",
+          display_name: "Owner",
+          handle: "owner",
+          role: "owner"
+        };
+      }
+      if (sql.includes("SELECT id, workspace_name, workspace_slug")) {
+        return { id: "wsp_1", workspace_name: "Acme", workspace_slug: "acme" };
+      }
+      if (sql.includes("SELECT id, name, kind, visibility FROM thane_cli_channels")) {
+        return { id: "tcc_1", name: "general", kind: "channel", visibility: "public" };
+      }
+      if (sql.includes("SELECT plan_tier FROM thane_cli_workspaces")) {
+        return { plan_tier: "cli_team" };
+      }
+      if (sql.includes("COUNT(*) AS count FROM thane_cli_workspace_members")) {
+        return { count: 2 };
+      }
+      if (sql.includes("SUM(total_cost_usd)")) {
+        return { total: 0 };
+      }
+      if (sql.includes("SELECT external_user_id FROM users")) {
+        return { external_user_id: this.args?.[2] ?? null };
+      }
+      return null;
+    });
+    const run = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
+      return { meta: { changes: 1 } };
+    });
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => ({
+        run: run.bind({ sql, args }),
+        first: first.bind({ sql, args }),
+        all: vi.fn(async () => ({ results: [] }))
+      }))
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret",
+      OPENAI_API_KEY: "sk-test",
+      DEFAULT_LLM_MODEL: "gpt-4.1-mini"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/messages", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
+        body: JSON.stringify({
+          workspaceId: "wsp_1",
+          channelId: "tcc_1",
+          text: "@danika please review the onboarding notes",
+          source: "chat"
+        })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ ok: true, passiveTaskCount: 1 });
+    expect(saveManyTasks).toHaveBeenCalledWith([
+      expect.objectContaining({
+        title: "Review onboarding notes",
+        assignee: expect.objectContaining({
+          platform: "thane_cli",
+          platformUserId: "danika",
+          displayName: "Danika"
+        }),
+        assigner: expect.objectContaining({
+          platform: "thane_cli",
+          platformUserId: "owner",
+          displayName: "Owner"
+        })
+      })
+    ]);
   });
 
   it("renders browser-friendly Thane CLI invite pages", async () => {

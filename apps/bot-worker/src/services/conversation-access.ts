@@ -1,4 +1,5 @@
 import type { SlackMembershipEvent } from "@ask-thane/integrations";
+import type { UserRef } from "@ask-thane/domain";
 
 interface ConversationSourceRef {
   id: string;
@@ -262,7 +263,7 @@ export class ConversationAccessResolver {
   async resolveInternalUserId(params: {
     organizationId: string;
     workspaceId: string;
-    platform: "slack";
+    platform: UserRef["platform"];
     platformUserId: string;
   }): Promise<string | null> {
     const query = this.db.prepare(

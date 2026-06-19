@@ -179,7 +179,26 @@ function makeContext(overrides: Record<string, unknown> = {}) {
     actorPersonId: "person_user_garrett",
     readableConversationSourceIds: ["conv_1"],
     currentConversationSourceId: "conv_1",
-    botToken: "xoxb-test",
+    adapter: {
+      platform: "slack",
+      botExternalUserId: "U_BOT",
+      fetchConversationHistory: vi.fn(async () => [
+        {
+          user: "U_OTHER",
+          messageId: "1710000000.000001",
+          text: "sample context",
+          reactions: [{ name: "eyes", users: ["U0B2T03RPD0"] }]
+        }
+      ]),
+      fetchThreadReplies: vi.fn(async () => [
+        {
+          user: "U0B2QTLPABY",
+          messageId: "1710000001.000001",
+          threadRootId: "1710000000.000001",
+          text: "thread context"
+        }
+      ])
+    },
     createdTaskIds: [],
     taskActionTypes: new Set<string>(),
     eventTypes: new Set<string>(),
@@ -378,27 +397,27 @@ describe("agent runtime tool execution", () => {
   it("get_conversation_context can include thread replies", async () => {
     const run = await runTool("get_conversation_context", {
       conversation_source_id: "conv_1",
-      thread_ts: "1710000000.000001",
+      thread_id: "1710000000.000001",
       limit: 10
     });
-    expect(run.result).toMatchObject({ ok: true, conversation_source_id: "conv_1", thread_ts: "1710000000.000001" });
+    expect(run.result).toMatchObject({ ok: true, conversation_source_id: "conv_1", thread_id: "1710000000.000001" });
     const messages = (run.result as Record<string, unknown>).messages as Array<Record<string, unknown>>;
     expect(messages).toHaveLength(2);
-    expect(messages[1]?.thread_ts).toBe("1710000000.000001");
+    expect(messages[1]?.thread_id).toBe("1710000000.000001");
   });
 
   it("search_conversation_messages returns grep-style matches with context", async () => {
     const run = await runTool("search_conversation_messages", {
       query: "thread",
       conversation_source_id: "conv_1",
-      thread_ts: "1710000000.000001",
+      thread_id: "1710000000.000001",
       context_window: 1
     });
     expect(run.result).toMatchObject({
       ok: true,
       conversation_source_id: "conv_1",
       query: "thread",
-      thread_ts: "1710000000.000001"
+      thread_id: "1710000000.000001"
     });
     const matches = (run.result as Record<string, unknown>).matches as Array<Record<string, unknown>>;
     expect(matches).toHaveLength(1);
@@ -448,6 +467,55 @@ describe("agent runtime tool execution", () => {
     expect(run.repo.save).toHaveBeenCalledTimes(2);
     expect(run.repo.performTaskAction).toHaveBeenCalledTimes(2);
     expect((run.ctx.taskActionTypes as Set<string>).has("create")).toBe(true);
+  });
+
+  it("create_task uses Thane Chat identities in native contexts", async () => {
+    const run = await runTool(
+      "create_task",
+      {
+        title: "Review onboarding notes",
+        assignee_user_id: "danika",
+        urgency: "medium",
+        difficulty: "medium"
+      },
+      {
+        platform: "thane_cli",
+        actorExternalUserId: "garrett",
+        actorInternalUserId: "user_garrett",
+        adapter: {
+          platform: "thane_cli",
+          botExternalUserId: "thane",
+          fetchConversationHistory: vi.fn(async () => []),
+          fetchThreadReplies: vi.fn(async () => [])
+        },
+        event: {
+          workspaceId: "ws_1",
+          channelId: "tcc_1",
+          messageId: "tmsg_1",
+          text: "@danika please review the onboarding notes",
+          author: { platform: "thane_cli", platformUserId: "garrett", displayName: "Garrett" },
+          occurredAt: "2026-05-14T20:00:00.000Z"
+        },
+        workspaceUsers: [
+          { userId: "user_garrett", externalUserId: "garrett", displayName: "Garrett" },
+          { userId: "user_danika", externalUserId: "danika", displayName: "Danika" }
+        ],
+        repo: makeRepoStub({
+          listWorkspaceUsers: vi.fn(async () => [
+            { userId: "user_garrett", externalUserId: "garrett", displayName: "Garrett" },
+            { userId: "user_danika", externalUserId: "danika", displayName: "Danika" }
+          ])
+        })
+      }
+    );
+
+    expect(run.result).toMatchObject({ ok: true });
+    const usedRepo = run.ctx.repo as { save: ReturnType<typeof vi.fn>; performTaskAction: ReturnType<typeof vi.fn> };
+    const savedTask = usedRepo.save.mock.calls[0]?.[0] as TaskRecord;
+    expect(savedTask.assignee).toMatchObject({ platform: "thane_cli", platformUserId: "danika" });
+    expect(savedTask.assigner).toMatchObject({ platform: "thane_cli", platformUserId: "garrett" });
+    const actionInput = usedRepo.performTaskAction.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(actionInput.actorPlatform).toBe("thane_cli");
   });
 
   it("create_task returns potential_duplicate_tasks and lets agent decide", async () => {

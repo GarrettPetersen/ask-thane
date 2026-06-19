@@ -1,6 +1,6 @@
 import { D1TaskRepository } from "@ask-thane/data";
 import { inferSlackConversationKind } from "@ask-thane/integrations";
-import { runConversationalAgentForSlackMessage } from "./agent-runtime";
+import { runConversationalAgent } from "./agent-runtime";
 import { ConversationAccessResolver } from "./conversation-access";
 import { SlackInstallStore } from "./slack-install-store";
 import type { BotEnv } from "./task-inference";
@@ -93,7 +93,7 @@ export async function runEvalReplay(env: BotEnv, payload: ReplayRequest): Promis
       nowIso
     });
 
-    const run = await runConversationalAgentForSlackMessage({
+    const run = await runConversationalAgent({
       env,
       organizationId: payload.organizationId,
       workspaceId: payload.workspaceId,

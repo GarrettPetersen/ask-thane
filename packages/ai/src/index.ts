@@ -36,9 +36,18 @@ interface OpenAiChatCompletion {
   };
 }
 
-function firstSlackMention(text: string): string | null {
-  const match = text.match(/<@([A-Z0-9]+)>/);
-  return match?.[1] ?? null;
+function firstMention(event: MessageEvent): string | null {
+  const slackMatch = event.text.match(/<@([A-Z0-9]+)>/);
+  if (slackMatch?.[1]) {
+    return slackMatch[1];
+  }
+  if (event.author.platform === "thane_cli") {
+    const thaneMatch = event.text.match(/@([a-zA-Z0-9._-]+)/);
+    if (thaneMatch?.[1] && thaneMatch[1].toLowerCase() !== "thane") {
+      return thaneMatch[1].toLowerCase();
+    }
+  }
+  return null;
 }
 
 function sanitizeStatus(value: string | null | undefined): TaskStatus {
@@ -87,13 +96,13 @@ function pickAssigneeId(candidate: string | null | undefined, fallback: string):
 
 function buildSystemPrompt(): string {
   return [
-    "You extract actionable tasks from Slack messages.",
+    "You extract actionable tasks from chat messages.",
     "Only extract tasks when a concrete request, assignment, or commitment is present.",
     "If there is no clear task, return an empty tasks array.",
     "If text is an instruction to Thane about changing an existing task (for example add details/update metadata), do not output a new task.",
     "Task title must be concise and action-only; do not include assignee phrases such as 'with Danika' in title.",
     "Use description for collaborator/context details and constraints.",
-    "Prefer assignee_user_id from Slack mentions like <@U123>. If unclear, leave assignee_user_id null.",
+    "Prefer assignee_user_id from mentions. Slack mentions look like <@U123>; Thane Chat mentions look like @handle. If unclear, leave assignee_user_id null.",
     "Output must match the provided JSON schema exactly."
   ].join(" ");
 }
@@ -216,12 +225,12 @@ class OpenAiLlmClient implements LlmClient {
       };
     }
 
-    const fallbackAssignee = firstSlackMention(event.text) ?? event.author.platformUserId;
+    const fallbackAssignee = firstMention(event) ?? event.author.platformUserId;
     const tasks: TaskRecord[] = (parsed.tasks ?? [])
       .filter((task) => typeof task.title === "string" && task.title.trim().length > 0)
       .map((task) => {
         const assignee: TaskRecord["assignee"] = {
-          platform: "slack",
+          platform: event.author.platform,
           platformUserId: pickAssigneeId(task.assignee_user_id, fallbackAssignee)
         };
         const assigneeName = task.assignee_name?.trim();

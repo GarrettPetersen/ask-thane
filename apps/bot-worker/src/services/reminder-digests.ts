@@ -1,5 +1,5 @@
 import { D1TaskRepository, type UserNotificationCadenceRecord } from "@ask-thane/data";
-import type { TaskRecord } from "@ask-thane/domain";
+import type { TaskRecord, UserRef } from "@ask-thane/domain";
 import { resolveModelForWorkspaceTier, resolveWorkspaceBillingPolicy } from "./billing-policy";
 import { ConversationAccessResolver } from "./conversation-access";
 import { computeNextDigestAt, defaultCadenceSpec, normalizeCadenceSpec, normalizeTimezone } from "./notification-cadence";
@@ -66,7 +66,7 @@ function formatShortDate(iso: string): string {
 function taskLine(task: TaskRecord, index: number): string {
   const parts = [`${index + 1}. ${task.title}`];
   parts.push(`status: ${task.status}`);
-  parts.push(`asked by <@${task.assigner.platformUserId}>`);
+  parts.push(`asked by ${task.assigner.platform === "slack" ? `<@${task.assigner.platformUserId}>` : `@${task.assigner.platformUserId}`}`);
   parts.push(`created ${formatShortDate(task.createdAt)}`);
   if (task.dueAt) {
     parts.push(`due ${formatShortDate(task.dueAt)}`);
@@ -339,7 +339,7 @@ async function ensureDefaultCadence(input: {
   workspaceId: string;
   userId: string;
   externalUserId: string;
-  platform: "slack";
+  platform: UserRef["platform"];
   nowIso: string;
 }): Promise<UserNotificationCadenceRecord> {
   const existing = await input.repo.getUserNotificationCadence({
@@ -379,6 +379,131 @@ async function ensureDefaultCadence(input: {
   }
 
   return created;
+}
+
+async function ensureNativeAskThaneMember(env: BotEnv, workspaceId: string, nowIso: string): Promise<string> {
+  const existing = await env.DB
+    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' LIMIT 1")
+    .bind(workspaceId)
+    .first<{ id?: string }>();
+  if (existing?.id) {
+    return existing.id;
+  }
+  const id = crypto.randomUUID();
+  await env.DB
+    .prepare(
+      `INSERT INTO thane_cli_workspace_members (
+         id, workspace_id, account_id, email, display_name, handle, role, joined_at, updated_at
+       ) VALUES (?, ?, ?, 'thane@askthane.com', 'Ask Thane', 'thane', 'member', ?, ?)
+       ON CONFLICT(workspace_id, email) DO UPDATE SET
+         display_name = excluded.display_name,
+         handle = excluded.handle,
+         updated_at = excluded.updated_at`
+    )
+    .bind(id, workspaceId, "acct_thane", nowIso, nowIso)
+    .run();
+  const row = await env.DB
+    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' LIMIT 1")
+    .bind(workspaceId)
+    .first<{ id?: string }>();
+  return row?.id ?? id;
+}
+
+async function dispatchNativeCadenceDigest(input: {
+  env: BotEnv;
+  repo: D1TaskRepository;
+  nowIso: string;
+  cadence: UserNotificationCadenceRecord;
+  options: ReminderDispatchOptions;
+}): Promise<"sent" | "skipped_no_tasks" | "skipped_unremindable_assignee"> {
+  const openTasks = await input.repo.listOpenByAssigneeInOrganization(
+    input.cadence.organizationId,
+    input.cadence.workspaceId,
+    input.cadence.externalUserId
+  );
+  if (openTasks.length === 0 && !input.options.forceSendNoTasks) {
+    return "skipped_no_tasks";
+  }
+  const recipient = await input.env.DB
+    .prepare("SELECT id, handle FROM thane_cli_workspace_members WHERE workspace_id = ? AND handle = ? LIMIT 1")
+    .bind(input.cadence.workspaceId, input.cadence.externalUserId)
+    .first<{ id?: string; handle?: string }>();
+  if (!recipient?.id || recipient.handle === "thane") {
+    return "skipped_unremindable_assignee";
+  }
+  const botMemberId = await ensureNativeAskThaneMember(input.env, input.cadence.workspaceId, input.nowIso);
+  const dmName = `dm-thane-${recipient.handle}`;
+  let channel = await input.env.DB
+    .prepare("SELECT id FROM thane_cli_channels WHERE workspace_id = ? AND name = ? LIMIT 1")
+    .bind(input.cadence.workspaceId, dmName)
+    .first<{ id?: string }>();
+  if (!channel?.id) {
+    const channelId = crypto.randomUUID();
+    await input.env.DB
+      .prepare(
+        `INSERT INTO thane_cli_channels (
+           id, workspace_id, name, kind, visibility, topic, created_at, updated_at
+         ) VALUES (?, ?, ?, 'dm', 'private', 'Ask Thane reminders', ?, ?)`
+      )
+      .bind(channelId, input.cadence.workspaceId, dmName, input.nowIso, input.nowIso)
+      .run();
+    channel = { id: channelId };
+  }
+  if (!channel.id) {
+    throw new Error("native_dm_channel_missing");
+  }
+  const channelId = channel.id;
+  for (const memberId of [recipient.id, botMemberId]) {
+    await input.env.DB
+      .prepare("INSERT OR IGNORE INTO thane_cli_channel_members (id, channel_id, member_id, joined_at) VALUES (?, ?, ?, ?)")
+      .bind(crypto.randomUUID(), channelId, memberId, input.nowIso)
+      .run();
+  }
+  const digestText = buildDigestMessage({
+    taskCount: openTasks.length,
+    tasks: openTasks,
+    cadence: input.cadence
+  });
+  const messageId = crypto.randomUUID();
+  await input.env.DB
+    .prepare(
+      `INSERT INTO thane_cli_chat_messages (
+         id, workspace_id, channel_id, author_member_id, text, source, thread_root_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, 'chat', NULL, ?, ?)`
+    )
+    .bind(messageId, input.cadence.workspaceId, channelId, botMemberId, digestText, input.nowIso, input.nowIso)
+    .run();
+  const nextDigestAt = computeNextDigestAt({
+    cadenceJson: normalizeCadenceSpec(input.cadence.cadenceJson) as unknown as Record<string, unknown>,
+    timezone: normalizeTimezone(input.cadence.timezone),
+    nowIso: input.nowIso,
+    fromIso: input.nowIso
+  });
+  await input.repo.recordDigestDelivery({
+    id: crypto.randomUUID(),
+    organizationId: input.cadence.organizationId,
+    workspaceId: input.cadence.workspaceId,
+    userId: input.cadence.userId,
+    externalUserId: input.cadence.externalUserId,
+    deliveryChannelId: channelId,
+    sourceMessageId: messageId,
+    taskCount: openTasks.length,
+    sentAt: input.nowIso,
+    metadata: {
+      cadence: input.cadence.cadenceJson,
+      task_ids: openTasks.slice(0, 50).map((task) => task.id),
+      digest_mode: "native_thane_chat"
+    }
+  });
+  await input.repo.setUserNotificationCadenceDigestTimes({
+    organizationId: input.cadence.organizationId,
+    workspaceId: input.cadence.workspaceId,
+    userId: input.cadence.userId,
+    lastDigestAt: input.nowIso,
+    ...(nextDigestAt ? { nextDigestAt } : {}),
+    updatedAt: input.nowIso
+  });
+  return "sent";
 }
 
 async function resolveBotTokenForWorkspace(input: {
@@ -588,7 +713,7 @@ export async function runScheduledReminderDigests(env: BotEnv): Promise<Reminder
   const installs = await installStore.listWorkspaceInstalls();
   const workspaceInstallMap = new Map(installs.map((row) => [row.workspaceId, row]));
 
-  const usersWithOpenTasks = (await repo.listUsersWithOpenTasks(1000)).filter((row) => row.platform === "slack");
+  const usersWithOpenTasks = (await repo.listUsersWithOpenTasks(1000)).filter((row) => row.platform === "slack" || row.platform === "thane_cli");
 
   for (const row of usersWithOpenTasks) {
     await ensureDefaultCadence({
@@ -597,7 +722,7 @@ export async function runScheduledReminderDigests(env: BotEnv): Promise<Reminder
       workspaceId: row.workspaceId,
       userId: row.userId,
       externalUserId: row.externalUserId,
-      platform: "slack",
+      platform: row.platform,
       nowIso
     });
   }
@@ -615,18 +740,26 @@ export async function runScheduledReminderDigests(env: BotEnv): Promise<Reminder
 
   for (const cadence of dueCadences) {
     try {
-      if (cadence.platform !== "slack") {
-        continue;
-      }
-      const outcome = await dispatchCadenceDigest({
-        env,
-        repo,
-        resolver,
-        workspaceInstallMap,
-        nowIso,
-        cadence,
-        options: { forceSendNoTasks: false }
-      });
+      const outcome =
+        cadence.platform === "slack"
+          ? await dispatchCadenceDigest({
+              env,
+              repo,
+              resolver,
+              workspaceInstallMap,
+              nowIso,
+              cadence,
+              options: { forceSendNoTasks: false }
+            })
+          : cadence.platform === "thane_cli"
+            ? await dispatchNativeCadenceDigest({
+                env,
+                repo,
+                nowIso,
+                cadence,
+                options: { forceSendNoTasks: false }
+              })
+            : "skipped_unremindable_assignee";
       if (outcome === "sent") {
         stats.messagesSent += 1;
       } else if (outcome === "skipped_unremindable_assignee") {
@@ -755,5 +888,6 @@ export const __testables = {
   shouldUseAiDigest,
   isDmRemindableForInstall,
   toDigestContextMessages,
-  buildAiDigestMessage
+  buildAiDigestMessage,
+  dispatchNativeCadenceDigest
 };

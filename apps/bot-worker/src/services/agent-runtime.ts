@@ -24,13 +24,12 @@ import { estimateOpenAiUsageCost } from "./openai-pricing";
 import {
   fetchSlackConversationHistory,
   fetchSlackThreadReplies,
-  postSlackMessage,
-  type SlackHistoryMessage
+  postSlackMessage
 } from "./slack-api";
 import { SlackInstallStore } from "./slack-install-store";
 import type { BotEnv } from "./task-inference";
 
-interface AgentRuntimeInput {
+interface ConversationalAgentInput {
   env: BotEnv;
   organizationId: string;
   workspaceId: string;
@@ -39,6 +38,9 @@ interface AgentRuntimeInput {
   event: MessageEvent;
   interactionMode?: "passive_ingest" | "dm_reply" | "proactive_followup";
   readOnlyTools?: boolean;
+  adapter?: AgentRuntimeAdapter;
+  actorEmail?: string;
+  actorDisplayName?: string;
 }
 
 interface ChatCompletionToolCall {
@@ -82,11 +84,43 @@ interface AgentRunResult {
   replyText?: string;
 }
 
+type AgentPlatform = "slack" | "thane_cli";
+
+interface AgentHistoryReaction {
+  name?: string;
+  users?: string[];
+}
+
+interface AgentHistoryMessage {
+  user?: string;
+  messageId?: string;
+  threadRootId?: string;
+  text?: string;
+  subtype?: string;
+  reactions?: AgentHistoryReaction[];
+}
+
+interface AgentRuntimeAdapter {
+  platform: AgentPlatform;
+  botExternalUserId?: string;
+  fetchConversationHistory(input: { providerConversationId: string; limit: number; maxPages: number }): Promise<AgentHistoryMessage[]>;
+  fetchThreadReplies(input: { providerConversationId: string; threadId: string; limit: number; maxPages: number }): Promise<AgentHistoryMessage[]>;
+  sendBillingNotice?(input: { channelId: string; text: string; threadId?: string }): Promise<void>;
+}
+
+interface RuntimeUserRef {
+  userId: string;
+  externalUserId: string;
+  displayName?: string;
+  email?: string;
+}
+
 interface ToolContext {
   env: BotEnv;
   repo: D1TaskRepository;
   resolver: ConversationAccessResolver;
   installStore: SlackInstallStore;
+  platform: AgentPlatform;
   organizationId: string;
   workspaceId: string;
   externalWorkspaceId: string;
@@ -95,15 +129,15 @@ interface ToolContext {
   actorPersonId?: string;
   readableConversationSourceIds: string[];
   currentConversationSourceId: string;
-  botToken: string;
   createdTaskIds: string[];
   taskActionTypes: Set<TaskActionType>;
   eventTypes: Set<string>;
-  recentMessages: SlackHistoryMessage[];
+  recentMessages: AgentHistoryMessage[];
   event: MessageEvent;
   interactionMode: "passive_ingest" | "dm_reply" | "proactive_followup";
   readOnlyTools: boolean;
   botExternalUserId?: string;
+  adapter: AgentRuntimeAdapter;
   workspaceUsers: Array<{ userId: string; externalUserId: string; displayName?: string; email?: string }>;
   billingPolicy: WorkspaceBillingPolicy;
 }
@@ -122,38 +156,206 @@ function clampNonNegative(limit: unknown, fallback: number, max: number): number
   return Math.min(Math.max(Math.floor(limit), 0), max);
 }
 
-function mergeSlackMessages(
-  ...messageSets: Array<SlackHistoryMessage[] | null | undefined>
-): SlackHistoryMessage[] {
-  const byTs = new Map<string, SlackHistoryMessage>();
+function fromSlackHistoryMessages(
+  messages: Array<{
+    user?: string;
+    ts?: string;
+    thread_ts?: string;
+    text?: string;
+    subtype?: string;
+    reactions?: AgentHistoryReaction[];
+  }>
+): AgentHistoryMessage[] {
+  return messages.map((message) => {
+    const normalized: AgentHistoryMessage = {};
+    if (message.user) {
+      normalized.user = message.user;
+    }
+    if (message.ts) {
+      normalized.messageId = message.ts;
+    }
+    if (message.thread_ts) {
+      normalized.threadRootId = message.thread_ts;
+    }
+    if (message.text) {
+      normalized.text = message.text;
+    }
+    if (message.subtype) {
+      normalized.subtype = message.subtype;
+    }
+    if (message.reactions) {
+      normalized.reactions = message.reactions;
+    }
+    return normalized;
+  });
+}
+
+function mergeAgentHistoryMessages(
+  ...messageSets: Array<AgentHistoryMessage[] | null | undefined>
+): AgentHistoryMessage[] {
+  const byTs = new Map<string, AgentHistoryMessage>();
   let fallbackCounter = 0;
   for (const set of messageSets) {
     if (!set) {
       continue;
     }
     for (const message of set) {
-      const ts = message.ts?.trim();
-      if (ts) {
-        byTs.set(ts, message);
+      const messageId = message.messageId?.trim();
+      if (messageId) {
+        byTs.set(messageId, message);
       } else {
         fallbackCounter += 1;
         byTs.set(`fallback:${fallbackCounter}:${message.user ?? "unknown"}:${message.text ?? ""}`, message);
       }
     }
   }
-  return Array.from(byTs.values()).sort((a, b) => Number(a.ts ?? "0") - Number(b.ts ?? "0"));
+  return Array.from(byTs.values()).sort((a, b) => Number(a.messageId ?? "0") - Number(b.messageId ?? "0"));
 }
 
-function toContextMessage(message: SlackHistoryMessage): Record<string, unknown> {
+function toAgentContextMessage(message: AgentHistoryMessage): Record<string, unknown> {
   return {
-    ts: message.ts ?? null,
-    thread_ts: message.thread_ts ?? null,
+    message_id: message.messageId ?? null,
+    thread_id: message.threadRootId ?? null,
     user: message.user ?? null,
     text: message.text ?? null,
     reactions: (message.reactions ?? []).map((reaction) => ({
       name: reaction.name ?? null,
       users: reaction.users ?? []
     }))
+  };
+}
+
+async function ensureNativeRuntimeUser(input: {
+  env: BotEnv;
+  organizationId: string;
+  workspaceId: string;
+  externalUserId: string;
+  displayName?: string;
+  email?: string;
+}): Promise<RuntimeUserRef> {
+  const existing = await input.env.DB
+    .prepare(
+      `SELECT id, external_user_id, display_name, email
+       FROM users
+       WHERE organization_id = ?
+         AND workspace_id = ?
+         AND platform = 'thane_cli'
+         AND external_user_id = ?
+       LIMIT 1`
+    )
+    .bind(input.organizationId, input.workspaceId, input.externalUserId)
+    .first<Record<string, unknown>>();
+  if (existing?.id) {
+    return {
+      userId: String(existing.id),
+      externalUserId: String(existing.external_user_id ?? input.externalUserId),
+      ...(existing.display_name ? { displayName: String(existing.display_name) } : {}),
+      ...(existing.email ? { email: String(existing.email) } : {})
+    };
+  }
+
+  const nowIso = new Date().toISOString();
+  const userId = `usr_thane_${crypto.randomUUID().replace(/-/g, "")}`;
+  await input.env.DB
+    .prepare(
+      `INSERT INTO users (id, organization_id, workspace_id, platform, external_user_id, display_name, email, role, created_at, updated_at)
+       VALUES (?, ?, ?, 'thane_cli', ?, ?, ?, 'member', ?, ?)`
+    )
+    .bind(
+      userId,
+      input.organizationId,
+      input.workspaceId,
+      input.externalUserId,
+      input.displayName ?? input.externalUserId,
+      input.email ?? null,
+      nowIso,
+      nowIso
+    )
+    .run();
+
+  return {
+    userId,
+    externalUserId: input.externalUserId,
+    ...(input.displayName ? { displayName: input.displayName } : {}),
+    ...(input.email ? { email: input.email } : {})
+  };
+}
+
+async function ensureNativeAskThaneMemberForRuntime(env: BotEnv, workspaceId: string): Promise<string> {
+  const existing = await env.DB
+    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' LIMIT 1")
+    .bind(workspaceId)
+    .first<{ id?: string }>();
+  if (existing?.id) {
+    return existing.id;
+  }
+  const nowIso = new Date().toISOString();
+  const id = crypto.randomUUID();
+  await env.DB
+    .prepare(
+      `INSERT INTO thane_cli_workspace_members (
+         id, workspace_id, account_id, email, display_name, handle, role, joined_at, updated_at
+       ) VALUES (?, ?, 'acct_thane', 'thane@askthane.com', 'Ask Thane', 'thane', 'member', ?, ?)
+       ON CONFLICT(workspace_id, email) DO UPDATE SET
+         display_name = excluded.display_name,
+         handle = excluded.handle,
+         updated_at = excluded.updated_at`
+    )
+    .bind(id, workspaceId, nowIso, nowIso)
+    .run();
+  const row = await env.DB
+    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' LIMIT 1")
+    .bind(workspaceId)
+    .first<{ id?: string }>();
+  return row?.id ?? id;
+}
+
+function createNativeThaneChatAdapter(input: {
+  env: BotEnv;
+  workspaceId: string;
+}): AgentRuntimeAdapter {
+  async function readMessages(providerConversationId: string, limit: number, threadId?: string): Promise<AgentHistoryMessage[]> {
+    const cappedLimit = Math.min(Math.max(limit, 1), 200);
+    const rows = await input.env.DB
+      .prepare(
+        `SELECT msg.id, msg.thread_root_id, msg.text, msg.created_at, member.handle
+         FROM thane_cli_chat_messages msg
+         JOIN thane_cli_workspace_members member ON member.id = msg.author_member_id
+         WHERE msg.workspace_id = ?
+           AND msg.channel_id = ?
+           AND (? IS NULL OR msg.id = ? OR msg.thread_root_id = ?)
+         ORDER BY msg.created_at DESC
+         LIMIT ?`
+      )
+      .bind(input.workspaceId, providerConversationId, threadId ?? null, threadId ?? null, threadId ?? null, cappedLimit)
+      .all<{ id: string; thread_root_id: string | null; text: string; created_at: string; handle: string }>();
+    return (rows.results ?? [])
+      .reverse()
+      .map((row) => ({
+        user: row.handle,
+        messageId: row.id,
+        ...(row.thread_root_id ? { threadRootId: row.thread_root_id } : {}),
+        text: row.text
+      }));
+  }
+
+  return {
+    platform: "thane_cli",
+    botExternalUserId: "thane",
+    fetchConversationHistory: ({ providerConversationId, limit, maxPages }) => readMessages(providerConversationId, limit * maxPages),
+    fetchThreadReplies: ({ providerConversationId, threadId, limit, maxPages }) => readMessages(providerConversationId, limit * maxPages, threadId),
+    sendBillingNotice: async ({ channelId, text, threadId }) => {
+      const botMemberId = await ensureNativeAskThaneMemberForRuntime(input.env, input.workspaceId);
+      const nowIso = new Date().toISOString();
+      await input.env.DB
+        .prepare(
+          `INSERT INTO thane_cli_chat_messages (
+             id, workspace_id, channel_id, author_member_id, text, source, thread_root_id, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, 'chat', ?, ?, ?)`
+        )
+        .bind(crypto.randomUUID(), input.workspaceId, channelId, botMemberId, text, threadId ?? null, nowIso, nowIso)
+        .run();
+    }
   };
 }
 
@@ -249,7 +451,7 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
       function: {
         name: "search_tasks",
         description:
-          "Search visible tasks in the organization with ACL already enforced. assignee_user_id accepts Slack external_user_id and workspace user_id.",
+          "Search visible tasks in the organization with ACL already enforced. assignee_user_id accepts platform external_user_id and workspace user_id.",
         parameters: {
           type: "object",
           additionalProperties: false,
@@ -323,7 +525,8 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
           properties: {
             conversation_source_id: { type: "string" },
             limit: { type: "number" },
-            thread_ts: { type: "string" }
+            thread_id: { type: "string" },
+            thread_ts: { type: "string", description: "Deprecated alias for thread_id." }
           }
         }
       }
@@ -341,7 +544,8 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
           properties: {
             query: { type: "string" },
             conversation_source_id: { type: "string" },
-            thread_ts: { type: "string" },
+            thread_id: { type: "string" },
+            thread_ts: { type: "string", description: "Deprecated alias for thread_id." },
             limit: { type: "number" },
             context_window: { type: "number" },
             max_pages: { type: "number" }
@@ -1351,7 +1555,7 @@ async function executeTool(
           taskId,
           feedbackType,
           JSON.stringify({ ...(note ? { note } : {}), ...details }),
-          "slack",
+          ctx.platform,
           ctx.actorExternalUserId,
           ctx.actorInternalUserId,
           new Date().toISOString()
@@ -1535,34 +1739,37 @@ async function executeTool(
         return permissionError(toolCall.function.name, "cross_workspace_not_allowed");
       }
 
-      const requestedThreadTs = typeof args.thread_ts === "string" ? args.thread_ts.trim() : "";
-      let messages: Awaited<ReturnType<typeof fetchSlackConversationHistory>> = [];
+      const requestedThreadId =
+        typeof args.thread_id === "string" && args.thread_id.trim()
+          ? args.thread_id.trim()
+          : typeof args.thread_ts === "string"
+            ? args.thread_ts.trim()
+            : "";
+      let messages: AgentHistoryMessage[] = [];
       try {
-        messages = await fetchSlackConversationHistory({
-          botToken: ctx.botToken,
-          channelId: source.providerConversationId,
+        messages = await ctx.adapter.fetchConversationHistory({
+          providerConversationId: source.providerConversationId,
           limit: clampLimit(args.limit, 30, readLimitMax),
           maxPages: 2
         });
-        if (requestedThreadTs) {
+        if (requestedThreadId) {
           try {
-            const threadMessages = await fetchSlackThreadReplies({
-              botToken: ctx.botToken,
-              channelId: source.providerConversationId,
-              threadTs: requestedThreadTs,
+            const threadMessages = await ctx.adapter.fetchThreadReplies({
+              providerConversationId: source.providerConversationId,
+              threadId: requestedThreadId,
               limit: clampLimit(args.limit, 30, readLimitMax),
               maxPages: 2
             });
-            messages = mergeSlackMessages(messages, threadMessages);
+            messages = mergeAgentHistoryMessages(messages, threadMessages);
           } catch (threadError) {
             return {
               ok: true,
               conversation_source_id: source.id,
-              thread_ts: requestedThreadTs,
+              thread_id: requestedThreadId,
               thread_fetch_warning: threadError instanceof Error ? threadError.message : String(threadError),
               messages: messages
                 .slice(-clampLimit(args.limit, 30, readLimitMax))
-                .map(toContextMessage)
+                .map(toAgentContextMessage)
             };
           }
         }
@@ -1577,10 +1784,10 @@ async function executeTool(
       return {
         ok: true,
         conversation_source_id: source.id,
-        ...(requestedThreadTs ? { thread_ts: requestedThreadTs } : {}),
+        ...(requestedThreadId ? { thread_id: requestedThreadId } : {}),
         messages: messages
           .slice(-clampLimit(args.limit, 30, readLimitMax))
-          .map(toContextMessage)
+          .map(toAgentContextMessage)
       };
     }
 
@@ -1612,27 +1819,30 @@ async function executeTool(
       const searchMaxPages = clampEnvNumber(ctx.env.AGENT_MESSAGE_SEARCH_MAX_PAGES, 6, 1, 20);
       const contextWindow = clampNonNegative(args.context_window, 2, 10);
       const matchLimit = clampLimit(args.limit, 8, 50);
-      const requestedThreadTs = typeof args.thread_ts === "string" ? args.thread_ts.trim() : "";
+      const requestedThreadId =
+        typeof args.thread_id === "string" && args.thread_id.trim()
+          ? args.thread_id.trim()
+          : typeof args.thread_ts === "string"
+            ? args.thread_ts.trim()
+            : "";
 
-      let messages: SlackHistoryMessage[] = [];
+      let messages: AgentHistoryMessage[] = [];
       try {
-        const channelMessages = await fetchSlackConversationHistory({
-          botToken: ctx.botToken,
-          channelId: source.providerConversationId,
+        const channelMessages = await ctx.adapter.fetchConversationHistory({
+          providerConversationId: source.providerConversationId,
           limit: clampLimit(args.limit, 120, readLimitMax),
           maxPages: clampLimit(args.max_pages, Math.min(4, searchMaxPages), searchMaxPages)
         });
         messages = channelMessages;
-        if (requestedThreadTs) {
+        if (requestedThreadId) {
           try {
-            const threadMessages = await fetchSlackThreadReplies({
-              botToken: ctx.botToken,
-              channelId: source.providerConversationId,
-              threadTs: requestedThreadTs,
+            const threadMessages = await ctx.adapter.fetchThreadReplies({
+              providerConversationId: source.providerConversationId,
+              threadId: requestedThreadId,
               limit: clampLimit(args.limit, 120, readLimitMax),
               maxPages: clampLimit(args.max_pages, Math.min(4, searchMaxPages), searchMaxPages)
             });
-            messages = mergeSlackMessages(channelMessages, threadMessages);
+            messages = mergeAgentHistoryMessages(channelMessages, threadMessages);
           } catch {
             // Keep channel messages if thread reads are unavailable for this token/scope.
           }
@@ -1661,15 +1871,15 @@ async function executeTool(
         ok: true,
         conversation_source_id: source.id,
         query,
-        ...(requestedThreadTs ? { thread_ts: requestedThreadTs } : {}),
+        ...(requestedThreadId ? { thread_id: requestedThreadId } : {}),
         total_messages_scanned: messages.length,
         matches: matchingIndexes.map((index) => {
           const start = Math.max(0, index - contextWindow);
           const end = Math.min(messages.length, index + contextWindow + 1);
           return {
             index,
-            match: toContextMessage(messages[index] as SlackHistoryMessage),
-            context: messages.slice(start, end).map(toContextMessage)
+            match: toAgentContextMessage(messages[index] as AgentHistoryMessage),
+            context: messages.slice(start, end).map(toAgentContextMessage)
           };
         })
       };
@@ -1871,11 +2081,11 @@ async function executeTool(
           sourceMessageId: ctx.event.messageId,
           title,
           assignee: {
-            platform: "slack",
+            platform: ctx.platform,
             platformUserId: assigneeExternal
           },
           assigner: {
-            platform: "slack",
+            platform: ctx.platform,
             platformUserId: ctx.actorExternalUserId
           },
           createdAt: new Date().toISOString(),
@@ -1906,7 +2116,7 @@ async function executeTool(
           workspaceId: ctx.workspaceId,
           taskId: task.id,
           actionType: "create",
-          actorPlatform: "slack",
+          actorPlatform: ctx.platform,
           actorId: ctx.actorExternalUserId,
           sourceConversationSourceId: ctx.currentConversationSourceId,
           payload: {
@@ -1985,7 +2195,7 @@ async function executeTool(
         workspaceId: string;
         taskId: string;
         actionType: TaskActionType;
-        actorPlatform: "slack";
+        actorPlatform: AgentPlatform;
         actorId: string;
         sourceConversationSourceId: string;
         status?: TaskStatus;
@@ -1994,7 +2204,7 @@ async function executeTool(
         dueAt?: string | null;
         urgency?: TaskUrgency;
         difficulty?: TaskDifficulty;
-        assigneePlatform?: "slack";
+        assigneePlatform?: AgentPlatform;
         assigneeId?: string;
         assigneeName?: string | null;
         targetTaskId?: string;
@@ -2006,7 +2216,7 @@ async function executeTool(
         workspaceId: ctx.workspaceId,
         taskId,
         actionType,
-        actorPlatform: "slack",
+        actorPlatform: ctx.platform,
         actorId: ctx.actorExternalUserId,
         sourceConversationSourceId: ctx.currentConversationSourceId,
         payload: {
@@ -2063,7 +2273,7 @@ async function executeTool(
             assignee_user_id: resolved.resolvedExternalUserId
           };
         }
-        updateInput.assigneePlatform = "slack";
+        updateInput.assigneePlatform = ctx.platform;
         updateInput.assigneeId = resolved.resolvedExternalUserId;
         const matchedUser = ctx.workspaceUsers.find((user) => user.externalUserId === resolved.resolvedExternalUserId);
         updateInput.assigneeName = matchedUser?.displayName ?? null;
@@ -2132,7 +2342,7 @@ async function executeTool(
         workspaceId: ctx.workspaceId,
         taskId,
         actionType: "edit",
-        actorPlatform: "slack",
+        actorPlatform: ctx.platform,
         actorId: ctx.actorExternalUserId,
         sourceConversationSourceId: ctx.currentConversationSourceId,
         description: nextDescription,
@@ -2283,7 +2493,7 @@ async function executeTool(
         organizationId: ctx.organizationId,
         workspaceId: ctx.workspaceId,
         userId: ctx.actorInternalUserId,
-        platform: "slack",
+        platform: ctx.platform,
         externalUserId: ctx.actorExternalUserId,
         isEnabled,
         timezone,
@@ -2363,10 +2573,11 @@ export const __testables = {
   extractReplyTextFromAssistantMessage
 };
 
-export async function runConversationalAgentForSlackMessage(input: AgentRuntimeInput): Promise<AgentRunResult> {
+export async function runConversationalAgent(input: ConversationalAgentInput): Promise<AgentRunResult> {
   const interactionMode = input.interactionMode ?? "passive_ingest";
   const readOnlyTools = input.readOnlyTools ?? interactionMode === "proactive_followup";
   const configuredMaxTurns = clampEnvNumber(input.env.AGENT_MAX_TOOL_TURNS, 8, 1, 20);
+  const platform = input.adapter?.platform ?? "slack";
 
   if ((input.env.DEFAULT_LLM_PROVIDER ?? "openai") !== "openai") {
     return { usedTools: false, createdTaskIds: [], updatedTaskIds: [], taskActionTypes: [], eventTypes: [] };
@@ -2385,20 +2596,33 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
   });
   const maxTurns = workspaceBillingPolicy.planTier === "free" ? Math.min(configuredMaxTurns, 4) : configuredMaxTurns;
 
-  const actorUser = await resolver.ensureSlackUser({
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
-    platformUserId: input.event.author.platformUserId,
-    nowIso: new Date().toISOString()
-  });
+  const actorUser =
+    platform === "slack"
+      ? await resolver.ensureSlackUser({
+          organizationId: input.organizationId,
+          workspaceId: input.workspaceId,
+          platformUserId: input.event.author.platformUserId,
+          nowIso: new Date().toISOString()
+        })
+      : await ensureNativeRuntimeUser({
+          env: input.env,
+          organizationId: input.organizationId,
+          workspaceId: input.workspaceId,
+          externalUserId: input.event.author.platformUserId,
+          ...(input.actorDisplayName ?? input.event.author.displayName ? { displayName: input.actorDisplayName ?? input.event.author.displayName } : {}),
+          ...(input.actorEmail ? { email: input.actorEmail } : {})
+        });
 
   const actorPerson = await repo.resolveOrCreatePersonForIdentity({
     organizationId: input.organizationId,
-    provider: "slack",
+    provider: platform,
     externalWorkspaceId: input.externalWorkspaceId,
     externalUserId: input.event.author.platformUserId,
     linkedUserId: actorUser.userId,
+    ...(input.actorEmail ? { email: input.actorEmail } : {}),
+    ...(input.actorDisplayName ?? input.event.author.displayName ? { displayName: input.actorDisplayName ?? input.event.author.displayName } : {}),
     confidence: 0.85,
+    isVerified: platform === "thane_cli" && Boolean(input.actorEmail),
     nowIso: new Date().toISOString()
   });
 
@@ -2418,15 +2642,48 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     userId: actorUser.userId
   });
 
-  const slackInstall = await resolveSlackInstall({
-    env: input.env,
-    installStore,
-    externalWorkspaceId: input.externalWorkspaceId
-  });
-  let botToken = slackInstall.botToken;
-  const botUserId = slackInstall.botUserId;
-
-  if (!botToken) {
+  let botToken: string | null = null;
+  let runtimeAdapter: AgentRuntimeAdapter | null = input.adapter ?? null;
+  if (!input.adapter) {
+    const slackInstall = await resolveSlackInstall({
+      env: input.env,
+      installStore,
+      externalWorkspaceId: input.externalWorkspaceId
+    });
+    botToken = slackInstall.botToken;
+    const botUserId = slackInstall.botUserId;
+    if (!botToken) {
+      return { usedTools: false, createdTaskIds: [], updatedTaskIds: [], taskActionTypes: [], eventTypes: [] };
+    }
+    const adapterBotToken = botToken;
+    runtimeAdapter = {
+      platform: "slack",
+      ...(botUserId ? { botExternalUserId: botUserId } : {}),
+      fetchConversationHistory: async ({ providerConversationId, limit, maxPages }) =>
+        fromSlackHistoryMessages(await fetchSlackConversationHistory({
+          botToken: adapterBotToken,
+          channelId: providerConversationId,
+          limit,
+          maxPages
+        })),
+      fetchThreadReplies: async ({ providerConversationId, threadId, limit, maxPages }) =>
+        fromSlackHistoryMessages(await fetchSlackThreadReplies({
+          botToken: adapterBotToken,
+          channelId: providerConversationId,
+          threadTs: threadId,
+          limit,
+          maxPages
+        })),
+      sendBillingNotice: ({ channelId, text, threadId }) =>
+        postSlackMessage({
+          botToken: adapterBotToken,
+          channelId,
+          text,
+          ...(threadId ? { threadTs: threadId } : {})
+        }).then(() => undefined)
+    };
+  }
+  if (!runtimeAdapter) {
     return { usedTools: false, createdTaskIds: [], updatedTaskIds: [], taskActionTypes: [], eventTypes: [] };
   }
 
@@ -2447,11 +2704,10 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
       })
     });
     try {
-      await postSlackMessage({
-        botToken,
+      await runtimeAdapter.sendBillingNotice?.({
         channelId: input.event.channelId,
         text: message,
-        threadTs: input.event.messageId
+        threadId: input.event.messageId
       });
     } catch (error) {
       console.warn("agent_runtime_free_tier_ai_cap_notice_failed", {
@@ -2474,24 +2730,22 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
   const recentHistoryMaxPages = clampEnvNumber(input.env.AGENT_RECENT_HISTORY_MAX_PAGES, 2, 1, 10);
   const recentContextWindow = clampEnvNumber(input.env.AGENT_RECENT_CONTEXT_WINDOW, 30, 10, 120);
   const threadContextWindow = clampEnvNumber(input.env.AGENT_THREAD_CONTEXT_WINDOW, 20, 5, 120);
-  const currentThreadTs = input.event.threadTs?.trim() ? input.event.threadTs.trim() : null;
+  const currentThreadId = input.event.threadTs?.trim() ? input.event.threadTs.trim() : null;
 
-  let recentMessages: SlackHistoryMessage[] = [];
-  let recentThreadMessages: SlackHistoryMessage[] = [];
+  let recentMessages: AgentHistoryMessage[] = [];
+  let recentThreadMessages: AgentHistoryMessage[] = [];
   try {
-    const channelMessages = await fetchSlackConversationHistory({
-      botToken,
-      channelId: input.event.channelId,
+    const channelMessages = await runtimeAdapter.fetchConversationHistory({
+      providerConversationId: input.event.channelId,
       limit: recentHistoryLimit,
       maxPages: recentHistoryMaxPages
     });
     recentMessages = channelMessages;
-    if (currentThreadTs) {
+    if (currentThreadId) {
       try {
-        recentThreadMessages = await fetchSlackThreadReplies({
-          botToken,
-          channelId: input.event.channelId,
-          threadTs: currentThreadTs,
+        recentThreadMessages = await runtimeAdapter.fetchThreadReplies({
+          providerConversationId: input.event.channelId,
+          threadId: currentThreadId,
           limit: Math.min(recentHistoryLimit, threadContextWindow),
           maxPages: recentHistoryMaxPages
         });
@@ -2500,12 +2754,12 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
           organizationId: input.organizationId,
           workspaceId: input.workspaceId,
           channelId: input.event.channelId,
-          threadTs: currentThreadTs,
+          threadId: currentThreadId,
           reason: threadError instanceof Error ? threadError.message : String(threadError)
         });
       }
     }
-    recentMessages = mergeSlackMessages(recentMessages, recentThreadMessages);
+    recentMessages = mergeAgentHistoryMessages(recentMessages, recentThreadMessages);
   } catch (error) {
     const envFallbackToken = input.env.SLACK_BOT_TOKEN ?? null;
     if (
@@ -2521,27 +2775,27 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
           limit: recentHistoryLimit,
           maxPages: recentHistoryMaxPages
         });
-        recentMessages = channelMessages;
-        if (currentThreadTs) {
+        recentMessages = fromSlackHistoryMessages(channelMessages);
+        if (currentThreadId) {
           try {
             recentThreadMessages = await fetchSlackThreadReplies({
               botToken: envFallbackToken,
               channelId: input.event.channelId,
-              threadTs: currentThreadTs,
+              threadTs: currentThreadId,
               limit: Math.min(recentHistoryLimit, threadContextWindow),
               maxPages: recentHistoryMaxPages
-            });
+            }).then(fromSlackHistoryMessages);
           } catch (threadFallbackError) {
             console.warn("agent_runtime_thread_fetch_failed", {
               organizationId: input.organizationId,
               workspaceId: input.workspaceId,
               channelId: input.event.channelId,
-              threadTs: currentThreadTs,
+              threadId: currentThreadId,
               reason: threadFallbackError instanceof Error ? threadFallbackError.message : String(threadFallbackError)
             });
           }
         }
-        recentMessages = mergeSlackMessages(recentMessages, recentThreadMessages);
+        recentMessages = mergeAgentHistoryMessages(recentMessages, recentThreadMessages);
         botToken = envFallbackToken;
       } catch (fallbackError) {
         console.warn("agent_runtime_history_fetch_failed", {
@@ -2627,24 +2881,32 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     workspaceId: input.workspaceId,
     limit: 100
   });
-  const activeConversationParticipants = await resolver.listActiveSlackConversationParticipants({
-    organizationId: input.organizationId,
-    conversationSourceId: input.conversationSourceId
-  });
+  const activeConversationParticipants =
+    runtimeAdapter.platform === "slack"
+      ? await resolver.listActiveSlackConversationParticipants({
+          organizationId: input.organizationId,
+          conversationSourceId: input.conversationSourceId
+        })
+      : workspacePeopleSeed.map((person) => ({
+          userId: person.userId,
+          externalUserId: person.externalUserId,
+          displayName: person.displayName,
+          email: person.email
+        }));
   const activeConversationMembers = activeConversationParticipants
     .map((participant) => participant.externalUserId)
-    .filter((id) => id !== botUserId);
+    .filter((id) => id !== runtimeAdapter.botExternalUserId);
 
   const participantPersonNotes = (
     await Promise.all(
       activeConversationParticipants
-        .filter((participant) => participant.externalUserId !== botUserId)
+        .filter((participant) => participant.externalUserId !== runtimeAdapter.botExternalUserId)
         .slice(0, 12)
         .map(async (participant) => {
           const internalUserId = await resolver.resolveInternalUserId({
             organizationId: input.organizationId,
             workspaceId: input.workspaceId,
-            platform: "slack",
+            platform: runtimeAdapter.platform,
             platformUserId: participant.externalUserId
           });
           if (!internalUserId) {
@@ -2700,7 +2962,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     current_event: {
       channel_id: input.event.channelId,
       message_id: input.event.messageId,
-      thread_ts: currentThreadTs,
+      thread_id: currentThreadId,
       occurred_at: input.event.occurredAt,
       text: input.event.text
     },
@@ -2711,10 +2973,10 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
       kind: source.conversationKind,
       is_public: source.isPublic
     })),
-    recent_channel_messages: recentMessages.slice(-recentContextWindow).map(toContextMessage),
-    ...(currentThreadTs
+    recent_channel_messages: recentMessages.slice(-recentContextWindow).map(toAgentContextMessage),
+    ...(currentThreadId
       ? {
-          recent_thread_messages: recentThreadMessages.slice(-threadContextWindow).map(toContextMessage)
+          recent_thread_messages: recentThreadMessages.slice(-threadContextWindow).map(toAgentContextMessage)
         }
       : {}),
     assignee_candidates: {
@@ -2727,7 +2989,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
       email: person.email ?? null
     })),
     conversation_participants: activeConversationParticipants
-      .filter((participant) => participant.externalUserId !== botUserId)
+      .filter((participant) => participant.externalUserId !== runtimeAdapter.botExternalUserId)
       .map((participant) => ({
         external_user_id: participant.externalUserId,
         display_name: participant.displayName ?? null,
@@ -2786,6 +3048,7 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     repo,
     resolver,
     installStore,
+    platform: runtimeAdapter.platform,
     organizationId: input.organizationId,
     workspaceId: input.workspaceId,
     externalWorkspaceId: input.externalWorkspaceId,
@@ -2794,7 +3057,6 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     actorPersonId: actorPerson.id,
     readableConversationSourceIds,
     currentConversationSourceId: input.conversationSourceId,
-    botToken,
     createdTaskIds,
     taskActionTypes,
     eventTypes,
@@ -2802,9 +3064,10 @@ export async function runConversationalAgentForSlackMessage(input: AgentRuntimeI
     event: input.event,
     interactionMode,
     readOnlyTools,
+    adapter: runtimeAdapter,
     workspaceUsers: workspacePeopleSeed,
     billingPolicy: workspaceBillingPolicy,
-    ...(botUserId ? { botExternalUserId: botUserId } : {})
+    ...(runtimeAdapter.botExternalUserId ? { botExternalUserId: runtimeAdapter.botExternalUserId } : {})
   };
 
   const selectedModel = resolveModelForWorkspaceTier({
@@ -2970,7 +3233,7 @@ export async function runProactiveFollowUpForSlackUser(input: {
   context?: Record<string, unknown>;
 }): Promise<AgentRunResult> {
   const promptContext = input.context ? `\n\nContext JSON:\n${JSON.stringify(input.context)}` : "";
-  return runConversationalAgentForSlackMessage({
+  return runConversationalAgent({
     env: input.env,
     organizationId: input.organizationId,
     workspaceId: input.workspaceId,
@@ -2987,6 +3250,52 @@ export async function runProactiveFollowUpForSlackUser(input: {
       author: {
         platform: "slack",
         platformUserId: input.externalUserId
+      }
+    }
+  });
+}
+
+export async function runConversationalAgentForThaneChatMessage(input: {
+  env: BotEnv;
+  organizationId: string;
+  workspaceId: string;
+  conversationSourceId: string;
+  channelId: string;
+  authorExternalUserId: string;
+  authorEmail?: string;
+  authorDisplayName?: string;
+  messageId: string;
+  text: string;
+  threadRootId?: string | null;
+  occurredAt?: string;
+  interactionMode?: "passive_ingest" | "dm_reply" | "proactive_followup";
+  readOnlyTools?: boolean;
+}): Promise<AgentRunResult> {
+  return runConversationalAgent({
+    env: input.env,
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    externalWorkspaceId: input.workspaceId,
+    conversationSourceId: input.conversationSourceId,
+    adapter: createNativeThaneChatAdapter({
+      env: input.env,
+      workspaceId: input.workspaceId
+    }),
+    ...(input.authorEmail ? { actorEmail: input.authorEmail } : {}),
+    ...(input.authorDisplayName ? { actorDisplayName: input.authorDisplayName } : {}),
+    ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
+    ...(input.readOnlyTools !== undefined ? { readOnlyTools: input.readOnlyTools } : {}),
+    event: {
+      workspaceId: input.workspaceId,
+      channelId: input.channelId,
+      messageId: input.messageId,
+      ...(input.threadRootId ? { threadTs: input.threadRootId } : {}),
+      occurredAt: input.occurredAt ?? new Date().toISOString(),
+      text: input.text,
+      author: {
+        platform: "thane_cli",
+        platformUserId: input.authorExternalUserId,
+        ...(input.authorDisplayName ? { displayName: input.authorDisplayName } : {})
       }
     }
   });

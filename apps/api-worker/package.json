@@ -12,6 +12,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ask-thane/ai": "workspace:*",
+    "@ask-thane/domain": "workspace:*",
+    "@ask-thane/workflows": "workspace:*",
     "@ask-thane/data": "workspace:*"
   },
   "devDependencies": {

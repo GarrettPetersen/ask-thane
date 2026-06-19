@@ -1,6 +1,6 @@
 import { D1TaskRepository } from "@ask-thane/data";
 import type { MessageEvent } from "@ask-thane/domain";
-import { runConversationalAgentForSlackMessage } from "./agent-runtime";
+import { runConversationalAgent } from "./agent-runtime";
 import { markWorkspaceUsersDeactivated } from "./billing-policy";
 import { ConversationAccessResolver } from "./conversation-access";
 import {
@@ -448,7 +448,7 @@ async function processWorkspaceMessages(target: WorkspacePollTarget, env: BotEnv
           occurredAt: asIsoFromSlackTs(message.ts)
         };
 
-        const agentRun = await runConversationalAgentForSlackMessage({
+        const agentRun = await runConversationalAgent({
           env,
           organizationId: target.organizationId,
           workspaceId: target.workspaceId,

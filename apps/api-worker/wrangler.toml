@@ -3,8 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2026-05-08"
 
 [alias]
+"@ask-thane/ai" = "../../packages/ai/src/index.ts"
 "@ask-thane/data" = "../../packages/data/src/index.ts"
 "@ask-thane/domain" = "../../packages/domain/src/index.ts"
+"@ask-thane/workflows" = "../../packages/workflows/src/index.ts"
 
 [[d1_databases]]
 binding = "DB"
@@ -26,6 +28,7 @@ THANE_CLI_AUTH_DEV_CODES = "true"
 THANE_CLI_EMAIL_FROM = "Thane <noreply@askthane.com>"
 THANE_CLI_INVITE_BASE_URL = "http://localhost:8787/invite"
 THANE_PAYMENTS_BASE_URL = "http://localhost:8789"
+THANE_BOT_INTERNAL_BASE_URL = "http://localhost:8788"
 
 [env.staging]
 name = "ask-thane-api-staging"
@@ -50,6 +53,7 @@ THANE_CLI_AUTH_DEV_CODES = "true"
 THANE_CLI_EMAIL_FROM = "Thane <noreply@askthane.com>"
 THANE_CLI_INVITE_BASE_URL = "https://api-staging.askthane.com/invite"
 THANE_PAYMENTS_BASE_URL = "https://payments-staging.askthane.com"
+THANE_BOT_INTERNAL_BASE_URL = "https://bot-staging.askthane.com"
 
 [[env.staging.routes]]
 pattern = "api-staging.askthane.com"
@@ -78,6 +82,7 @@ THANE_CLI_AUTH_DEV_CODES = "false"
 THANE_CLI_EMAIL_FROM = "Thane <noreply@askthane.com>"
 THANE_CLI_INVITE_BASE_URL = "https://api.askthane.com/invite"
 THANE_PAYMENTS_BASE_URL = "https://payments.askthane.com"
+THANE_BOT_INTERNAL_BASE_URL = "https://bot.askthane.com"
 
 [[env.production.routes]]
 pattern = "api.askthane.com"
