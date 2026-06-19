@@ -97,7 +97,7 @@
         line-height: 1.05;
         font-size: 11px;
         margin-bottom: 12px;
-        min-height: 82px;
+        min-height: 108px;
       }
       .rail-tab {
         display: none;
@@ -170,7 +170,7 @@
 
       .main {
         display: grid;
-        grid-template-rows: auto 1fr auto auto;
+        grid-template-rows: auto auto 1fr auto auto;
         min-width: 0;
         min-height: 0;
       }
@@ -179,9 +179,9 @@
         justify-content: space-between;
         align-items: center;
         gap: 12px;
-        padding: 10px 12px;
+        padding: 8px 12px;
         border-bottom: 1px solid var(--line);
-        background: rgba(7, 10, 8, 0.78);
+        background: #070a08;
       }
       .topbar-left {
         min-width: 0;
@@ -194,7 +194,7 @@
         padding: 0;
         text-align: center;
       }
-      .channel-name { font-size: 18px; color: var(--green); }
+      .channel-name { font-size: 16px; color: var(--ink); }
       .prompt-line {
         color: var(--muted);
         font-size: 12px;
@@ -205,37 +205,33 @@
       .messages {
         overflow: auto;
         min-height: 0;
-        padding: 10px 12px 14px;
+        padding: 8px 10px 14px;
         display: flex;
         flex-direction: column;
-        gap: 8px;
-        background:
-          linear-gradient(90deg, rgba(122, 255, 159, 0.04) 1px, transparent 1px),
-          transparent;
-        background-size: 8px 100%;
+        gap: 0;
       }
       .message {
         border: 0;
-        border-left: 2px solid rgba(125, 211, 252, 0.38);
-        background: rgba(8, 12, 9, 0.76);
+        border-left: 0;
+        background: transparent;
         box-shadow: none;
-        padding: 9px 10px;
+        padding: 2px 0;
+        font-size: 13px;
       }
       .message.reply {
-        margin-left: 18px;
-        border-left-color: var(--amber);
-        background: rgba(21, 29, 24, 0.5);
+        margin-left: 0;
+        border-left: 0;
+        background: transparent;
       }
       .message-meta {
-        display: flex;
-        justify-content: space-between;
-        gap: 12px;
+        display: inline;
         color: var(--muted);
-        font-size: 12px;
-        margin-bottom: 8px;
+        font-size: 13px;
+        margin-bottom: 0;
       }
       .message-author { color: var(--cyan); }
       .message-text {
+        display: inline;
         white-space: pre-wrap;
         overflow-wrap: anywhere;
         line-height: 1.45;
@@ -244,7 +240,8 @@
         display: flex;
         flex-wrap: wrap;
         gap: 6px;
-        margin-top: 10px;
+        margin-top: 4px;
+        margin-left: 22px;
         align-items: center;
       }
       .message-actions button, .reaction-row button {
@@ -269,16 +266,29 @@
       .thread-count {
         color: var(--amber);
         font-size: 12px;
-        margin-top: 8px;
+        margin-left: 22px;
+      }
+      .msg-marker {
+        color: var(--muted);
+      }
+      .msg-branch {
+        color: var(--muted);
+        margin-left: 4ch;
       }
       .composer {
-        border-top: 1px solid var(--line);
-        padding: 10px 12px;
+        border-top: 0;
+        padding: 6px 12px 10px;
         background: rgba(7, 10, 8, 0.92);
         display: grid;
-        grid-template-columns: 1fr auto;
+        grid-template-columns: auto 1fr auto;
         gap: 10px;
         align-items: end;
+      }
+      .prompt-symbol {
+        color: var(--green);
+        min-height: 44px;
+        display: grid;
+        align-items: center;
       }
       .composer-wrap {
         border-top: 1px solid var(--line);
@@ -295,7 +305,11 @@
       .composer textarea {
         display: block;
         min-height: 44px;
+        border-color: transparent;
+        background: transparent;
+        padding-left: 0;
       }
+      .composer textarea:focus { border-color: transparent; box-shadow: none; }
       .statusbar {
         border-top: 1px solid var(--line);
         padding: 6px 12px;
@@ -309,6 +323,10 @@
       .statusbar strong {
         color: var(--green);
         font-weight: 400;
+      }
+      .top-rule {
+        height: 1px;
+        background: var(--line);
       }
       .reply-target {
         display: flex;
@@ -349,10 +367,10 @@
         overflow-wrap: anywhere;
       }
       .empty {
-        border: 1px dashed var(--line);
+        border: 0;
         color: var(--muted);
-        padding: 18px;
-        text-align: center;
+        padding: 0;
+        text-align: left;
       }
 
       @media (max-width: 980px) {
@@ -450,6 +468,15 @@
         return [...groups.values()];
       }
 
+      function hashString(value) {
+        let hash = 2166136261;
+        for (let index = 0; index < value.length; index += 1) {
+          hash ^= value.charCodeAt(index);
+          hash = Math.imul(hash, 16777619);
+        }
+        return hash >>> 0;
+      }
+
       function workspaceInitials(workspace) {
         const source = workspace?.name || workspace?.slug || "chat";
         const words = source.split(/[^a-zA-Z0-9]+/).filter(Boolean);
@@ -457,14 +484,28 @@
       }
 
       function generatedCrest(workspace) {
-        const slug = (workspace?.slug || "chat").slice(0, 16);
-        const initials = workspaceInitials(workspace).padEnd(4, " ");
+        const width = 24;
+        const innerWidth = Math.min(width - 2, 22);
+        const seed = `${workspace?.id || "web"}:${workspace?.slug || "chat"}:${workspace?.name || "Thane Chat"}`;
+        const hash = hashString(seed);
+        const glyphs = [" ", ".", ":", "+", "*", "#"];
+        const motifRows = Array.from({ length: 4 }, (_, row) => {
+          const left = Array.from({ length: 4 }, (_, column) => {
+            const shift = (row * 7 + column * 5) % 24;
+            return glyphs[(hash >>> shift) % glyphs.length] || " ";
+          });
+          return [...left, glyphs[(hash >>> ((row * 11) % 24)) % glyphs.length] || " ", ...left.slice().reverse()].join("");
+        });
+        const initials = ` ${workspaceInitials(workspace)} `;
+        const titleLine = `${initials}${" ".repeat(Math.max(0, innerWidth - initials.length))}`.slice(0, innerWidth);
+        const artPad = Math.max(0, Math.floor((innerWidth - motifRows[0].length) / 2));
         return [
-          "╭────────────╮",
-          `│ ${initials}       │`,
-          "│  THANE     │",
-          "╰────────────╯",
-          slug
+          `.${"-".repeat(innerWidth)}.`,
+          `|${titleLine}|`,
+          ...motifRows.map((row) => `|${`${" ".repeat(artPad)}${row}`.padEnd(innerWidth, " ").slice(0, innerWidth)}|`),
+          `'${"-".repeat(innerWidth)}'`,
+          workspace?.slug || "chat",
+          ""
         ].join("\n");
       }
 
@@ -702,13 +743,12 @@
         const user = users.get(message.authorId);
         const replies = repliesByRoot.get(message.id) || [];
         const groups = reactionGroups(message);
+        const stamp = time(message.createdAt);
+        const branch = isReply ? `<span class="msg-branch">└─</span> ` : "";
+        const sourceMarker = message.source === "terminal" ? " 🤖" : "";
+        const reactionText = (message.reactions || []).map((reaction) => reaction.emoji).join(" ");
         return `<article class="message ${isReply ? "reply" : ""}">
-          <div class="message-meta">
-            <span class="message-author">@${esc(user?.handle || "unknown")}</span>
-            <span>${esc(time(message.createdAt))}</span>
-          </div>
-          <div class="message-text">${esc(message.text)}</div>
-          ${replies.length && !isReply ? `<div class="thread-count">${replies.length} repl${replies.length === 1 ? "y" : "ies"}</div>` : ""}
+          <span class="message-meta">${branch}<span class="msg-marker">  ${esc(stamp)}</span> <span class="message-author">@${esc(user?.handle || "unknown")}${sourceMarker}</span>: </span><span class="message-text">${esc(message.text)}</span>${replies.length && !isReply ? `<span class="thread-count"> (${replies.length} repl${replies.length === 1 ? "y" : "ies"})</span>` : ""}${reactionText ? `<span class="thread-count"> ${esc(reactionText)}</span>` : ""}
           <div class="reaction-row">
             ${groups.map((group) => `<button class="reaction" title="${esc(group.by.join(", "))}" onclick="reactTo(${jsString(message.id)}, ${jsString(group.emoji)})">${esc(group.emoji)} ${group.count}</button>`).join("")}
           </div>
@@ -762,19 +802,21 @@
                 <div class="topbar-left">
                   <button class="icon-button" onclick="toggleSidebar()" title="${state.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}">${state.sidebarCollapsed ? ">" : "<"}</button>
                   <div>
-                    <h2 class="channel-name">#${esc(channel?.name || "general")}</h2>
-                    <p class="prompt-line">thane://${esc(workspace?.slug || "chat")}/${esc(channel?.name || "general")}</p>
+                    <h2 class="channel-name">Thane Chat</h2>
+                    <p class="prompt-line">${esc(workspace?.slug || "chat")} / typing</p>
                   </div>
                 </div>
                 <button onclick="saveSession(null); location.reload()">sign out</button>
               </header>
+              <div class="top-rule"></div>
               <section class="messages">
                 ${rootMessages.length ? rootMessages.map((message) => renderMessage(message, users, repliesByRoot)).join("") : `<div class="empty">No messages in this channel yet.</div>`}
               </section>
-              <div class="statusbar"><span><strong>${esc(workspace?.slug || "chat")}</strong> / #${esc(channel?.name || "general")}</span><span>${messages.length} msg${messages.length === 1 ? "" : "s"} · sync 5s</span></div>
+              <div class="statusbar"><span><strong>${channel?.kind === "dm" ? "@" : "#"}${esc(channel?.name || "general")}</strong> Up messages. Left channels. Right messages.</span><span>${messages.length} msg${messages.length === 1 ? "" : "s"} · sync 5s</span></div>
               <div class="composer-wrap">
                 ${replyTarget ? `<div class="reply-target"><span>replying to @${esc(users.get(replyTarget.authorId)?.handle || "unknown")}: ${esc(replyTarget.text.slice(0, 80))}</span><button onclick="state.replyToId=''; render()">cancel</button></div>` : ""}
                 <form class="composer" onsubmit="sendMessage(event)">
+                  <span class="prompt-symbol">${replyTarget ? "reply>" : ">"}</span>
                   <textarea name="text" oninput="updateDraft(this.value)" placeholder="${replyTarget ? "Type a reply" : `Type a message for #${esc(channel?.name || "general")}`}">${esc(state.draftText)}</textarea>
                   <button>${replyTarget ? "reply" : "send"}</button>
                 </form>
