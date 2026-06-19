@@ -13,6 +13,7 @@ export const slashCommands: SlashCommand[] = [
   { name: "/inbox all", usage: "/inbox all", description: "Show unread summaries across all workspaces.", needsArgument: false },
   { name: "/workspaces", usage: "/workspaces", description: "List workspaces.", needsArgument: false },
   { name: "/workspace", usage: "/workspace <slug>", description: "Switch workspace and focus #general.", needsArgument: true },
+  { name: "/workspace-create", usage: "/workspace-create <slug> [name]", description: "Create and switch to a workspace.", needsArgument: true },
   { name: "/workspace-art", usage: "/workspace-art", description: "Show workspace art setup command.", needsArgument: false },
   { name: "/name", usage: "/name <display-name>", description: "Change your display name.", needsArgument: true },
   { name: "/invite", usage: "/invite <email>", description: "Email a workspace invite.", needsArgument: true },

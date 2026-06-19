@@ -460,6 +460,7 @@
         longPressTimer: null,
         touchMoved: false,
         inviteLinkResult: null,
+        searchQuery: "",
         draftText: "",
         sidebarCollapsed: localStorage.getItem("thane.web.sidebarCollapsed") === "true",
         workspaceMenuOpen: localStorage.getItem("thane.web.workspaceMenuOpen") === "true",
@@ -746,6 +747,17 @@
         state.draftText = value;
       }
 
+      function updateSearch(value) {
+        state.searchQuery = value;
+      }
+
+      function submitSearch(event) {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        state.searchQuery = String(form.get("search") || "").trim();
+        render();
+      }
+
       async function reactTo(messageId, emoji) {
         if (!messageId || !emoji) return;
         state.reactionMenuMessageId = "";
@@ -983,6 +995,12 @@
         const channel = snap.channels.find((item) => item.id === state.activeChannelId) || snap.channels[0];
         const users = new Map((snap.users || []).map((user) => [user.id, user]));
         const messages = (snap.messages || []).filter((message) => message.channelId === channel?.id);
+        const searchQuery = state.searchQuery.trim().toLowerCase();
+        const searchResults = searchQuery
+          ? (snap.messages || [])
+              .filter((message) => message.text.toLowerCase().includes(searchQuery))
+              .slice(-12)
+          : [];
         const repliesByRoot = new Map();
         for (const message of messages) {
           if (!message.threadRootId) continue;
@@ -1051,6 +1069,23 @@
                 </div>
               </section>
               <section class="section">
+                <div class="section-head"><span>Search</span></div>
+                <form class="list" onsubmit="submitSearch(event)">
+                  <input name="search" value="${esc(state.searchQuery)}" oninput="updateSearch(this.value)" placeholder="Search messages" />
+                  <button>Search messages</button>
+                  ${searchQuery ? `<div class="kv">${searchResults.length ? searchResults.map((message) => `<button type="button" class="item" onclick="state.activeChannelId=${jsString(message.channelId)}; state.searchQuery=''; render()">#${esc(snap.channels.find((item) => item.id === message.channelId)?.name || "channel")} ${esc((users.get(message.authorId)?.handle || "unknown") + ": " + message.text.slice(0, 80))}</button>`).join("") : `<div class="muted small">No results</div>`}</div>` : ""}
+                </form>
+              </section>
+              <section class="section">
+                <div class="section-head"><span>Members</span></div>
+                <div class="list">
+                  ${snap.users.map((user) => {
+                    const memberRole = (snap.workspaceMembers || []).find((member) => member.userId === user.id)?.role || "member";
+                    return `<div class="item">@${esc(user.handle)} - ${esc(user.displayName || user.handle)} (${esc(memberRole)})</div>`;
+                  }).join("") || `<div class="muted small">No members</div>`}
+                </div>
+              </section>
+              <section class="section">
                 <div class="section-head"><span>Profile</span></div>
                 <form class="list" onsubmit="updateDisplayName(event)">
                   <input name="displayName" value="${esc(state.session.displayName || "")}" placeholder="Display name" />
@@ -1114,6 +1149,8 @@
       window.chooseWorkspace = chooseWorkspace;
       window.sendMessage = sendMessage;
       window.updateDraft = updateDraft;
+      window.updateSearch = updateSearch;
+      window.submitSearch = submitSearch;
       window.toggleSidebar = toggleSidebar;
       window.toggleMenu = toggleMenu;
       window.replyTo = replyTo;

@@ -1,6 +1,6 @@
 import { stdin as input, stdout as output } from "node:process";
 import { emitKeypressEvents } from "node:readline";
-import { createHostedChannel, hasHostedChat, reactHostedMessage, sendHostedMessage, syncHostedStore } from "./hosted.js";
+import { createHostedChannel, ensureHostedWorkspace, hasHostedChat, reactHostedMessage, sendHostedMessage, syncHostedStore } from "./hosted.js";
 import { renderChannels, renderInbox, renderMessages, renderUsers } from "./render.js";
 import { completeSlashCommand, renderSlashCommands, slashCommands } from "./slash-commands.js";
 import { ThaneStore } from "./store.js";
@@ -1023,6 +1023,30 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       }
       activeChannel = await selectConversation(store, "general");
       status = `Switched to workspace ${workspace.slug}`;
+      showHelp = false;
+      showMenu = false;
+      sidePanelLines = undefined;
+      workspacePickerOpen = false;
+      showReactionPicker = false;
+      return;
+    }
+    if (trimmed.startsWith("/workspace-create ")) {
+      const parts = trimmed.slice("/workspace-create ".length).trim().split(/\s+/).filter(Boolean);
+      const slug = parts.shift();
+      const name = parts.join(" ");
+      if (!slug) {
+        status = "Usage: /workspace-create <slug> [name]";
+        return;
+      }
+      let workspace = await store.createWorkspace(slug, name || undefined);
+      await store.useWorkspace(workspace.slug);
+      if (hasHostedChat(store)) {
+        await ensureHostedWorkspace(store);
+        store = await ThaneStore.open();
+        workspace = store.activeWorkspace;
+      }
+      activeChannel = await selectConversation(store, "general");
+      status = `Created workspace ${workspace.slug}`;
       showHelp = false;
       showMenu = false;
       sidePanelLines = undefined;
