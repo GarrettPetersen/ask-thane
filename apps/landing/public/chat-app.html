@@ -4,6 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Thane Chat</title>
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <style>
       :root {
         color-scheme: dark;
@@ -581,6 +584,14 @@
         else localStorage.removeItem(storageKey);
       }
 
+      function remember(key, value) {
+        try {
+          localStorage.setItem(key, value);
+        } catch (_error) {
+          // Keep controls responsive even when storage is unavailable.
+        }
+      }
+
       async function api(path, options = {}) {
         const headers = { "content-type": "application/json", ...(options.headers || {}) };
         if (state.session?.authToken) headers.authorization = `Bearer ${state.session.authToken}`;
@@ -781,18 +792,18 @@
 
       function toggleSidebar() {
         state.sidebarCollapsed = !state.sidebarCollapsed;
-        localStorage.setItem("thane.web.sidebarCollapsed", String(state.sidebarCollapsed));
+        remember("thane.web.sidebarCollapsed", String(state.sidebarCollapsed));
         render();
       }
 
       function toggleMenu(name) {
         if (name === "workspaces") {
           state.workspaceMenuOpen = !state.workspaceMenuOpen;
-          localStorage.setItem("thane.web.workspaceMenuOpen", String(state.workspaceMenuOpen));
+          remember("thane.web.workspaceMenuOpen", String(state.workspaceMenuOpen));
         }
         if (name === "channels") {
           state.channelMenuOpen = !state.channelMenuOpen;
-          localStorage.setItem("thane.web.channelMenuOpen", String(state.channelMenuOpen));
+          remember("thane.web.channelMenuOpen", String(state.channelMenuOpen));
         }
         render();
       }
@@ -960,6 +971,12 @@
         state.replyToId = "";
         state.inviteLinkResult = null;
         await sync();
+        render();
+      }
+
+      function chooseChannel(id) {
+        state.activeChannelId = id;
+        state.replyToId = "";
         render();
       }
 
@@ -1722,12 +1739,12 @@
                 <p class="muted small">${esc(state.session.email)}</p>
               </div>
               <section class="section">
-                <div class="section-head"><button class="section-toggle" onclick="toggleMenu('workspaces')"><span class="menu-caret">${state.workspaceMenuOpen ? "v" : ">"}</span><span>Workspaces</span><span class="summary">${esc(workspace?.slug || "none")}</span></button><button onclick="sync().then(render)">sync</button></div>
-                ${state.workspaceMenuOpen ? `<div class="list">${snap.workspaces.map((item) => `<button class="item ${item.id === state.activeWorkspaceId ? "active" : ""}" onclick="chooseWorkspace(${jsString(item.id)})"><span class="cursor">${item.id === state.activeWorkspaceId ? ">" : " "}</span> ${esc(item.slug)}</button>`).join("") || `<div class="empty">No workspaces yet</div>`}</div>` : ""}
+                <div class="section-head"><button class="section-toggle" data-menu-toggle="workspaces" type="button"><span class="menu-caret">${state.workspaceMenuOpen ? "v" : ">"}</span><span>Workspaces</span><span class="summary">${esc(workspace?.slug || "none")}</span></button><button onclick="sync().then(render)">sync</button></div>
+                ${state.workspaceMenuOpen ? `<div class="list">${snap.workspaces.map((item) => `<button class="item ${item.id === state.activeWorkspaceId ? "active" : ""}" data-workspace-id="${esc(item.id)}" type="button"><span class="cursor">${item.id === state.activeWorkspaceId ? ">" : " "}</span> ${esc(item.slug)}</button>`).join("") || `<div class="empty">No workspaces yet</div>`}</div>` : ""}
               </section>
               <section class="section">
-                <div class="section-head"><button class="section-toggle" onclick="toggleMenu('channels')"><span class="menu-caret">${state.channelMenuOpen ? "v" : ">"}</span><span>Channels</span><span class="summary">#${esc(channel?.name || "general")}</span></button></div>
-                ${state.channelMenuOpen ? `<div class="list">${snap.channels.map((item) => `<button class="item ${item.id === state.activeChannelId ? "active" : ""}" onclick="state.activeChannelId=${jsString(item.id)}; state.replyToId=''; render()"><span class="cursor">${item.id === state.activeChannelId ? ">" : " "}</span> #${esc(item.name)}</button>`).join("") || `<div class="empty">No channels yet</div>`}</div>` : ""}
+                <div class="section-head"><button class="section-toggle" data-menu-toggle="channels" type="button"><span class="menu-caret">${state.channelMenuOpen ? "v" : ">"}</span><span>Channels</span><span class="summary">#${esc(channel?.name || "general")}</span></button></div>
+                ${state.channelMenuOpen ? `<div class="list">${snap.channels.map((item) => `<button class="item ${item.id === state.activeChannelId ? "active" : ""}" data-channel-id="${esc(item.id)}" type="button"><span class="cursor">${item.id === state.activeChannelId ? ">" : " "}</span> #${esc(item.name)}</button>`).join("") || `<div class="empty">No channels yet</div>`}</div>` : ""}
               </section>
             </aside>
             <main class="main">
@@ -1816,6 +1833,7 @@
       window.submitSearch = submitSearch;
       window.toggleSidebar = toggleSidebar;
       window.toggleMenu = toggleMenu;
+      window.chooseChannel = chooseChannel;
       window.replyTo = replyTo;
       window.reactTo = reactTo;
       window.customReaction = customReaction;
@@ -1843,6 +1861,27 @@
       window.sync = sync;
       window.render = render;
       window.state = state;
+
+      root.addEventListener("click", (event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        const menuButton = target?.closest("[data-menu-toggle]");
+        if (menuButton instanceof HTMLElement) {
+          event.preventDefault();
+          toggleMenu(menuButton.dataset.menuToggle || "");
+          return;
+        }
+        const workspaceButton = target?.closest("[data-workspace-id]");
+        if (workspaceButton instanceof HTMLElement) {
+          event.preventDefault();
+          void chooseWorkspace(workspaceButton.dataset.workspaceId || "");
+          return;
+        }
+        const channelButton = target?.closest("[data-channel-id]");
+        if (channelButton instanceof HTMLElement) {
+          event.preventDefault();
+          chooseChannel(channelButton.dataset.channelId || "");
+        }
+      });
 
       window.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
