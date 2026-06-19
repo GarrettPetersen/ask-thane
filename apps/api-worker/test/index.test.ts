@@ -73,6 +73,21 @@ describe("@ask-thane/api-worker", () => {
     });
   });
 
+  it("allows browser preflight requests for Thane CLI endpoints", async () => {
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/auth/start", {
+        method: "OPTIONS",
+        headers: { origin: "https://chat.askthane.com" }
+      }),
+      env
+    );
+
+    expect(res.status).toBe(204);
+    expect(res.headers.get("access-control-allow-origin")).toBe("https://chat.askthane.com");
+    expect(res.headers.get("access-control-allow-methods")).toContain("POST");
+    expect(res.headers.get("access-control-allow-headers")).toContain("authorization");
+  });
+
   it("starts Thane CLI auth by sending a verification email", async () => {
     const db = createAuthStartDbMock();
     const sendEmail = vi.fn(async () => ({ messageId: "email_1" }));

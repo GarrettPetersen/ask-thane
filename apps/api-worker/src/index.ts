@@ -170,6 +170,37 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function corsHeaders(request: Request): Record<string, string> {
+  const origin = request.headers.get("origin") ?? "";
+  const allowedOrigins = new Set([
+    "https://chat.askthane.com",
+    "https://askthane.com",
+    "https://www.askthane.com",
+    "http://localhost:8787",
+    "http://127.0.0.1:8787"
+  ]);
+  const allowOrigin = allowedOrigins.has(origin) ? origin : "https://chat.askthane.com";
+  return {
+    "access-control-allow-origin": allowOrigin,
+    "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-allow-headers": "authorization, content-type",
+    "access-control-max-age": "86400",
+    vary: "Origin"
+  };
+}
+
+function withCors(response: Response, request: Request): Response {
+  const headers = new Headers(response.headers);
+  for (const [key, value] of Object.entries(corsHeaders(request))) {
+    headers.set(key, value);
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
+
 function makeId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`;
 }
@@ -1624,6 +1655,67 @@ function readAuthorizedOrganizationId(request: Request): string | null {
   return organizationId;
 }
 
+async function handleThaneCliRequest(request: Request, env: Env): Promise<Response | null> {
+  const url = new URL(request.url);
+  if (!url.pathname.startsWith("/v1/thane-cli/")) {
+    return null;
+  }
+
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204 });
+  }
+
+  if (url.pathname === "/v1/thane-cli/auth/start" && request.method === "POST") {
+    return handleThaneCliAuthStart(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/auth/verify" && request.method === "POST") {
+    return handleThaneCliAuthVerify(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/auth/mfa-verify" && request.method === "POST") {
+    return handleThaneCliAuthMfaVerify(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/mfa/status" && request.method === "GET") {
+    return handleThaneCliMfaStatus(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/mfa/setup/start" && request.method === "POST") {
+    return handleThaneCliMfaSetupStart(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/mfa/setup/verify" && request.method === "POST") {
+    return handleThaneCliMfaSetupVerify(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/mfa/disable" && request.method === "POST") {
+    return handleThaneCliMfaDisable(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/workspaces" && request.method === "POST") {
+    return handleThaneCliWorkspaceEnsure(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/sync" && request.method === "GET") {
+    return buildThaneCliSyncResponse(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/channels" && request.method === "POST") {
+    return handleThaneCliChannelCreate(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/messages" && request.method === "POST") {
+    return handleThaneCliMessageCreate(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/reactions" && request.method === "POST") {
+    return handleThaneCliReactionCreate(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/workspace-invites" && request.method === "POST") {
+    return handleThaneCliWorkspaceInviteCreate(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/workspace-invites/accept" && request.method === "POST") {
+    return handleThaneCliWorkspaceInviteAccept(request, env);
+  }
+  if (url.pathname.startsWith("/v1/thane-cli/workspace-invites/") && request.method === "GET") {
+    const token = url.pathname.split("/").filter(Boolean).at(-1);
+    return token
+      ? handleThaneCliWorkspaceInvitePreview(token, env)
+      : Response.json({ ok: false, error: "invite_token_required" }, { status: 400 });
+  }
+  return Response.json({ ok: false, error: "not_found" }, { status: 404 });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -1642,67 +1734,9 @@ export default {
       });
     }
 
-    if (url.pathname === "/v1/thane-cli/auth/start" && request.method === "POST") {
-      return handleThaneCliAuthStart(request, env);
-    }
-
-    if (url.pathname === "/v1/thane-cli/auth/verify" && request.method === "POST") {
-      return handleThaneCliAuthVerify(request, env);
-    }
-
-    if (url.pathname === "/v1/thane-cli/auth/mfa-verify" && request.method === "POST") {
-      return handleThaneCliAuthMfaVerify(request, env);
-    }
-
-    if (url.pathname === "/v1/thane-cli/mfa/status" && request.method === "GET") {
-      return handleThaneCliMfaStatus(request, env);
-    }
-
-    if (url.pathname === "/v1/thane-cli/mfa/setup/start" && request.method === "POST") {
-      return handleThaneCliMfaSetupStart(request, env);
-    }
-
-    if (url.pathname === "/v1/thane-cli/mfa/setup/verify" && request.method === "POST") {
-      return handleThaneCliMfaSetupVerify(request, env);
-    }
-
-    if (url.pathname === "/v1/thane-cli/mfa/disable" && request.method === "POST") {
-      return handleThaneCliMfaDisable(request, env);
-    }
-
-    if (url.pathname === "/v1/thane-cli/workspaces" && request.method === "POST") {
-      return handleThaneCliWorkspaceEnsure(request, env);
-    }
-
-    if (url.pathname === "/v1/thane-cli/sync" && request.method === "GET") {
-      return buildThaneCliSyncResponse(request, env);
-    }
-
-    if (url.pathname === "/v1/thane-cli/channels" && request.method === "POST") {
-      return handleThaneCliChannelCreate(request, env);
-    }
-
-    if (url.pathname === "/v1/thane-cli/messages" && request.method === "POST") {
-      return handleThaneCliMessageCreate(request, env);
-    }
-
-    if (url.pathname === "/v1/thane-cli/reactions" && request.method === "POST") {
-      return handleThaneCliReactionCreate(request, env);
-    }
-
-    if (url.pathname === "/v1/thane-cli/workspace-invites" && request.method === "POST") {
-      return handleThaneCliWorkspaceInviteCreate(request, env);
-    }
-
-    if (url.pathname === "/v1/thane-cli/workspace-invites/accept" && request.method === "POST") {
-      return handleThaneCliWorkspaceInviteAccept(request, env);
-    }
-
-    if (url.pathname.startsWith("/v1/thane-cli/workspace-invites/") && request.method === "GET") {
-      const token = url.pathname.split("/").filter(Boolean).at(-1);
-      return token
-        ? handleThaneCliWorkspaceInvitePreview(token, env)
-        : Response.json({ ok: false, error: "invite_token_required" }, { status: 400 });
+    const thaneCliResponse = await handleThaneCliRequest(request, env);
+    if (thaneCliResponse) {
+      return withCors(thaneCliResponse, request);
     }
 
     if (url.pathname.startsWith("/invite/") && request.method === "GET") {

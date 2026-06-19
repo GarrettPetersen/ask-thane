@@ -193,6 +193,21 @@ describe("@ask-thane/landing", () => {
     expect(await res.text()).toBe("asset page");
   });
 
+  it("serves the hosted chat app from the chat custom domain", async () => {
+    const assetResponse = new Response("<html>chat app</html>", { status: 200 });
+    const fetchAssets = vi.fn(async () => assetResponse);
+    const env = {
+      DB: makeDbStub(),
+      ASSETS: { fetch: fetchAssets }
+    };
+
+    const res = await worker.fetch(new Request("https://chat.askthane.com/workspaces"), env as never);
+    expect(fetchAssets).toHaveBeenCalledTimes(1);
+    const calledRequest = fetchAssets.mock.calls[0]?.[0] as Request;
+    expect(new URL(calledRequest.url).pathname).toBe("/chat-app.html");
+    expect(await res.text()).toContain("chat app");
+  });
+
   it("serves public metrics with cumulative series", async () => {
     const env = {
       DB: makeMetricsDbStub(),

@@ -322,6 +322,7 @@ async function handleWaitlistSignup(request: Request, env: Env): Promise<Respons
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    const isChatHost = url.hostname === "chat.askthane.com";
 
     if (url.pathname === "/health") {
       return json({ ok: true, service: "ask-thane-landing" }, 200);
@@ -333,6 +334,13 @@ export default {
 
     if (url.pathname === "/api/waitlist" && request.method === "POST") {
       return handleWaitlistSignup(request, env);
+    }
+
+    if (isChatHost && (request.method === "GET" || request.method === "HEAD") && !url.pathname.includes(".")) {
+      const assetUrl = new URL(request.url);
+      assetUrl.pathname = "/chat-app.html";
+      const assetRequest = new Request(assetUrl.toString(), request);
+      return env.ASSETS.fetch(assetRequest);
     }
 
     if (url.pathname === "/dashboard") {
