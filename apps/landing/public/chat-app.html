@@ -560,6 +560,7 @@
         touchMoved: false,
         inviteLinkResult: null,
         billingBusy: false,
+        profileDraft: null,
         searchQuery: "",
         draftText: "",
         sidebarCollapsed: localStorage.getItem("thane.web.sidebarCollapsed") === "true",
@@ -934,7 +935,7 @@
         socket.addEventListener("open", () => {
           state.realtimeBackoffMs = 1000;
           state.realtimeStatus = "live";
-          render();
+          if (!state.settingsMenuOpen) render();
         });
         socket.addEventListener("message", (event) => {
           let payload = null;
@@ -954,7 +955,7 @@
           const delay = state.realtimeBackoffMs;
           state.realtimeBackoffMs = Math.min(state.realtimeBackoffMs * 2, 30000);
           state.realtimeReconnectTimer = setTimeout(() => connectRealtime(), delay);
-          render();
+          if (!state.settingsMenuOpen) render();
         });
         socket.addEventListener("error", () => {
           state.realtimeStatus = "polling";
@@ -1366,6 +1367,7 @@
             body: JSON.stringify({ displayName })
           });
           saveSession({ ...state.session, ...(body.account || {}), displayName: body.displayName || displayName });
+          state.profileDraft = body.displayName || displayName;
           state.status = `Display name: ${body.displayName || displayName}`;
           state.error = "";
           await sync();
@@ -1472,12 +1474,14 @@
       }
 
       function openSettingsMenu() {
+        state.profileDraft = state.session?.displayName || "";
         state.settingsMenuOpen = true;
         render();
       }
 
       function closeSettingsMenu() {
         state.settingsMenuOpen = false;
+        state.profileDraft = null;
         render();
       }
 
@@ -1547,7 +1551,7 @@
                 <section class="settings-group">
                   <h3>Profile</h3>
                   <form class="list" onsubmit="updateDisplayName(event)">
-                    <input name="displayName" value="${esc(state.session.displayName || "")}" placeholder="Display name" />
+                    <input name="displayName" value="${esc(state.profileDraft ?? state.session.displayName ?? "")}" placeholder="Display name" oninput="state.profileDraft=this.value" />
                     <button>Update name</button>
                   </form>
                   <div class="kv">
