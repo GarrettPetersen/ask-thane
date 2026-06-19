@@ -8,6 +8,9 @@ import { slashCommands, slashCommandsForRole } from "../src/slash-commands";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const chatAppHtml = readFileSync(resolve(here, "../../landing/public/chat-app.html"), "utf8");
+const cliIndexSource = readFileSync(resolve(here, "../src/index.ts"), "utf8");
+const terminalChatSource = readFileSync(resolve(here, "../src/chat.ts"), "utf8");
+const hostedSource = readFileSync(resolve(here, "../src/hosted.ts"), "utf8");
 
 function findCliCommand(command: string) {
   return cliCommands.find((candidate) => candidate.command === command);
@@ -103,5 +106,12 @@ describe("chat profile action parity", () => {
     expect(memberCommands).not.toContain("/member-ban");
     expect(memberCommands).toContain("/mfa-setup");
     expect(memberCommands).toContain("/workspace-leave");
+  });
+
+  it("surfaces hosted rate-limit retry hints across web, terminal, and CLI", () => {
+    expect(cliIndexSource).toContain("rate_limited: try again in");
+    expect(terminalChatSource).toContain("rate_limited: try again in");
+    expect(hostedSource).toContain("rate_limited: try again in");
+    expect(chatAppHtml).toContain("rate_limited: try again in");
   });
 });

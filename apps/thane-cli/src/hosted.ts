@@ -70,6 +70,13 @@ export function hasHostedChat(store: ThaneStore): boolean {
   return Boolean(hostedBaseUrl() && authToken(store));
 }
 
+function hostedApiError(payload: { error?: string; retryAfterSeconds?: number }, status: number): string {
+  if (payload.error === "rate_limited" && payload.retryAfterSeconds) {
+    return `rate_limited: try again in ${payload.retryAfterSeconds}s`;
+  }
+  return payload.error ?? `Thane API returned ${status}`;
+}
+
 async function getHosted<T>(store: ThaneStore, path: string): Promise<T> {
   const baseUrl = hostedBaseUrl();
   const token = authToken(store);
@@ -79,10 +86,11 @@ async function getHosted<T>(store: ThaneStore, path: string): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, {
     headers: { authorization: `Bearer ${token}` }
   });
-  if (!response.ok) {
-    throw new Error(`Thane API returned ${response.status}: ${JSON.stringify(await response.json())}`);
+  const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string; retryAfterSeconds?: number } & T;
+  if (!response.ok || payload.ok === false) {
+    throw new Error(hostedApiError(payload, response.status));
   }
-  return (await response.json()) as T;
+  return payload;
 }
 
 async function postHosted<T>(store: ThaneStore, path: string, body: Record<string, unknown>): Promise<T> {
@@ -99,10 +107,11 @@ async function postHosted<T>(store: ThaneStore, path: string, body: Record<strin
     },
     body: JSON.stringify(body)
   });
-  if (!response.ok) {
-    throw new Error(`Thane API returned ${response.status}: ${JSON.stringify(await response.json())}`);
+  const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string; retryAfterSeconds?: number } & T;
+  if (!response.ok || payload.ok === false) {
+    throw new Error(hostedApiError(payload, response.status));
   }
-  return (await response.json()) as T;
+  return payload;
 }
 
 export async function syncHostedStore(store: ThaneStore, options: { workspaceId?: string } = {}): Promise<boolean> {

@@ -518,39 +518,215 @@ async function checkRateLimit(env: Env, input: {
   return { ok: true };
 }
 
-async function enforceAuthEmailRateLimits(request: Request, env: Env, email: string): Promise<Response | null> {
-  const nowMs = Date.now();
-  const emailLimit = await checkRateLimit(env, {
-    purpose: "thane_cli_auth_email:email",
-    key: email,
-    keyHint: email,
-    limit: 5,
-    windowSeconds: 60 * 60,
-    nowMs
-  });
-  if (!emailLimit.ok) {
-    return Response.json(
-      { ok: false, error: "rate_limited", retryAfterSeconds: emailLimit.retryAfterSeconds },
-      { status: 429, headers: { "retry-after": String(emailLimit.retryAfterSeconds ?? 60) } }
-    );
-  }
+function rateLimitedResponse(result: RateLimitResult): Response {
+  const retryAfterSeconds = result.retryAfterSeconds ?? 60;
+  return Response.json(
+    { ok: false, error: "rate_limited", retryAfterSeconds },
+    { status: 429, headers: { "retry-after": String(retryAfterSeconds) } }
+  );
+}
 
-  const ip = requestIp(request);
-  const ipLimit = await checkRateLimit(env, {
-    purpose: "thane_cli_auth_email:ip",
-    key: ip,
-    ...(ip === "unknown" ? { keyHint: "unknown" } : {}),
-    limit: 30,
-    windowSeconds: 60 * 60,
-    nowMs
-  });
-  if (!ipLimit.ok) {
-    return Response.json(
-      { ok: false, error: "rate_limited", retryAfterSeconds: ipLimit.retryAfterSeconds },
-      { status: 429, headers: { "retry-after": String(ipLimit.retryAfterSeconds ?? 60) } }
-    );
+async function enforceRateLimit(env: Env, input: {
+  purpose: string;
+  key: string;
+  keyHint?: string;
+  limit: number;
+  windowSeconds: number;
+  nowMs?: number;
+}): Promise<Response | null> {
+  const result = await checkRateLimit(env, input);
+  return result.ok ? null : rateLimitedResponse(result);
+}
+
+async function enforceRateLimits(env: Env, inputs: Array<{
+  purpose: string;
+  key: string;
+  keyHint?: string;
+  limit: number;
+  windowSeconds: number;
+  nowMs?: number;
+}>): Promise<Response | null> {
+  for (const input of inputs) {
+    const response = await enforceRateLimit(env, input);
+    if (response) {
+      return response;
+    }
   }
   return null;
+}
+
+async function enforceAuthEmailRateLimits(request: Request, env: Env, email: string): Promise<Response | null> {
+  const nowMs = Date.now();
+  const ip = requestIp(request);
+  return enforceRateLimits(env, [
+    {
+      purpose: "thane_cli_auth_email:email",
+      key: email,
+      keyHint: email,
+      limit: 5,
+      windowSeconds: 60 * 60,
+      nowMs
+    },
+    {
+      purpose: "thane_cli_auth_email:ip",
+      key: ip,
+      ...(ip === "unknown" ? { keyHint: "unknown" } : {}),
+      limit: 30,
+      windowSeconds: 60 * 60,
+      nowMs
+    }
+  ]);
+}
+
+async function enforceAuthCodeVerifyRateLimits(request: Request, env: Env, email: string): Promise<Response | null> {
+  const nowMs = Date.now();
+  const ip = requestIp(request);
+  return enforceRateLimits(env, [
+    {
+      purpose: "thane_cli_auth_code_verify:email",
+      key: email,
+      keyHint: email,
+      limit: 10,
+      windowSeconds: 10 * 60,
+      nowMs
+    },
+    {
+      purpose: "thane_cli_auth_code_verify:ip",
+      key: ip,
+      ...(ip === "unknown" ? { keyHint: "unknown" } : {}),
+      limit: 60,
+      windowSeconds: 10 * 60,
+      nowMs
+    }
+  ]);
+}
+
+async function enforceMfaSetupRateLimits(request: Request, env: Env, email: string): Promise<Response | null> {
+  const nowMs = Date.now();
+  const ip = requestIp(request);
+  return enforceRateLimits(env, [
+    {
+      purpose: "thane_cli_mfa_setup:email",
+      key: email,
+      keyHint: email,
+      limit: 5,
+      windowSeconds: 60 * 60,
+      nowMs
+    },
+    {
+      purpose: "thane_cli_mfa_setup:ip",
+      key: ip,
+      ...(ip === "unknown" ? { keyHint: "unknown" } : {}),
+      limit: 20,
+      windowSeconds: 60 * 60,
+      nowMs
+    }
+  ]);
+}
+
+async function enforceMfaCodeRateLimits(request: Request, env: Env, email: string): Promise<Response | null> {
+  const nowMs = Date.now();
+  const ip = requestIp(request);
+  return enforceRateLimits(env, [
+    {
+      purpose: "thane_cli_mfa_code:email",
+      key: email,
+      keyHint: email,
+      limit: 10,
+      windowSeconds: 10 * 60,
+      nowMs
+    },
+    {
+      purpose: "thane_cli_mfa_code:ip",
+      key: ip,
+      ...(ip === "unknown" ? { keyHint: "unknown" } : {}),
+      limit: 60,
+      windowSeconds: 10 * 60,
+      nowMs
+    }
+  ]);
+}
+
+async function enforceWorkspaceActionRateLimits(env: Env, input: {
+  action: string;
+  workspaceId: string;
+  memberId: string;
+  email?: string | null;
+  memberLimit: number;
+  workspaceLimit: number;
+  windowSeconds: number;
+}): Promise<Response | null> {
+  const nowMs = Date.now();
+  return enforceRateLimits(env, [
+    {
+      purpose: `thane_cli_${input.action}:member`,
+      key: `${input.workspaceId}:${input.memberId}`,
+      ...(input.email ? { keyHint: input.email } : {}),
+      limit: input.memberLimit,
+      windowSeconds: input.windowSeconds,
+      nowMs
+    },
+    {
+      purpose: `thane_cli_${input.action}:workspace`,
+      key: input.workspaceId,
+      keyHint: input.workspaceId,
+      limit: input.workspaceLimit,
+      windowSeconds: input.windowSeconds,
+      nowMs
+    }
+  ]);
+}
+
+async function enforceSyncRateLimits(request: Request, env: Env, email: string): Promise<Response | null> {
+  const nowMs = Date.now();
+  const ip = requestIp(request);
+  return enforceRateLimits(env, [
+    {
+      purpose: "thane_cli_sync:email",
+      key: email,
+      keyHint: email,
+      limit: 180,
+      windowSeconds: 60,
+      nowMs
+    },
+    {
+      purpose: "thane_cli_sync:ip",
+      key: ip,
+      ...(ip === "unknown" ? { keyHint: "unknown" } : {}),
+      limit: 600,
+      windowSeconds: 60,
+      nowMs
+    }
+  ]);
+}
+
+async function enforceAuthenticatedActionRateLimits(request: Request, env: Env, input: {
+  action: string;
+  email: string;
+  emailLimit: number;
+  ipLimit: number;
+  windowSeconds: number;
+}): Promise<Response | null> {
+  const nowMs = Date.now();
+  const ip = requestIp(request);
+  return enforceRateLimits(env, [
+    {
+      purpose: `thane_cli_${input.action}:email`,
+      key: input.email,
+      keyHint: input.email,
+      limit: input.emailLimit,
+      windowSeconds: input.windowSeconds,
+      nowMs
+    },
+    {
+      purpose: `thane_cli_${input.action}:ip`,
+      key: ip,
+      ...(ip === "unknown" ? { keyHint: "unknown" } : {}),
+      limit: input.ipLimit,
+      windowSeconds: input.windowSeconds,
+      nowMs
+    }
+  ]);
 }
 
 function makeTotpSecret(): string {
@@ -1808,6 +1984,10 @@ async function handleThaneCliAuthVerify(request: Request, env: Env): Promise<Res
   if (!email || !code) {
     return Response.json({ ok: false, error: "invalid_email_or_code" }, { status: 400 });
   }
+  const rateLimited = await enforceAuthCodeVerifyRateLimits(request, env, email);
+  if (rateLimited) {
+    return rateLimited;
+  }
 
   const codeHash = await hashAuthCode(env, email, code);
   const authRow = await env.DB
@@ -1868,6 +2048,10 @@ async function handleThaneCliAuthMfaVerify(request: Request, env: Env): Promise<
   if (!email || !code) {
     return Response.json({ ok: false, error: "invalid_mfa_challenge" }, { status: 400 });
   }
+  const rateLimited = await enforceMfaCodeRateLimits(request, env, email);
+  if (rateLimited) {
+    return rateLimited;
+  }
   const factor = await activeMfaFactor(env, email);
   if (!factor) {
     return Response.json({ ok: false, error: "mfa_not_enabled" }, { status: 400 });
@@ -1894,6 +2078,10 @@ async function handleThaneCliMfaSetupStart(request: Request, env: Env): Promise<
   const email = await requireAuthEmail(request, env);
   if (!email) {
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  const rateLimited = await enforceMfaSetupRateLimits(request, env, email);
+  if (rateLimited) {
+    return rateLimited;
   }
   const existing = await activeMfaFactor(env, email);
   if (existing) {
@@ -1930,6 +2118,10 @@ async function handleThaneCliMfaSetupVerify(request: Request, env: Env): Promise
   if (!factorId || !code) {
     return Response.json({ ok: false, error: "factor_id_and_code_required" }, { status: 400 });
   }
+  const rateLimited = await enforceMfaCodeRateLimits(request, env, email);
+  if (rateLimited) {
+    return rateLimited;
+  }
   const row = await env.DB
     .prepare(
       `SELECT secret_ciphertext
@@ -1962,6 +2154,10 @@ async function handleThaneCliMfaDisable(request: Request, env: Env): Promise<Res
   if (!code) {
     return Response.json({ ok: false, error: "code_required" }, { status: 400 });
   }
+  const rateLimited = await enforceMfaCodeRateLimits(request, env, email);
+  if (rateLimited) {
+    return rateLimited;
+  }
   const factor = await activeMfaFactor(env, email);
   if (!factor) {
     return Response.json({ ok: false, error: "mfa_not_enabled" }, { status: 400 });
@@ -1987,6 +2183,16 @@ async function handleThaneCliProfileUpdate(request: Request, env: Env): Promise<
   const handle = normalizeHandle(payload?.handle);
   if (!displayName && !handle) {
     return Response.json({ ok: false, error: "profile_update_required" }, { status: 400 });
+  }
+  const rateLimited = await enforceAuthenticatedActionRateLimits(request, env, {
+    action: "profile_update",
+    email,
+    emailLimit: 30,
+    ipLimit: 300,
+    windowSeconds: 60 * 60
+  });
+  if (rateLimited) {
+    return rateLimited;
   }
   const scope = typeof payload?.scope === "string" ? payload.scope.trim().toLowerCase() : "";
   const workspaceId = typeof payload?.workspaceId === "string" && payload.workspaceId.trim() ? payload.workspaceId.trim().slice(0, 120) : null;
@@ -2079,6 +2285,16 @@ async function handleThaneCliWorkspaceEnsure(request: Request, env: Env): Promis
   if (!workspaceSlug || !workspaceName) {
     return Response.json({ ok: false, error: "workspace_slug_required" }, { status: 400 });
   }
+  const rateLimited = await enforceAuthenticatedActionRateLimits(request, env, {
+    action: "workspace_ensure",
+    email,
+    emailLimit: 20,
+    ipLimit: 100,
+    windowSeconds: 60 * 60
+  });
+  if (rateLimited) {
+    return rateLimited;
+  }
   const workspaceId = typeof payload?.workspaceId === "string" && payload.workspaceId.trim() ? payload.workspaceId.trim().slice(0, 120) : null;
   const workspace = await ensureThaneCliWorkspace(env, {
     workspaceId,
@@ -2095,6 +2311,10 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
   const email = await requireAuthEmail(request, env);
   if (!email) {
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  const rateLimited = await enforceSyncRateLimits(request, env, email);
+  if (rateLimited) {
+    return rateLimited;
   }
   const url = new URL(request.url);
   const requestedWorkspaceId = url.searchParams.get("workspaceId")?.trim() || null;
@@ -2319,6 +2539,18 @@ async function handleThaneCliEvents(request: Request, env: Env): Promise<Respons
   if (!member) {
     return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
   }
+  const rateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: "events_connect",
+    workspaceId,
+    memberId: member.id,
+    email: member.email,
+    memberLimit: 60,
+    workspaceLimit: 600,
+    windowSeconds: 60
+  });
+  if (rateLimited) {
+    return rateLimited;
+  }
   const stub = workspaceEventsObject(env, workspaceId);
   if (!stub) {
     return Response.json({ ok: false, error: "events_unavailable" }, { status: 503 });
@@ -2352,6 +2584,18 @@ async function handleThaneCliChannelCreate(request: Request, env: Env): Promise<
   const member = await requireThaneCliWorkspaceMember(env, workspaceId, email);
   if (!member) {
     return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
+  }
+  const rateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: "channel_create",
+    workspaceId,
+    memberId: member.id,
+    email: member.email,
+    memberLimit: 30,
+    workspaceLimit: 200,
+    windowSeconds: 60 * 60
+  });
+  if (rateLimited) {
+    return rateLimited;
   }
   if (payload?.private) {
     const existingChannel = await env.DB
@@ -2401,6 +2645,18 @@ async function handleThaneCliChannelJoin(request: Request, env: Env): Promise<Re
   if (!member) {
     return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
   }
+  const rateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: "channel_join",
+    workspaceId,
+    memberId: member.id,
+    email: member.email,
+    memberLimit: 120,
+    workspaceLimit: 1_000,
+    windowSeconds: 60 * 60
+  });
+  if (rateLimited) {
+    return rateLimited;
+  }
   const channel = await resolveThaneCliChannel(env, { workspaceId, channelId, channelName });
   if (!channel?.id || channel.kind !== "channel") {
     return Response.json({ ok: false, error: "channel_not_found" }, { status: 404 });
@@ -2444,6 +2700,18 @@ async function handleThaneCliChannelLeave(request: Request, env: Env): Promise<R
   if (!member) {
     return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
   }
+  const rateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: "channel_leave",
+    workspaceId,
+    memberId: member.id,
+    email: member.email,
+    memberLimit: 120,
+    workspaceLimit: 1_000,
+    windowSeconds: 60 * 60
+  });
+  if (rateLimited) {
+    return rateLimited;
+  }
   const channel = await resolveThaneCliChannel(env, { workspaceId, channelId, channelName });
   if (!channel?.id || channel.kind !== "channel") {
     return Response.json({ ok: false, error: "channel_not_found" }, { status: 404 });
@@ -2477,6 +2745,18 @@ async function handleThaneCliChannelMemberAdd(request: Request, env: Env): Promi
   const actor = await requireThaneCliWorkspaceMember(env, workspaceId, email);
   if (!actor) {
     return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
+  }
+  const rateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: "channel_member_add",
+    workspaceId,
+    memberId: actor.id,
+    email: actor.email,
+    memberLimit: 60,
+    workspaceLimit: 500,
+    windowSeconds: 60 * 60
+  });
+  if (rateLimited) {
+    return rateLimited;
   }
   const channel = await resolveThaneCliChannel(env, { workspaceId, channelId, channelName });
   if (!channel?.id || channel.kind !== "channel") {
@@ -2520,6 +2800,18 @@ async function handleThaneCliChannelMemberRemove(request: Request, env: Env): Pr
   const actor = await requireThaneCliWorkspaceMember(env, workspaceId, email);
   if (!actor) {
     return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
+  }
+  const rateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: "channel_member_remove",
+    workspaceId,
+    memberId: actor.id,
+    email: actor.email,
+    memberLimit: 60,
+    workspaceLimit: 500,
+    windowSeconds: 60 * 60
+  });
+  if (rateLimited) {
+    return rateLimited;
   }
   if (!isThaneCliWorkspaceAdmin(actor.role)) {
     return Response.json({ ok: false, error: "workspace_admin_required" }, { status: 403 });
@@ -2792,6 +3084,34 @@ async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<
   if (!member) {
     return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
   }
+  const source = payload?.source === "terminal" ? "terminal" : "chat";
+  const mentionsAskThane = source === "chat" && /@thane\b/i.test(text);
+  const messageRateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: "message_create",
+    workspaceId,
+    memberId: member.id,
+    email: member.email,
+    memberLimit: 120,
+    workspaceLimit: 1_200,
+    windowSeconds: 60
+  });
+  if (messageRateLimited) {
+    return messageRateLimited;
+  }
+  if (mentionsAskThane) {
+    const askThaneRateLimited = await enforceWorkspaceActionRateLimits(env, {
+      action: "ask_thane_mention",
+      workspaceId,
+      memberId: member.id,
+      email: member.email,
+      memberLimit: 10,
+      workspaceLimit: 60,
+      windowSeconds: 60
+    });
+    if (askThaneRateLimited) {
+      return askThaneRateLimited;
+    }
+  }
   const workspace = await env.DB
     .prepare("SELECT id, workspace_name, workspace_slug FROM thane_cli_workspaces WHERE id = ? LIMIT 1")
     .bind(workspaceId)
@@ -2819,7 +3139,6 @@ async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<
   }
   const createdAt = nowIso();
   const messageId = makeId("tmsg");
-  const source = payload?.source === "terminal" ? "terminal" : "chat";
   const threadRootId = typeof payload?.threadRootId === "string" && payload.threadRootId.trim() ? payload.threadRootId.trim() : null;
   await env.DB
     .prepare(
@@ -2847,7 +3166,7 @@ async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<
       memberEmail: member.email,
       memberRole: member.role
     });
-    const shouldRespond = /@thane\b/i.test(text);
+    const shouldRespond = mentionsAskThane;
     const runtimeResult = await dispatchNativeAgentRuntime(env, {
       refs,
       workspaceId,
@@ -2962,6 +3281,18 @@ async function handleThaneCliReactionCreate(request: Request, env: Env): Promise
   if (!member) {
     return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
   }
+  const rateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: "reaction_create",
+    workspaceId,
+    memberId: member.id,
+    email: member.email,
+    memberLimit: 240,
+    workspaceLimit: 2_000,
+    windowSeconds: 60
+  });
+  if (rateLimited) {
+    return rateLimited;
+  }
   const message = await env.DB
     .prepare(
       `SELECT msg.id, c.id AS channel_id, c.visibility
@@ -3037,6 +3368,18 @@ async function handleThaneCliWorkspaceInviteCreate(request: Request, env: Env): 
   if (!isThaneCliWorkspaceAdmin(member.role)) {
     return Response.json({ ok: false, error: "workspace_admin_required" }, { status: 403 });
   }
+  const inviteRateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: inviteeEmail ? "invite_email_create" : "invite_link_create",
+    workspaceId: workspaceRow.id,
+    memberId: member.id,
+    email: member.email,
+    memberLimit: inviteeEmail ? 20 : 60,
+    workspaceLimit: inviteeEmail ? 200 : 500,
+    windowSeconds: 60 * 60
+  });
+  if (inviteRateLimited) {
+    return inviteRateLimited;
+  }
   const workspace = {
     id: workspaceRow.id,
     slug: workspaceRow.workspace_slug,
@@ -3057,31 +3400,24 @@ async function handleThaneCliWorkspaceInviteCreate(request: Request, env: Env): 
     return Response.json({ ok: false, error: "max_uses_must_be_positive" }, { status: 400 });
   }
   if (inviteeEmail) {
-    const creatorLimit = await checkRateLimit(env, {
-      purpose: "thane_cli_invite_email:creator",
-      key: email,
-      keyHint: email,
-      limit: 30,
-      windowSeconds: 60 * 60
-    });
-    if (!creatorLimit.ok) {
-      return Response.json(
-        { ok: false, error: "rate_limited", retryAfterSeconds: creatorLimit.retryAfterSeconds },
-        { status: 429, headers: { "retry-after": String(creatorLimit.retryAfterSeconds ?? 60) } }
-      );
-    }
-    const recipientLimit = await checkRateLimit(env, {
-      purpose: "thane_cli_invite_email:recipient",
-      key: inviteeEmail,
-      keyHint: inviteeEmail,
-      limit: 10,
-      windowSeconds: 60 * 60
-    });
-    if (!recipientLimit.ok) {
-      return Response.json(
-        { ok: false, error: "rate_limited", retryAfterSeconds: recipientLimit.retryAfterSeconds },
-        { status: 429, headers: { "retry-after": String(recipientLimit.retryAfterSeconds ?? 60) } }
-      );
+    const recipientRateLimited = await enforceRateLimits(env, [
+      {
+        purpose: "thane_cli_invite_email:recipient_hour",
+        key: `${workspace.id}:${inviteeEmail}`,
+        keyHint: inviteeEmail,
+        limit: 5,
+        windowSeconds: 60 * 60
+      },
+      {
+        purpose: "thane_cli_invite_email:recipient_day",
+        key: `${workspace.id}:${inviteeEmail}`,
+        keyHint: inviteeEmail,
+        limit: 20,
+        windowSeconds: 24 * 60 * 60
+      }
+    ]);
+    if (recipientRateLimited) {
+      return recipientRateLimited;
     }
   }
 
@@ -3175,6 +3511,16 @@ async function handleThaneCliWorkspaceInviteAccept(request: Request, env: Env): 
   if (!token) {
     return Response.json({ ok: false, error: "invite_token_required" }, { status: 400 });
   }
+  const rateLimited = await enforceAuthenticatedActionRateLimits(request, env, {
+    action: "invite_accept",
+    email,
+    emailLimit: 30,
+    ipLimit: 300,
+    windowSeconds: 60 * 60
+  });
+  if (rateLimited) {
+    return rateLimited;
+  }
   const row = await inviteByToken(env, token);
   const invalid = validateInvite(row);
   if (invalid) {
@@ -3233,6 +3579,18 @@ async function handleThaneCliWorkspaceLeave(request: Request, env: Env): Promise
   if (!member) {
     return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
   }
+  const rateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: "workspace_leave",
+    workspaceId,
+    memberId: member.id,
+    email: member.email,
+    memberLimit: 20,
+    workspaceLimit: 200,
+    windowSeconds: 60 * 60
+  });
+  if (rateLimited) {
+    return rateLimited;
+  }
   if (member.role === "owner" && (await countThaneCliWorkspaceOwners(env, workspaceId)) <= 1) {
     return Response.json({ ok: false, error: "last_owner_cannot_leave" }, { status: 409 });
   }
@@ -3258,6 +3616,18 @@ async function handleThaneCliWorkspaceMemberRemove(request: Request, env: Env, b
   }
   if (!isThaneCliWorkspaceAdmin(actor.role)) {
     return Response.json({ ok: false, error: "workspace_admin_required" }, { status: 403 });
+  }
+  const rateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: ban ? "workspace_member_ban" : "workspace_member_remove",
+    workspaceId,
+    memberId: actor.id,
+    email: actor.email,
+    memberLimit: 60,
+    workspaceLimit: 500,
+    windowSeconds: 60 * 60
+  });
+  if (rateLimited) {
+    return rateLimited;
   }
   const targetMember = await resolveThaneCliWorkspaceMember(env, { workspaceId, target });
   if (!targetMember) {
@@ -3309,6 +3679,18 @@ async function handleThaneCliWorkspaceMemberUnban(request: Request, env: Env): P
   if (!isThaneCliWorkspaceAdmin(actor.role)) {
     return Response.json({ ok: false, error: "workspace_admin_required" }, { status: 403 });
   }
+  const rateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: "workspace_member_unban",
+    workspaceId,
+    memberId: actor.id,
+    email: actor.email,
+    memberLimit: 60,
+    workspaceLimit: 500,
+    windowSeconds: 60 * 60
+  });
+  if (rateLimited) {
+    return rateLimited;
+  }
   await env.DB.prepare("DELETE FROM thane_cli_workspace_bans WHERE workspace_id = ? AND email = ?").bind(workspaceId, normalizeEmail(target)).run();
   return Response.json({ ok: true, workspaceId, email: normalizeEmail(target), unbanned: true });
 }
@@ -3331,6 +3713,18 @@ async function handleThaneCliWorkspaceMemberRole(request: Request, env: Env): Pr
   }
   if (!isThaneCliWorkspaceAdmin(actor.role)) {
     return Response.json({ ok: false, error: "workspace_admin_required" }, { status: 403 });
+  }
+  const rateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: "workspace_member_role",
+    workspaceId,
+    memberId: actor.id,
+    email: actor.email,
+    memberLimit: 60,
+    workspaceLimit: 500,
+    windowSeconds: 60 * 60
+  });
+  if (rateLimited) {
+    return rateLimited;
   }
   if (role === "admin" && actor.role !== "owner") {
     return Response.json({ ok: false, error: "owner_required" }, { status: 403 });
@@ -3372,6 +3766,18 @@ async function handleThaneCliBillingLinkCreate(request: Request, env: Env): Prom
     .first<{ id?: string; workspace_slug?: string; plan_tier?: string | null }>();
   if (!workspace?.id) {
     return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
+  }
+  const rateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: "billing_link",
+    workspaceId,
+    memberId: member.id,
+    email: member.email,
+    memberLimit: 20,
+    workspaceLimit: 100,
+    windowSeconds: 60 * 60
+  });
+  if (rateLimited) {
+    return rateLimited;
   }
   const issuedAt = Math.floor(Date.now() / 1000);
   const token = await signBillingLinkToken(env, {
@@ -3443,6 +3849,18 @@ async function handleThaneCliAskThaneToggle(request: Request, env: Env, enabled:
   }
   if (!isThaneCliWorkspaceAdmin(member.role)) {
     return Response.json({ ok: false, error: "workspace_admin_required" }, { status: 403 });
+  }
+  const rateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: "ask_thane_toggle",
+    workspaceId,
+    memberId: member.id,
+    email: member.email,
+    memberLimit: 30,
+    workspaceLimit: 200,
+    windowSeconds: 60 * 60
+  });
+  if (rateLimited) {
+    return rateLimited;
   }
   const bot = await ensureAskThaneMember(env, workspaceId);
   const now = nowIso();

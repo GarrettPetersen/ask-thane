@@ -615,7 +615,12 @@
         if (state.session?.authToken) headers.authorization = `Bearer ${state.session.authToken}`;
         const res = await fetch(`${API}${path}`, { ...options, headers });
         const body = await res.json().catch(() => ({}));
-        if (!res.ok || body.ok === false) throw new Error(body.error || `HTTP ${res.status}`);
+        if (!res.ok || body.ok === false) {
+          if (body.error === "rate_limited" && body.retryAfterSeconds) {
+            throw new Error(`rate_limited: try again in ${body.retryAfterSeconds}s`);
+          }
+          throw new Error(body.error || `HTTP ${res.status}`);
+        }
         return body;
       }
 

@@ -208,6 +208,91 @@ describe("@ask-thane/api-worker", () => {
     expect(db.calls.some((call) => call.sql.includes("INSERT INTO thane_cli_auth_codes"))).toBe(false);
   });
 
+  it("rate limits Thane CLI auth code verification before checking codes", async () => {
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_rate_limits")) {
+        return {
+          id: "rl_auth_verify",
+          window_started_at: new Date(Date.now() - 60_000).toISOString(),
+          count: 10
+        };
+      }
+      return null;
+    });
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        return { first: first.bind({ sql }), run };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/auth/verify", {
+        method: "POST",
+        headers: { "cf-connecting-ip": "203.0.113.10" },
+        body: JSON.stringify({ email: "garrett@example.com", code: "123456" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toMatch(/^\d+$/);
+    await expect(res.json()).resolves.toMatchObject({ ok: false, error: "rate_limited" });
+    expect(calls.some((call) => call.sql.includes("FROM thane_cli_auth_codes"))).toBe(false);
+  });
+
+  it("rate limits Thane CLI MFA code checks before reading stored secrets", async () => {
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_rate_limits")) {
+        return {
+          id: "rl_mfa",
+          window_started_at: new Date(Date.now() - 60_000).toISOString(),
+          count: 10
+        };
+      }
+      return null;
+    });
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        return { first: first.bind({ sql }), run };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/mfa/setup/verify", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${await signAuthToken("garrett@example.com")}`,
+          "cf-connecting-ip": "203.0.113.10"
+        },
+        body: JSON.stringify({ factorId: "mfa_1", code: "123456" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toMatch(/^\d+$/);
+    await expect(res.json()).resolves.toMatchObject({ ok: false, error: "rate_limited" });
+    expect(calls.some((call) => call.sql.includes("FROM thane_cli_mfa_factors"))).toBe(false);
+  });
+
   it("verifies Thane CLI auth codes and returns an account", async () => {
     const first = vi.fn(async () => ({
       id: "auth_1",
@@ -215,9 +300,13 @@ describe("@ask-thane/api-worker", () => {
       expires_at: new Date(Date.now() + 60_000).toISOString()
     }));
     const noMfa = vi.fn(async () => null);
+    const noRateLimit = vi.fn(async () => null);
     const run = vi.fn(async () => ({ meta: { changes: 1 } }));
     const prepare = vi.fn((sql: string) => ({
       bind: vi.fn(() => {
+        if (sql.includes("FROM thane_cli_rate_limits")) {
+          return { first: noRateLimit, run };
+        }
         if (sql.includes("SELECT id, display_name")) {
           return { first };
         }
@@ -256,10 +345,14 @@ describe("@ask-thane/api-worker", () => {
   it("starts Thane CLI MFA setup with QR code renderings", async () => {
     const calls: Array<{ sql: string; args: unknown[] }> = [];
     const noMfa = vi.fn(async () => null);
+    const noRateLimit = vi.fn(async () => null);
     const run = vi.fn(async () => ({ meta: { changes: 1 } }));
     const prepare = vi.fn((sql: string) => ({
       bind: vi.fn((...args: unknown[]) => {
         calls.push({ sql, args });
+        if (sql.includes("FROM thane_cli_rate_limits")) {
+          return { first: noRateLimit, run };
+        }
         if (sql.includes("FROM thane_cli_mfa_factors")) {
           return { first: noMfa };
         }
@@ -306,7 +399,7 @@ describe("@ask-thane/api-worker", () => {
     const prepare = vi.fn((sql: string) => ({
       bind: vi.fn((...args: unknown[]) => {
         calls.push({ sql, args });
-        return sql.includes("SELECT display_name") ? { first: first.bind({ sql }) } : { run };
+        return { first: first.bind({ sql }), run };
       })
     }));
     const authEnv = {
@@ -458,11 +551,12 @@ describe("@ask-thane/api-worker", () => {
 
   it("updates the account default display name without rewriting workspace memberships", async () => {
     const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const noRateLimit = vi.fn(async () => null);
     const run = vi.fn(async () => ({ meta: { changes: 1 } }));
     const prepare = vi.fn((sql: string) => ({
       bind: vi.fn((...args: unknown[]) => {
         calls.push({ sql, args });
-        return { run };
+        return { run, first: noRateLimit };
       })
     }));
     const authEnv = {
@@ -510,8 +604,13 @@ describe("@ask-thane/api-worker", () => {
       handle: "garrett",
       role: "owner"
     }));
+    const noRateLimit = vi.fn(async () => null);
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
     const prepare = vi.fn((sql: string) => ({
       bind: vi.fn((...args: unknown[]) => {
+        if (sql.includes("thane_cli_rate_limits")) {
+          return { first: noRateLimit, run };
+        }
         expect(sql).toContain("FROM thane_cli_workspace_members");
         expect(args).toEqual(["wsp_1", "garrett@example.com"]);
         return { first };
@@ -636,8 +735,15 @@ describe("@ask-thane/api-worker", () => {
       }
       return { results: [] };
     });
+    const noRateLimit = vi.fn(async () => null);
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
     const prepare = vi.fn((sql: string) => ({
-      bind: vi.fn(() => (sql.includes("SELECT display_name") ? { first: first.bind({ sql }) } : { all: all.bind({ sql }) }))
+      bind: vi.fn(() => {
+        if (sql.includes("thane_cli_rate_limits")) {
+          return { first: noRateLimit, run };
+        }
+        return sql.includes("SELECT display_name") ? { first: first.bind({ sql }) } : { all: all.bind({ sql }) };
+      })
     }));
     const authEnv = {
       DB: { prepare },
@@ -710,8 +816,15 @@ describe("@ask-thane/api-worker", () => {
       }
       return { results: [] };
     });
+    const noRateLimit = vi.fn(async () => null);
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
     const prepare = vi.fn((sql: string) => ({
-      bind: vi.fn(() => (sql.includes("SELECT display_name") ? { first } : { all: all.bind({ sql }) }))
+      bind: vi.fn(() => {
+        if (sql.includes("thane_cli_rate_limits")) {
+          return { first: noRateLimit, run };
+        }
+        return sql.includes("SELECT display_name") ? { first } : { all: all.bind({ sql }) };
+      })
     }));
     const authEnv = {
       DB: { prepare },
@@ -833,6 +946,69 @@ describe("@ask-thane/api-worker", () => {
     expect(inviteInsert?.args[3]).toBe("acme-inc");
     expect(inviteInsert?.args[6]).toBe("owner@example.com");
     expect(inviteInsert?.args[10]).toBe("alex@example.com");
+  });
+
+  it("rate limits Thane CLI invite emails before sending email", async () => {
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const sendEmail = vi.fn(async () => ({ messageId: "email_1" }));
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const first = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspaces")) {
+        return { id: "wsp_1", workspace_slug: "acme-inc", workspace_name: "Acme Inc", ascii_art: null };
+      }
+      if (sql.includes("FROM thane_cli_workspace_members")) {
+        return {
+          id: "tcm_1",
+          account_id: "acct_1",
+          email: "owner@example.com",
+          display_name: "Owner",
+          handle: "owner",
+          role: "owner"
+        };
+      }
+      if (sql.includes("FROM thane_cli_rate_limits") && this.args?.[0] === "thane_cli_invite_email:recipient_hour") {
+        return {
+          id: "rl_invite_recipient",
+          window_started_at: new Date(Date.now() - 60_000).toISOString(),
+          count: 5
+        };
+      }
+      return null;
+    });
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        return { run, first: first.bind({ sql, args }) };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret",
+      EMAIL: { send: sendEmail }
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/workspace-invites", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
+        body: JSON.stringify({
+          workspaceId: "wsp_1",
+          workspaceSlug: "Acme Inc",
+          workspaceName: "Acme Inc",
+          inviteeEmail: "alex@example.com",
+          role: "member"
+        })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toMatch(/^\d+$/);
+    await expect(res.json()).resolves.toMatchObject({ ok: false, error: "rate_limited" });
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(calls.some((call) => call.sql.includes("INSERT INTO thane_cli_workspace_invites"))).toBe(false);
   });
 
   it("rejects Thane CLI workspace invite creation by non-admin members", async () => {
@@ -1202,8 +1378,10 @@ describe("@ask-thane/api-worker", () => {
       }
       return null;
     });
+    const noRateLimit = vi.fn(async () => null);
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
     const prepare = vi.fn((sql: string) => ({
-      bind: vi.fn(() => ({ first: first.bind({ sql }) }))
+      bind: vi.fn(() => (sql.includes("thane_cli_rate_limits") ? { first: noRateLimit, run } : { first: first.bind({ sql }) }))
     }));
     const authEnv = {
       DB: { prepare },
@@ -1474,6 +1652,65 @@ describe("@ask-thane/api-worker", () => {
       "https://api.openai.com/v1/chat/completions",
       expect.objectContaining({ method: "POST" })
     );
+  });
+
+  it("rate limits native Ask Thane mentions before paid model work", async () => {
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })));
+    const first = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members") && sql.includes("email = ?")) {
+        return {
+          id: "tcm_owner",
+          account_id: "acct_owner",
+          email: "owner@example.com",
+          display_name: "Owner",
+          handle: "owner",
+          role: "owner"
+        };
+      }
+      if (sql.includes("FROM thane_cli_rate_limits") && this.args?.[0] === "thane_cli_ask_thane_mention:member") {
+        return {
+          id: "rl_ask_thane",
+          window_started_at: new Date(Date.now() - 10_000).toISOString(),
+          count: 10
+        };
+      }
+      return null;
+    });
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        return {
+          run,
+          first: first.bind({ sql, args }),
+          all: vi.fn(async () => ({ results: [] }))
+        };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret",
+      OPENAI_API_KEY: "sk-test"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/messages", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
+        body: JSON.stringify({ workspaceId: "wsp_1", channelId: "tcc_1", text: "hello @thane", source: "chat" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toMatch(/^\d+$/);
+    await expect(res.json()).resolves.toMatchObject({ ok: false, error: "rate_limited" });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(calls.some((call) => call.sql.includes("INSERT INTO thane_cli_chat_messages"))).toBe(false);
+    expect(calls.some((call) => call.sql.includes("SELECT id, workspace_name, workspace_slug"))).toBe(false);
   });
 
   it("extracts tasks passively from native Thane Chat messages", async () => {

@@ -426,6 +426,13 @@ function thaneApiBaseUrl(): string | undefined {
   return (value || "https://api.askthane.com").replace(/\/+$/g, "");
 }
 
+function thaneApiError(payload: { error?: string; retryAfterSeconds?: number }, status: number): string {
+  if (payload.error === "rate_limited" && payload.retryAfterSeconds) {
+    return `rate_limited: try again in ${payload.retryAfterSeconds}s`;
+  }
+  return payload.error ?? `Thane API request failed with status ${status}`;
+}
+
 async function postThaneApiWithAuth<T>(path: string, authToken: string, body: Record<string, unknown> = {}): Promise<T> {
   const baseUrl = thaneApiBaseUrl();
   if (!baseUrl) {
@@ -439,9 +446,9 @@ async function postThaneApiWithAuth<T>(path: string, authToken: string, body: Re
     },
     body: JSON.stringify(body)
   });
-  const payload = (await response.json()) as { ok?: boolean; error?: string } & T;
+  const payload = (await response.json()) as { ok?: boolean; error?: string; retryAfterSeconds?: number } & T;
   if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error ?? `Thane API request failed with status ${response.status}`);
+    throw new Error(thaneApiError(payload, response.status));
   }
   return payload;
 }
@@ -456,9 +463,9 @@ async function getThaneApiWithAuth<T>(path: string, authToken: string): Promise<
       authorization: `Bearer ${authToken}`
     }
   });
-  const payload = (await response.json()) as { ok?: boolean; error?: string } & T;
+  const payload = (await response.json()) as { ok?: boolean; error?: string; retryAfterSeconds?: number } & T;
   if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error ?? `Thane API request failed with status ${response.status}`);
+    throw new Error(thaneApiError(payload, response.status));
   }
   return payload;
 }
