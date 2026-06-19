@@ -966,6 +966,139 @@
         render();
       }
 
+      async function leaveWorkspace() {
+        const workspace = state.snapshot?.workspaces?.find((item) => item.id === state.activeWorkspaceId);
+        if (!workspace || !confirm(`Leave workspace ${workspace.slug}?`)) return;
+        try {
+          await api("/v1/thane-cli/workspaces/leave", {
+            method: "POST",
+            body: JSON.stringify({ workspaceId: workspace.id })
+          });
+          state.activeWorkspaceId = "";
+          state.activeChannelId = "";
+          state.status = `Left ${workspace.slug}`;
+          state.error = "";
+          await sync();
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
+      async function leaveChannel() {
+        const channel = currentChannel();
+        if (!channel || channel.kind === "dm" || !confirm(`Leave #${channel.name}?`)) return;
+        try {
+          await api("/v1/thane-cli/channels/leave", {
+            method: "POST",
+            body: JSON.stringify({ workspaceId: state.activeWorkspaceId, channelId: channel.id })
+          });
+          state.activeChannelId = "";
+          state.status = `Left #${channel.name}`;
+          state.error = "";
+          await sync();
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
+      async function addChannelMember(event) {
+        event.preventDefault();
+        const channel = currentChannel();
+        const form = new FormData(event.currentTarget);
+        const target = String(form.get("target") || "").trim();
+        if (!channel || !target) return;
+        event.currentTarget.reset();
+        try {
+          await api("/v1/thane-cli/channel-members/add", {
+            method: "POST",
+            body: JSON.stringify({ workspaceId: state.activeWorkspaceId, channelId: channel.id, target })
+          });
+          state.status = `Added ${target} to #${channel.name}`;
+          state.error = "";
+          await sync();
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
+      async function removeChannelMember(target) {
+        const channel = currentChannel();
+        if (!channel || !target || !confirm(`Remove ${target} from #${channel.name}?`)) return;
+        try {
+          await api("/v1/thane-cli/channel-members/remove", {
+            method: "POST",
+            body: JSON.stringify({ workspaceId: state.activeWorkspaceId, channelId: channel.id, target })
+          });
+          state.status = `Removed ${target} from #${channel.name}`;
+          state.error = "";
+          await sync();
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
+      async function removeWorkspaceMember(target, ban) {
+        if (!target || !confirm(`${ban ? "Ban" : "Remove"} ${target} from this workspace?`)) return;
+        try {
+          await api(ban ? "/v1/thane-cli/workspace-members/ban" : "/v1/thane-cli/workspace-members/remove", {
+            method: "POST",
+            body: JSON.stringify({ workspaceId: state.activeWorkspaceId, target })
+          });
+          state.status = `${ban ? "Banned" : "Removed"} ${target}`;
+          state.error = "";
+          await sync();
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
+      async function setWorkspaceMemberRole(target, role) {
+        if (!target || !role || !confirm(`Set ${target} role to ${role}?`)) return;
+        try {
+          await api("/v1/thane-cli/workspace-members/role", {
+            method: "POST",
+            body: JSON.stringify({ workspaceId: state.activeWorkspaceId, target, role })
+          });
+          state.status = `Set ${target} role to ${role}`;
+          state.error = "";
+          await sync();
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
+      async function unbanWorkspaceMember(event) {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const email = String(form.get("email") || "").trim();
+        if (!email) return;
+        event.currentTarget.reset();
+        try {
+          await api("/v1/thane-cli/workspace-members/unban", {
+            method: "POST",
+            body: JSON.stringify({ workspaceId: state.activeWorkspaceId, target: email })
+          });
+          state.status = `Unbanned ${email}`;
+          state.error = "";
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
       async function invite(event) {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
@@ -1290,6 +1423,31 @@
                     <input name="name" placeholder="book-club" />
                     <button>Create channel</button>
                   </form>
+                  <div class="kv">
+                    <button onclick="leaveChannel()">Leave current channel</button>
+                    <button onclick="leaveWorkspace()">Leave workspace</button>
+                  </div>
+                </section>
+                <section class="settings-group">
+                  <h3>Members</h3>
+                  ${isAdmin ? `
+                    <form class="list" onsubmit="addChannelMember(event)">
+                      <input name="target" placeholder="handle or email" />
+                      <button>Add to current channel</button>
+                    </form>
+                    <form class="list" onsubmit="unbanWorkspaceMember(event)">
+                      <input name="email" type="email" placeholder="banned@example.com" />
+                      <button>Unban email</button>
+                    </form>
+                    <div class="kv">
+                      ${(snap.users || []).map((user) => {
+                        const memberRole = (snap.workspaceMembers || []).find((member) => member.userId === user.id)?.role || "member";
+                        const target = user.email || user.handle;
+                        const canManage = user.id !== (snap.users || []).find((candidate) => candidate.email === state.session?.email)?.id;
+                        return `<div>@${esc(user.handle)} (${esc(memberRole)})${canManage ? ` <button onclick="setWorkspaceMemberRole(${jsString(target)}, ${jsString(memberRole === "admin" ? "member" : "admin")})">${memberRole === "admin" ? "make member" : "make admin"}</button> <button onclick="removeWorkspaceMember(${jsString(target)}, false)">kick</button> <button onclick="removeWorkspaceMember(${jsString(target)}, true)">ban</button>` : ""}</div>`;
+                      }).join("")}
+                    </div>
+                  ` : `<div class="muted small">admin required</div>`}
                 </section>
                 <section class="settings-group">
                   <h3>Invites</h3>
@@ -1394,6 +1552,7 @@
         const workspace = snap.workspaces.find((item) => item.id === state.activeWorkspaceId) || snap.workspaces[0];
         const channel = snap.channels.find((item) => item.id === state.activeChannelId) || snap.channels[0];
         const users = new Map((snap.users || []).map((user) => [user.id, user]));
+        const currentUser = (snap.users || []).find((user) => user.email === state.session?.email);
         const messages = (snap.messages || []).filter((message) => message.channelId === channel?.id);
         const searchQuery = state.searchQuery.trim().toLowerCase();
         const searchResults = searchQuery
@@ -1495,7 +1654,9 @@
                 <div class="list">
                   ${snap.users.map((user) => {
                     const memberRole = (snap.workspaceMembers || []).find((member) => member.userId === user.id)?.role || "member";
-                    return `<div class="item">@${esc(user.handle)} - ${esc(user.displayName || user.handle)} (${esc(memberRole)})</div>`;
+                    const target = user.email || user.handle;
+                    const canManage = isAdmin && user.id !== currentUser?.id;
+                    return `<div class="item">@${esc(user.handle)} - ${esc(user.displayName || user.handle)} (${esc(memberRole)})${canManage ? ` <button onclick="setWorkspaceMemberRole(${jsString(target)}, ${jsString(memberRole === "admin" ? "member" : "admin")})">${memberRole === "admin" ? "make member" : "make admin"}</button> <button onclick="removeChannelMember(${jsString(target)})">channel remove</button> <button onclick="removeWorkspaceMember(${jsString(target)}, false)">kick</button> <button onclick="removeWorkspaceMember(${jsString(target)}, true)">ban</button>` : ""}</div>`;
                   }).join("") || `<div class="muted small">No members</div>`}
                 </div>
               </section>

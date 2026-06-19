@@ -86,6 +86,12 @@ export const cliCommands: CliCommand[] = [
   },
   {
     category: "Workspaces",
+    command: "thane workspace leave",
+    description: "Leave the active hosted workspace.",
+    examples: ["thane workspace leave"]
+  },
+  {
+    category: "Workspaces",
     command: "thane workspace art show [--json]",
     description: "Show the active workspace ASCII art.",
     examples: ["thane workspace art show"]
@@ -129,20 +135,26 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Channels",
     command: "thane channel join <channel>",
-    description: "Reserved for hosted channel join support.",
+    description: "Join or rejoin a public channel.",
     examples: ["thane channel join design"]
   },
   {
     category: "Channels",
     command: "thane channel leave <channel>",
-    description: "Reserved for hosted channel leave support.",
+    description: "Leave a channel.",
     examples: ["thane channel leave design"]
   },
   {
     category: "Channels",
     command: "thane channel invite <channel> <handle-or-email>",
-    description: "Reserved for hosted channel membership support.",
+    description: "Add a workspace member to a channel.",
     examples: ["thane channel invite leadership alex"]
+  },
+  {
+    category: "Channels",
+    command: "thane channel remove <channel> <handle-or-email>",
+    description: "Admin: remove a member from a channel.",
+    examples: ["thane channel remove leadership alex"]
   },
   {
     category: "Channels",
@@ -155,6 +167,24 @@ export const cliCommands: CliCommand[] = [
     command: "thane members [--json]",
     description: "List workspace members.",
     examples: ["thane members --json"]
+  },
+  {
+    category: "Members",
+    command: "thane member remove <handle-or-email>",
+    description: "Admin: remove a member from the active workspace.",
+    examples: ["thane member remove alex"]
+  },
+  {
+    category: "Members",
+    command: "thane member ban <handle-or-email> [--reason \"...\"]",
+    description: "Admin: ban and remove a member from the active workspace.",
+    examples: ["thane member ban alex@example.com --reason spam"]
+  },
+  {
+    category: "Members",
+    command: "thane member unban <email>",
+    description: "Admin: allow a banned email to join again.",
+    examples: ["thane member unban alex@example.com"]
   },
   {
     category: "Members",

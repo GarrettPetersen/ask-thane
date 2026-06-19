@@ -8,14 +8,23 @@ import { createInterface } from "node:readline";
 import { runChat } from "./chat.js";
 import { cliCommands, renderCliCommands } from "./commands.js";
 import {
+  addHostedChannelMember,
+  banHostedWorkspaceMember,
   createHostedBillingLink,
   createHostedChannel,
   createHostedWorkspace,
   ensureHostedWorkspace,
   hasHostedChat,
+  joinHostedChannel,
+  leaveHostedChannel,
+  leaveHostedWorkspace,
   reactHostedMessage,
+  removeHostedChannelMember,
+  removeHostedWorkspaceMember,
   sendHostedMessage,
-  syncHostedStore
+  setHostedWorkspaceMemberRole,
+  syncHostedStore,
+  unbanHostedWorkspaceMember
 } from "./hosted.js";
 import { renderChannels, renderDms, renderInbox, renderMembers, renderMessages, printJson, renderUsers, renderWorkspaces } from "./render.js";
 import { parseSlackExportZip } from "./slack-import.js";
@@ -405,6 +414,7 @@ Channels:
   thane channel join <channel>
   thane channel leave <channel>
   thane channel invite <channel> <handle-or-email>
+  thane channel remove <channel> <handle-or-email>
   thane channel members <channel> [--json]
 
 Members, users, and DMs:
@@ -413,6 +423,9 @@ Members, users, and DMs:
   thane invite-link create [--role admin|member] [--expires 7d] [--max-uses 10] [--json]
   thane invite-link accept <link-or-token> [--json]
   thane member role <handle-or-email> <admin|member>
+  thane member remove <handle-or-email>
+  thane member ban <handle-or-email> [--reason "..."]
+  thane member unban <email>
   thane users [--json]
   thane user add <handle> [--name "..."]
   thane dms [--json]
@@ -426,6 +439,7 @@ Workspaces:
   thane workspace current [--json]
   thane workspace create <slug> [--name "..."]
   thane workspace use <slug>
+  thane workspace leave
   thane workspace art show [--json]
   thane workspace art set [--file <path>|--stdin|<text>]
   thane workspace art reset
@@ -1026,6 +1040,14 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "workspace" && second === "leave") {
+    requireHostedAuthToken(store);
+    const leaving = store.activeWorkspace.slug;
+    await leaveHostedWorkspace(store);
+    wantsJson(args) ? printJson({ ok: true, workspace: leaving }) : process.stdout.write(`left workspace ${leaving}\n`);
+    return;
+  }
+
   if (command === "workspace" && second === "art") {
     const action = args.positionals[2] ?? "show";
     if (action === "show") {
@@ -1096,6 +1118,40 @@ async function main(): Promise<void> {
   if (command === "members") {
     const members = store.listMembers();
     wantsJson(args) ? printJson({ members }) : process.stdout.write(`${renderMembers(members)}\n`);
+    return;
+  }
+
+  if (command === "member" && (second === "remove" || second === "kick")) {
+    const target = args.positionals[2];
+    if (!target) {
+      throw new Error(`Usage: thane member ${second} <handle-or-email>`);
+    }
+    requireHostedAuthToken(store);
+    await removeHostedWorkspaceMember(store, { target });
+    wantsJson(args) ? printJson({ ok: true, target }) : process.stdout.write(`removed ${target} from ${store.activeWorkspace.slug}\n`);
+    return;
+  }
+
+  if (command === "member" && second === "ban") {
+    const target = args.positionals[2];
+    if (!target) {
+      throw new Error("Usage: thane member ban <handle-or-email> [--reason \"...\"]");
+    }
+    requireHostedAuthToken(store);
+    const reason = flagString(args, "reason");
+    await banHostedWorkspaceMember(store, { target, ...(reason ? { reason } : {}) });
+    wantsJson(args) ? printJson({ ok: true, target, banned: true }) : process.stdout.write(`banned ${target} from ${store.activeWorkspace.slug}\n`);
+    return;
+  }
+
+  if (command === "member" && second === "unban") {
+    const email = args.positionals[2];
+    if (!email) {
+      throw new Error("Usage: thane member unban <email>");
+    }
+    requireHostedAuthToken(store);
+    await unbanHostedWorkspaceMember(store, { email });
+    wantsJson(args) ? printJson({ ok: true, email, unbanned: true }) : process.stdout.write(`unbanned ${email} in ${store.activeWorkspace.slug}\n`);
     return;
   }
 
@@ -1211,7 +1267,9 @@ async function main(): Promise<void> {
     if (role !== "admin" && role !== "member") {
       throw new Error("Role must be admin or member.");
     }
-    throw new Error("Changing member roles from the CLI requires a hosted endpoint and is not available yet.");
+    requireHostedAuthToken(store);
+    await setHostedWorkspaceMemberRole(store, { target, role });
+    wantsJson(args) ? printJson({ ok: true, target, role }) : process.stdout.write(`set ${target} role to ${role}\n`);
     return;
   }
 
@@ -1263,7 +1321,9 @@ async function main(): Promise<void> {
     if (!channelName || !target) {
       throw new Error("Usage: thane channel invite <channel> <handle-or-email>");
     }
-    throw new Error("Channel membership changes from the CLI require a hosted endpoint and are not available yet.");
+    requireHostedAuthToken(store);
+    await addHostedChannelMember(store, { channelName, target });
+    wantsJson(args) ? printJson({ ok: true, channel: channelName, target }) : process.stdout.write(`invited ${target} to #${channelName}\n`);
     return;
   }
 
@@ -1272,7 +1332,9 @@ async function main(): Promise<void> {
     if (!channelName) {
       throw new Error("Usage: thane channel join <channel>");
     }
-    throw new Error("Joining channels from the CLI requires a hosted endpoint and is not available yet.");
+    requireHostedAuthToken(store);
+    await joinHostedChannel(store, { channelName });
+    wantsJson(args) ? printJson({ ok: true, channel: channelName }) : process.stdout.write(`joined #${channelName}\n`);
     return;
   }
 
@@ -1281,7 +1343,21 @@ async function main(): Promise<void> {
     if (!channelName) {
       throw new Error("Usage: thane channel leave <channel>");
     }
-    throw new Error("Leaving channels from the CLI requires a hosted endpoint and is not available yet.");
+    requireHostedAuthToken(store);
+    await leaveHostedChannel(store, { channelName });
+    wantsJson(args) ? printJson({ ok: true, channel: channelName }) : process.stdout.write(`left #${channelName}\n`);
+    return;
+  }
+
+  if (command === "channel" && (second === "remove" || second === "kick")) {
+    const channelName = args.positionals[2];
+    const target = args.positionals[3];
+    if (!channelName || !target) {
+      throw new Error(`Usage: thane channel ${second} <channel> <handle-or-email>`);
+    }
+    requireHostedAuthToken(store);
+    await removeHostedChannelMember(store, { channelName, target });
+    wantsJson(args) ? printJson({ ok: true, channel: channelName, target }) : process.stdout.write(`removed ${target} from #${channelName}\n`);
     return;
   }
 

@@ -1,6 +1,23 @@
 import { stdin as input, stdout as output } from "node:process";
 import { emitKeypressEvents } from "node:readline";
-import { createHostedChannel, createHostedWorkspace, ensureHostedWorkspace, hasHostedChat, reactHostedMessage, sendHostedMessage, syncHostedStore } from "./hosted.js";
+import {
+  addHostedChannelMember,
+  banHostedWorkspaceMember,
+  createHostedChannel,
+  createHostedWorkspace,
+  ensureHostedWorkspace,
+  hasHostedChat,
+  joinHostedChannel,
+  leaveHostedChannel,
+  leaveHostedWorkspace,
+  reactHostedMessage,
+  removeHostedChannelMember,
+  removeHostedWorkspaceMember,
+  sendHostedMessage,
+  setHostedWorkspaceMemberRole,
+  syncHostedStore,
+  unbanHostedWorkspaceMember
+} from "./hosted.js";
 import { renderChannels, renderInbox, renderMessages, renderUsers } from "./render.js";
 import { completeSlashCommand, renderSlashCommands, slashCommands } from "./slash-commands.js";
 import { ThaneStore } from "./store.js";
@@ -1045,20 +1062,26 @@ export async function runChat(initialChannel = "general"): Promise<void> {
         status = "DMs cannot be left.";
         return;
       }
-      const left = await store.leaveChannel(activeChannel.name);
+      const leftName = activeChannel.name;
+      if (hasHostedChat(store)) {
+        await leaveHostedChannel(store, { channelName: activeChannel.name });
+        store = await ThaneStore.open();
+      } else {
+        await store.leaveChannel(activeChannel.name);
+      }
       activeChannel = await selectConversation(store, "general");
       sidePanelLines = undefined;
       workspacePickerOpen = false;
       showHelp = false;
       showMenu = false;
       showReactionPicker = false;
-      status = `Left #${left.name}`;
+      status = `Left #${leftName}`;
       return;
     }
     if (trimmed.startsWith("/join ")) {
       const channelName = trimmed.slice("/join ".length).trim();
       if (hasHostedChat(store)) {
-        await createHostedChannel(store, { name: channelName });
+        await joinHostedChannel(store, { channelName });
         store = await ThaneStore.open();
       }
       activeChannel = await selectConversation(store, channelName);
@@ -1071,6 +1094,87 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       showReactionPicker = false;
       focus = "messages";
       messageIndex = Math.max(0, threadedMessages(store.recent(activeChannel.id, 200)).length - 1);
+      return;
+    }
+    if (trimmed.startsWith("/channel-invite ")) {
+      const target = trimmed.slice("/channel-invite ".length).trim();
+      if (!target) {
+        status = "Usage: /channel-invite <handle-or-email>";
+        return;
+      }
+      requireHostedAuthToken(store);
+      await addHostedChannelMember(store, { channelName: activeChannel.name, target });
+      store = await ThaneStore.open();
+      status = `Invited ${target} to ${channelLabel(activeChannel)}`;
+      return;
+    }
+    if (trimmed.startsWith("/channel-remove ")) {
+      const target = trimmed.slice("/channel-remove ".length).trim();
+      if (!target) {
+        status = "Usage: /channel-remove <handle-or-email>";
+        return;
+      }
+      requireHostedAuthToken(store);
+      await removeHostedChannelMember(store, { channelName: activeChannel.name, target });
+      store = await ThaneStore.open();
+      status = `Removed ${target} from ${channelLabel(activeChannel)}`;
+      return;
+    }
+    if (trimmed === "/workspace-leave") {
+      const leaving = store.activeWorkspace.slug;
+      requireHostedAuthToken(store);
+      await leaveHostedWorkspace(store);
+      store = await ThaneStore.open();
+      activeChannel = await selectConversation(store, "general");
+      status = `Left workspace ${leaving}`;
+      return;
+    }
+    if (trimmed.startsWith("/member-remove ")) {
+      const target = trimmed.slice("/member-remove ".length).trim();
+      if (!target) {
+        status = "Usage: /member-remove <handle-or-email>";
+        return;
+      }
+      requireHostedAuthToken(store);
+      await removeHostedWorkspaceMember(store, { target });
+      store = await ThaneStore.open();
+      status = `Removed ${target}`;
+      return;
+    }
+    if (trimmed.startsWith("/member-role ")) {
+      const match = trimmed.match(/^\/member-role\s+(\S+)\s+(admin|member)$/);
+      if (!match?.[1] || !match[2]) {
+        status = "Usage: /member-role <handle-or-email> <admin|member>";
+        return;
+      }
+      requireHostedAuthToken(store);
+      await setHostedWorkspaceMemberRole(store, { target: match[1], role: match[2] as "admin" | "member" });
+      store = await ThaneStore.open();
+      status = `Set ${match[1]} role to ${match[2]}`;
+      return;
+    }
+    if (trimmed.startsWith("/member-ban ")) {
+      const target = trimmed.slice("/member-ban ".length).trim();
+      if (!target) {
+        status = "Usage: /member-ban <handle-or-email>";
+        return;
+      }
+      requireHostedAuthToken(store);
+      await banHostedWorkspaceMember(store, { target });
+      store = await ThaneStore.open();
+      status = `Banned ${target}`;
+      return;
+    }
+    if (trimmed.startsWith("/member-unban ")) {
+      const email = trimmed.slice("/member-unban ".length).trim();
+      if (!email) {
+        status = "Usage: /member-unban <email>";
+        return;
+      }
+      requireHostedAuthToken(store);
+      await unbanHostedWorkspaceMember(store, { email });
+      store = await ThaneStore.open();
+      status = `Unbanned ${email}`;
       return;
     }
     if (trimmed.startsWith("/dm ")) {
