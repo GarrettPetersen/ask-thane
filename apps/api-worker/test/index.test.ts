@@ -1028,6 +1028,160 @@ describe("@ask-thane/api-worker", () => {
     });
   });
 
+  it("syncs newly created DMs to recipients with unread counts", async () => {
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("SELECT display_name")) {
+        return { display_name: "Wife" };
+      }
+      return null;
+    });
+    const all = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members m")) {
+        return {
+          results: [
+            {
+              id: "wsp_1",
+              workspace_slug: "family",
+              workspace_name: "Family",
+              ascii_art: null,
+              plan_tier: "free",
+              created_at: "2026-06-18T00:00:00.000Z",
+              updated_at: "2026-06-18T00:00:00.000Z",
+              member_id: "tcm_wife",
+              role: "member"
+            }
+          ]
+        };
+      }
+      if (sql.includes("COUNT(msg.id) AS unread_count")) {
+        return {
+          results: [
+            {
+              workspace_id: "wsp_1",
+              channel_id: "tcc_dm",
+              unread_count: 1,
+              mention_count: 0
+            }
+          ]
+        };
+      }
+      if (sql.includes("FROM thane_cli_workspace_members") && !sql.includes("JOIN")) {
+        return {
+          results: [
+            {
+              id: "tcm_owner",
+              account_id: "acct_owner",
+              email: "owner@example.com",
+              display_name: "Owner",
+              handle: "owner",
+              role: "owner",
+              joined_at: "2026-06-18T00:00:00.000Z"
+            },
+            {
+              id: "tcm_wife",
+              account_id: "acct_wife",
+              email: "wife@example.com",
+              display_name: "Wife",
+              handle: "wife",
+              role: "member",
+              joined_at: "2026-06-18T00:00:00.000Z"
+            }
+          ]
+        };
+      }
+      if (sql.includes("SELECT id, workspace_id, name, kind, visibility, topic, created_at")) {
+        return {
+          results: [
+            {
+              id: "tcc_dm",
+              workspace_id: "wsp_1",
+              name: "dm-owner-wife",
+              kind: "dm",
+              visibility: "private",
+              topic: "Direct messages",
+              created_at: "2026-06-18T00:00:00.000Z"
+            }
+          ]
+        };
+      }
+      if (sql.includes("FROM thane_cli_channel_members")) {
+        return {
+          results: [
+            { channel_id: "tcc_dm", member_id: "tcm_owner", left_at: null },
+            { channel_id: "tcc_dm", member_id: "tcm_wife", left_at: null }
+          ]
+        };
+      }
+      if (sql.includes("FROM thane_cli_chat_messages msg")) {
+        return {
+          results: [
+            {
+              id: "tmsg_dm",
+              workspace_id: "wsp_1",
+              channel_id: "tcc_dm",
+              author_member_id: "tcm_owner",
+              text: "hi",
+              source: "chat",
+              thread_root_id: null,
+              created_at: "2026-06-18T00:02:00.000Z"
+            }
+          ]
+        };
+      }
+      return { results: [] };
+    });
+    const noRateLimit = vi.fn(async () => null);
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        if (sql.includes("thane_cli_rate_limits")) {
+          return { first: noRateLimit, run };
+        }
+        return {
+          first: first.bind({ sql, args }),
+          all: all.bind({ sql, args })
+        };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/sync?workspaceId=wsp_1", {
+        headers: { Authorization: `Bearer ${await signAuthToken("wife@example.com")}` }
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      channels: [
+        {
+          id: "tcc_dm",
+          name: "owner",
+          kind: "dm",
+          visibility: "private",
+          memberIds: ["tcm_owner", "tcm_wife"]
+        }
+      ],
+      messages: [
+        {
+          id: "tmsg_dm",
+          channelId: "tcc_dm",
+          authorId: "tcm_owner",
+          text: "hi"
+        }
+      ],
+      unreadCounts: [{ workspaceId: "wsp_1", channelId: "tcc_dm", unreadCount: 1, mentionCount: 0 }],
+      workspaceUnreadCounts: [{ workspaceId: "wsp_1", unreadCount: 1, mentionCount: 0 }]
+    });
+  });
+
   it("marks hosted Thane Chat conversations read", async () => {
     const run = vi.fn(async () => ({ meta: { changes: 1 } }));
     const first = vi.fn(async function (this: { sql?: string }) {

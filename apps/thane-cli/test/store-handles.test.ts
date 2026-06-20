@@ -70,4 +70,51 @@ describe("local Thane Chat handle generation", () => {
     await expect(store.setWorkspaceHandle("thane")).rejects.toThrow("@thane is reserved for Ask Thane.");
     await expect(store.addUser("thane")).rejects.toThrow("@thane is reserved for Ask Thane.");
   });
+
+  it("counts hosted DM unread for the current signed-in account", async () => {
+    const store = await ThaneStore.open();
+    await store.applyHostedSnapshot({
+      account: account("acct_wife", "wife@example.com", "Wife"),
+      activeWorkspaceId: "wsp_1",
+      workspaces: [{ id: "wsp_1", slug: "family", name: "Family", createdAt: "2026-06-20T00:00:00.000Z" }],
+      workspaceMembers: [
+        { id: "tcm_owner", workspaceId: "wsp_1", accountId: "acct_owner", userId: "tcm_owner", role: "owner", joinedAt: "2026-06-20T00:00:00.000Z" },
+        { id: "tcm_wife", workspaceId: "wsp_1", accountId: "acct_wife", userId: "tcm_wife", role: "member", joinedAt: "2026-06-20T00:00:00.000Z" }
+      ],
+      users: [
+        { id: "tcm_owner", workspaceId: "wsp_1", accountId: "acct_owner", handle: "owner", displayName: "Owner", email: "owner@example.com" },
+        { id: "tcm_wife", workspaceId: "wsp_1", accountId: "acct_wife", handle: "wife", displayName: "Wife", email: "wife@example.com" }
+      ],
+      channels: [
+        {
+          id: "tcc_dm",
+          workspaceId: "wsp_1",
+          name: "owner",
+          kind: "dm",
+          visibility: "private",
+          memberIds: ["tcm_owner", "tcm_wife"],
+          createdAt: "2026-06-20T00:00:00.000Z"
+        }
+      ],
+      messages: [
+        {
+          id: "tmsg_1",
+          workspaceId: "wsp_1",
+          channelId: "tcc_dm",
+          authorId: "tcm_owner",
+          text: "hi",
+          createdAt: "2026-06-20T00:01:00.000Z",
+          source: "chat",
+          reactions: [],
+          mentions: []
+        }
+      ],
+      readStates: []
+    });
+
+    const dm = store.inbox({ includeQuiet: true }).find((summary) => summary.conversationId === "tcc_dm");
+
+    expect(dm?.conversationKind).toBe("dm");
+    expect(dm?.unreadCount).toBe(1);
+  });
 });

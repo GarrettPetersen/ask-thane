@@ -1509,6 +1509,17 @@ export class ThaneStore {
     });
   }
 
+  private currentUserForWorkspace(workspaceId: string): ThaneUser | undefined {
+    const currentAccountId = this.data.currentAccountId;
+    const currentEmail = this.currentAccount?.email;
+    return (
+      (currentAccountId && this.data.users.find((user) => user.workspaceId === workspaceId && user.accountId === currentAccountId)) ||
+      (currentEmail && this.data.users.find((user) => user.workspaceId === workspaceId && user.email === currentEmail)) ||
+      this.data.users.find((user) => user.workspaceId === workspaceId && user.id === this.data.currentUserId) ||
+      this.data.users.find((user) => user.workspaceId === workspaceId && user.handle === "you")
+    );
+  }
+
   private findChannelInWorkspace(workspaceId: string, nameOrId: string, userId: string): ThaneChannel | undefined {
     const normalized = normalizeChannelName(nameOrId);
     return this.data.channels.find(
@@ -1807,7 +1818,7 @@ export class ThaneStore {
     const summaries: ConversationSummary[] = [];
     for (const channel of this.data.channels.filter((candidate) => workspaceIds.includes(candidate.workspaceId))) {
       const workspace = workspaces.get(channel.workspaceId);
-      const localUser = this.data.users.find((user) => user.workspaceId === channel.workspaceId && user.handle === "you");
+      const localUser = this.currentUserForWorkspace(channel.workspaceId);
       if (!workspace || !localUser || !channel.memberIds.includes(localUser.id)) {
         const isReadablePublic = channel.visibility === "public" && Boolean(localUser);
         if (!workspace || !localUser || !isReadablePublic) {
