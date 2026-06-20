@@ -26,6 +26,7 @@ export const slashCommands: SlashCommand[] = [
   { name: "/account-name", usage: "/account-name <display-name>", description: "Change your default name for new workspaces.", needsArgument: true },
   { name: "/invite", usage: "/invite <email>", description: "Admin: email a workspace invite.", needsArgument: true, adminOnly: true },
   { name: "/invite-link", usage: "/invite-link", description: "Admin: create a workspace invite link.", needsArgument: false, adminOnly: true },
+  { name: "/webhooks", usage: "/webhooks", description: "Admin: show webhook setup commands.", needsArgument: false, adminOnly: true },
   { name: "/channels", usage: "/channels", description: "List channels in this workspace.", needsArgument: false },
   { name: "/join", usage: "/join <channel>", description: "Switch to a channel.", needsArgument: true },
   { name: "/leave", usage: "/leave", description: "Leave the focused channel.", needsArgument: false },

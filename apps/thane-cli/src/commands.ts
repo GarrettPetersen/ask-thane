@@ -355,6 +355,30 @@ export const cliCommands: CliCommand[] = [
     examples: ["thane ask-thane disable"]
   },
   {
+    category: "Integrations",
+    command: "thane webhooks list [--json]",
+    description: "List workspace webhooks. Admin only.",
+    examples: ["thane webhooks list --json"]
+  },
+  {
+    category: "Integrations",
+    command: "thane webhooks create <name> <https-url> [--event message.created] [--json]",
+    description: "Create a signed webhook subscription and app token. Admin only; token is shown once.",
+    examples: ["thane webhooks create ask-thane https://example.com/thane/events --json"]
+  },
+  {
+    category: "Integrations",
+    command: "thane webhooks disable <id-or-name> [--json]",
+    description: "Disable a workspace webhook and remove its app identity from the workspace.",
+    examples: ["thane webhooks disable ask-thane"]
+  },
+  {
+    category: "Integrations",
+    command: "thane webhooks docs",
+    description: "Print webhook payload, signature, and post-message examples.",
+    examples: ["thane webhooks docs"]
+  },
+  {
     category: "Notifications",
     command: "thane notify location [origin|thane_cli|slack|both] [--json]",
     description: "Read or update where Ask Thane should ping you.",

@@ -2202,7 +2202,7 @@
         }
         const branch = isReply ? `<span class="msg-branch">└─</span> ` : "";
         const author = userDisplayLabel(user);
-        const sourceMarker = message.source === "terminal" ? " 🤖" : "";
+        const sourceMarker = message.source === "terminal" ? " 🤖" : message.source === "webhook" ? " 🔌" : "";
         const reactionText = (message.reactions || []).map((reaction) => reaction.emoji).join(" ");
         const menuOpen = state.reactionMenuMessageId === message.id;
         const quickReactions = ["👍", "❤️", "😂", "🎉", "👀"];

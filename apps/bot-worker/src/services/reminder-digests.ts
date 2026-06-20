@@ -383,7 +383,7 @@ async function ensureDefaultCadence(input: {
 
 async function ensureNativeAskThaneMember(env: BotEnv, workspaceId: string, nowIso: string): Promise<string> {
   const existing = await env.DB
-    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' LIMIT 1")
+    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' AND left_at IS NULL LIMIT 1")
     .bind(workspaceId)
     .first<{ id?: string }>();
   if (existing?.id) {
@@ -398,15 +398,24 @@ async function ensureNativeAskThaneMember(env: BotEnv, workspaceId: string, nowI
        ON CONFLICT(workspace_id, email) DO UPDATE SET
          display_name = excluded.display_name,
          handle = excluded.handle,
+         left_at = NULL,
          updated_at = excluded.updated_at`
     )
     .bind(id, workspaceId, "acct_thane", nowIso, nowIso)
     .run();
   const row = await env.DB
-    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' LIMIT 1")
+    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' AND left_at IS NULL LIMIT 1")
     .bind(workspaceId)
     .first<{ id?: string }>();
   return row?.id ?? id;
+}
+
+async function nativeAskThaneIntegrationEnabled(env: BotEnv, workspaceId: string): Promise<boolean> {
+  const row = await env.DB
+    .prepare("SELECT enabled FROM thane_cli_ask_thane_integrations WHERE workspace_id = ? LIMIT 1")
+    .bind(workspaceId)
+    .first<{ enabled?: number | string | null }>();
+  return Number(row?.enabled ?? 0) === 1;
 }
 
 async function dispatchNativeCadenceDigest(input: {
@@ -416,6 +425,9 @@ async function dispatchNativeCadenceDigest(input: {
   cadence: UserNotificationCadenceRecord;
   options: ReminderDispatchOptions;
 }): Promise<"sent" | "skipped_no_tasks" | "skipped_unremindable_assignee"> {
+  if (!(await nativeAskThaneIntegrationEnabled(input.env, input.cadence.workspaceId))) {
+    return "skipped_unremindable_assignee";
+  }
   const openTasks = await input.repo.listOpenByAssigneeInOrganization(
     input.cadence.organizationId,
     input.cadence.workspaceId,
@@ -425,7 +437,7 @@ async function dispatchNativeCadenceDigest(input: {
     return "skipped_no_tasks";
   }
   const recipient = await input.env.DB
-    .prepare("SELECT id, handle FROM thane_cli_workspace_members WHERE workspace_id = ? AND handle = ? LIMIT 1")
+    .prepare("SELECT id, handle FROM thane_cli_workspace_members WHERE workspace_id = ? AND handle = ? AND left_at IS NULL LIMIT 1")
     .bind(input.cadence.workspaceId, input.cadence.externalUserId)
     .first<{ id?: string; handle?: string }>();
   if (!recipient?.id || recipient.handle === "thane") {
@@ -468,8 +480,8 @@ async function dispatchNativeCadenceDigest(input: {
   await input.env.DB
     .prepare(
       `INSERT INTO thane_cli_chat_messages (
-         id, workspace_id, channel_id, author_member_id, text, source, thread_root_id, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, 'chat', NULL, ?, ?)`
+         id, workspace_id, channel_id, author_member_id, text, source, origin, thread_root_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, 'terminal', 'webhook', NULL, ?, ?)`
     )
     .bind(messageId, input.cadence.workspaceId, channelId, botMemberId, digestText, input.nowIso, input.nowIso)
     .run();

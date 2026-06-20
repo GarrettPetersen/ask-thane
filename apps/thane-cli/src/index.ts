@@ -449,6 +449,12 @@ Ask Thane:
   thane ask-thane enable [--json]
   thane ask-thane disable
 
+Integrations:
+  thane webhooks list [--json]
+  thane webhooks create <name> <https-url> [--event message.created] [--json]
+  thane webhooks disable <id-or-name> [--json]
+  thane webhooks docs
+
 Notifications:
   thane notify location [--json]
   thane notify location <origin|thane_cli|slack|both> [--json]
@@ -589,6 +595,79 @@ function agentInstructions(): string {
 `;
 }
 
+function webhookDocs(): string {
+  return `# Thane Chat webhooks
+
+Use webhooks to build external Thane Chat apps. Admins create an app identity for a workspace, your app receives signed events, and the app token can post messages back as that app.
+
+Create a workspace webhook:
+
+thane webhooks create my-app https://example.com/thane/events --json
+
+The create response includes:
+
+{
+  "webhook": { "id": "twh_...", "name": "my-app", "status": "active" },
+  "token": "twk_...",
+  "signingSecret": "whsec_...",
+  "postMessageEndpoint": "https://api.askthane.com/v1/thane-cli/webhooks/messages"
+}
+
+Outbound event:
+
+POST <your https-url>
+x-thane-event: message.created
+x-thane-delivery-id: <delivery-id>
+x-thane-webhook-id: <webhook-id>
+x-thane-timestamp: <ISO timestamp>
+x-thane-signature: v1=<hex hmac sha256>
+
+The signature signs this exact string with the returned signingSecret:
+
+<x-thane-timestamp>.<raw request body>
+
+Message event body:
+
+{
+  "id": "tdlv_...",
+  "type": "message.created",
+  "workspaceId": "wsp_...",
+  "channelId": "tcc_...",
+  "message": {
+    "id": "tmsg_...",
+    "authorHandle": "garrett",
+    "text": "hello",
+    "source": "chat",
+    "createdAt": "2026-06-19T00:00:00.000Z"
+  }
+}
+
+Message source values:
+
+- chat: sent from the web or terminal chat UI
+- terminal: sent through a command/script acting as a signed-in user
+- webhook: sent by an external app identity
+
+Post back as the app:
+
+curl -X POST https://api.askthane.com/v1/thane-cli/webhooks/messages \\
+  -H "Authorization: Bearer <token>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"channelName":"general","text":"Message from my app"}'
+
+Security notes:
+
+- Webhook create/list/disable is admin-only.
+- Receiver URLs must be https, except localhost for local development.
+- App tokens are shown once and are stored hashed by Thane.
+- Verify signatures using the raw request body and reject stale timestamps.
+- Private-channel events are delivered only when the app identity can access that channel.
+- Webhook messages are rate-limited per app identity and workspace.
+
+Webhook tokens are shown once. Use \`thane webhooks list --json\` for IDs and status.
+`;
+}
+
 function jsonl(messages: unknown[]): string {
   return messages.map((message) => JSON.stringify(message)).join("\n") + (messages.length ? "\n" : "");
 }
@@ -625,6 +704,11 @@ async function main(): Promise<void> {
 
   if (command === "agent" && second === "install-instructions") {
     process.stdout.write(agentInstructions());
+    return;
+  }
+
+  if ((command === "webhooks" || command === "webhook") && second === "docs") {
+    process.stdout.write(webhookDocs());
     return;
   }
 
@@ -1047,6 +1131,69 @@ async function main(): Promise<void> {
     await syncHostedStore(store).catch(() => false);
     process.stdout.write("Ask Thane disabled\n");
     return;
+  }
+
+  if (command === "webhooks" || command === "webhook") {
+    const token = requireHostedAuthToken(store);
+    await syncHostedStore(store).catch(() => false);
+    const workspaceId = store.activeWorkspace.id;
+    if (second === "list" || !second) {
+      const response = await getThaneApi<{ webhooks: Array<Record<string, unknown>> }>(
+        `/v1/thane-cli/webhooks?workspaceId=${encodeURIComponent(workspaceId)}`,
+        token
+      );
+      wantsJson(args)
+        ? printJson(response)
+        : process.stdout.write(
+            response.webhooks.length
+              ? `${response.webhooks.map((webhook) => `${webhook.id} ${webhook.name} ${webhook.status} ${webhook.url}`).join("\n")}\n`
+              : "no webhooks\n"
+          );
+      return;
+    }
+    if (second === "create") {
+      const name = args.positionals[2];
+      const url = args.positionals[3];
+      if (!name || !url) {
+        throw new Error("Usage: thane webhooks create <name> <https-url>");
+      }
+      const response = await postThaneApiWithAuth<{
+        webhook: Record<string, unknown>;
+        token: string;
+        signingSecret: string;
+        postMessageEndpoint: string;
+      }>("/v1/thane-cli/webhooks", token, {
+        workspaceId,
+        name,
+        url,
+        eventTypes: [flagString(args, "event") ?? "message.created"]
+      });
+      if (wantsJson(args)) {
+        printJson(response);
+      } else {
+        process.stdout.write(
+          `webhook created: ${response.webhook.id}\n` +
+            `token: ${response.token}\n` +
+            `signing secret: ${response.signingSecret}\n` +
+            `post messages: ${response.postMessageEndpoint}\n` +
+            "These credentials are shown once. Store them in the external app.\n"
+        );
+      }
+      return;
+    }
+    if (second === "disable") {
+      const webhook = args.positionals[2];
+      if (!webhook) {
+        throw new Error("Usage: thane webhooks disable <id-or-name>");
+      }
+      const response = await postThaneApiWithAuth<{ webhook: Record<string, unknown> }>("/v1/thane-cli/webhooks/disable", token, {
+        workspaceId,
+        webhook
+      });
+      wantsJson(args) ? printJson(response) : process.stdout.write(`disabled webhook ${response.webhook.id}\n`);
+      return;
+    }
+    throw new Error("Usage: thane webhooks <list|create|disable|docs>");
   }
 
   if (command === "notify" && second === "location") {

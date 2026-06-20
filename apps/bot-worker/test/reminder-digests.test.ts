@@ -140,6 +140,9 @@ describe("reminder digests", () => {
     const calls: Array<{ sql: string; args: unknown[] }> = [];
     const first = vi.fn(async function (this: { sql?: string }) {
       const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_ask_thane_integrations")) {
+        return { enabled: 1 };
+      }
       if (sql.includes("email = 'thane@askthane.com'")) {
         return { id: "tcm_thane" };
       }
@@ -197,5 +200,62 @@ describe("reminder digests", () => {
     expect(calls.some((call) => call.sql.includes("INSERT INTO thane_cli_channels"))).toBe(true);
     expect(calls.some((call) => call.sql.includes("INSERT INTO thane_cli_chat_messages"))).toBe(true);
     expect(repo.recordDigestDelivery).toHaveBeenCalledWith(expect.objectContaining({ taskCount: 1, deliveryChannelId: expect.any(String) }));
+  });
+
+  it("skips native Thane Chat digests when Ask Thane is not enabled", async () => {
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_ask_thane_integrations")) {
+        return { enabled: 0 };
+      }
+      return null;
+    });
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        return { first: first.bind({ sql }), run };
+      })
+    }));
+    const repo = {
+      listOpenByAssigneeInOrganization: vi.fn(async () => [
+        sampleTask({
+          workspaceId: "wsp_1",
+          assignee: { platform: "thane_cli", platformUserId: "garrett", displayName: "Garrett" },
+          assigner: { platform: "thane_cli", platformUserId: "danika", displayName: "Danika" }
+        })
+      ]),
+      recordDigestDelivery: vi.fn(async () => undefined),
+      setUserNotificationCadenceDigestTimes: vi.fn(async () => undefined)
+    };
+
+    const outcome = await __testables.dispatchNativeCadenceDigest({
+      env: { DB: { prepare } as unknown as D1Database },
+      repo: repo as never,
+      nowIso: "2026-06-19T16:00:00.000Z",
+      cadence: {
+        id: "cad_1",
+        organizationId: "wsp_1",
+        workspaceId: "wsp_1",
+        userId: "usr_thane_tcm_garrett",
+        platform: "thane_cli",
+        externalUserId: "garrett",
+        isEnabled: true,
+        timezone: "America/Vancouver",
+        cadenceJson: { kind: "workday_daily", times: ["09:00"] },
+        cadenceSummary: "Once per working day",
+        nextDigestAt: "2026-06-19T16:00:00.000Z",
+        lastDigestAt: null,
+        createdAt: "2026-06-18T16:00:00.000Z",
+        updatedAt: "2026-06-18T16:00:00.000Z"
+      },
+      options: { forceSendNoTasks: false }
+    });
+
+    expect(outcome).toBe("skipped_unremindable_assignee");
+    expect(repo.listOpenByAssigneeInOrganization).not.toHaveBeenCalled();
+    expect(calls.some((call) => call.sql.includes("INSERT INTO thane_cli_chat_messages"))).toBe(false);
+    expect(repo.recordDigestDelivery).not.toHaveBeenCalled();
   });
 });

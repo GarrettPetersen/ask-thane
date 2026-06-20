@@ -176,6 +176,7 @@ Navigate inside chat:
 /workspaces         list workspaces and mark the active one
 /workspace acme     switch workspace and focus #general
 /workspace-art      show workspace ASCII art setup commands
+/webhooks          show webhook setup commands
 /channels           list channels in the active workspace
 /join book-club     switch to a channel
 /leave              leave the focused channel
@@ -306,6 +307,29 @@ pnpm thane mentions --since yesterday --json
 pnpm thane reply <message-id> "I can review this afternoon"
 ```
 
+Create generic workspace webhooks for external apps:
+```bash
+pnpm thane webhooks docs
+pnpm thane webhooks create build-bot https://example.com/thane/events --json
+pnpm thane webhooks list --json
+pnpm thane webhooks disable build-bot
+```
+
+Webhook receivers get signed `message.created` events with `x-thane-signature`, `x-thane-timestamp`, and a JSON body containing workspace, channel, and message data. The app token returned at creation can post back through `POST /v1/thane-cli/webhooks/messages` with `Authorization: Bearer <token>`. Tokens are shown once. Message `source` values are:
+
+- `chat`: sent from the web or terminal chat UI.
+- `terminal`: sent through a command/script acting as a signed-in user.
+- `webhook`: sent by an external app identity.
+
+Webhook app development contract:
+
+- Admins create/list/disable webhooks from the CLI; creation returns the one-time app token, signing secret, webhook id, and post-message endpoint.
+- Receiver URLs must be HTTPS, except localhost for local development.
+- Receivers should verify `x-thane-signature` over `<x-thane-timestamp>.<raw body>` and reject stale timestamps.
+- App tokens are stored hashed and are accepted only as bearer tokens on the webhook post-message endpoint.
+- Private-channel events are delivered only when the app identity can access that channel.
+- Webhook messages are rate-limited per app identity and workspace.
+
 Manage users, mentions, and DMs:
 ```bash
 pnpm thane users --json
@@ -325,7 +349,7 @@ pnpm thane send general "@thane can you track this review?"
 pnpm thane thread <message-id> --json
 ```
 
-Ask Thane is disabled by default. When enabled, `@thane` is added as a workspace bot identity and `@thane` mentions are handled as Ask Thane events. In the local MVP, the bot returns a bridge placeholder. In the hosted backend, these events should call the same Ask Thane agent runtime used for Slack.
+Ask Thane is disabled by default. When enabled, it should behave like an external app identity in the workspace, using the generic webhook/API surface rather than logic embedded in Thane Chat message creation. If Ask Thane is not enabled, it is not an active workspace member and receives no events.
 
 Cross-platform identity is email-based: a Thane CLI account with `garrett@example.com` should resolve to the same `person` as a Slack identity with that email through the existing `identity_accounts` table. The CLI provider key is `thane_cli`, with `external_user_id` set to the verified account email.
 

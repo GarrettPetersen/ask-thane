@@ -1810,30 +1810,90 @@ describe("@ask-thane/api-worker", () => {
     expect(prepare).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO thane_cli_ask_thane_integrations"));
   });
 
-  it.each(["chat", "terminal"] as const)("posts a native Ask Thane reply when mentioned from %s", async (source) => {
-    const insertedMessages: Array<{ args: unknown[] }> = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        new Response(
-          JSON.stringify({
-            choices: [{ message: { content: "Native Ask Thane reply." } }]
-          }),
-          { status: 200, headers: { "content-type": "application/json" } }
-        )
-      )
-    );
+  it("disables native Ask Thane by soft-leaving the bot member", async () => {
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
+    let integrationReads = 0;
     const first = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
       const sql = this.sql ?? "";
       if (sql.includes("FROM thane_cli_workspace_members") && sql.includes("email = ?")) {
-        if (this.args?.[1] === "thane@askthane.com") {
+        return {
+          id: "tcm_owner",
+          account_id: "acct_owner",
+          email: "owner@example.com",
+          display_name: "Owner",
+          handle: "owner",
+          role: "owner"
+        };
+      }
+      if (sql.includes("email = 'thane@askthane.com'")) {
+        return { id: "tcm_thane" };
+      }
+      if (sql.includes("FROM thane_cli_ask_thane_integrations")) {
+        integrationReads += 1;
+        return {
+          workspace_id: "wsp_1",
+          enabled: integrationReads === 1 ? 1 : 0,
+          bot_member_id: integrationReads === 1 ? "tcm_thane" : null,
+          linked_account_email: "owner@example.com",
+          connected_at: "2026-06-18T00:00:00.000Z",
+          updated_at: "2026-06-18T00:00:00.000Z",
+          last_event_at: "2026-06-18T00:00:00.000Z"
+        };
+      }
+      return null;
+    });
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        return { run, first: first.bind({ sql, args }) };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/ask-thane/disable", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
+        body: JSON.stringify({ workspaceId: "wsp_1" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      integration: {
+        workspaceId: "wsp_1",
+        enabled: false
+      }
+    });
+    expect(calls.some((call) => call.sql.includes("UPDATE thane_cli_channel_members SET left_at = ?"))).toBe(true);
+    expect(calls.some((call) => call.sql.includes("UPDATE thane_cli_workspace_members SET left_at = ?"))).toBe(true);
+    const integrationWrite = calls.find((call) => call.sql.includes("INSERT INTO thane_cli_ask_thane_integrations"));
+    expect(integrationWrite?.args[1]).toBe(0);
+    expect(integrationWrite?.args[2]).toBeNull();
+  });
+
+  it("creates signed Thane Chat webhooks for workspace admins", async () => {
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const first = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members") && sql.includes("email = ?")) {
+        if (String(this.args?.[1] ?? "").startsWith("webhook+")) {
           return {
-            id: "tcm_thane",
-            account_id: "acct_thane",
-            email: "thane@askthane.com",
-            display_name: "Ask Thane",
-            handle: "thane",
-            role: "member"
+            id: "tcm_webhook",
+            account_id: "acct_webhook",
+            email: this.args?.[1],
+            display_name: "Build Bot",
+            handle: "build-bot",
+            role: "member",
+            joined_at: "2026-06-19T00:00:00.000Z",
+            left_at: null
           };
         }
         return {
@@ -1845,49 +1905,87 @@ describe("@ask-thane/api-worker", () => {
           role: "owner"
         };
       }
-      if (sql.includes("SELECT id, workspace_name, workspace_slug")) {
-        return { id: "wsp_1", workspace_name: "Acme", workspace_slug: "acme" };
+      if (sql.includes("FROM thane_cli_webhooks") && sql.includes("name = ?")) {
+        return null;
+      }
+      return null;
+    });
+    const all = vi.fn(async () => ({ results: [] }));
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        return { run, first: first.bind({ sql, args }), all };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/webhooks", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
+        body: JSON.stringify({ workspaceId: "wsp_1", name: "Build Bot", url: "https://example.com/thane/events" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.webhook).toMatchObject({ name: "Build Bot", url: "https://example.com/thane/events", status: "active" });
+    expect(body.token).toMatch(/^twk_/);
+    expect(body.signingSecret).toMatch(/^whsec_/);
+    expect(body.postMessageEndpoint).toBe("https://api.local/v1/thane-cli/webhooks/messages");
+    const webhookInsert = calls.find((call) => call.sql.includes("INSERT INTO thane_cli_webhooks"));
+    expect(webhookInsert?.args[3]).toBe("https://example.com/thane/events");
+    expect(webhookInsert?.args[4]).toBe(JSON.stringify(["message.created"]));
+    expect(webhookInsert?.args[7]).toBe("tcm_webhook");
+  });
+
+  it("lets active webhook app tokens post messages as external app members", async () => {
+    const insertedMessages: Array<{ args: unknown[] }> = [];
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })));
+    const webhookRow = {
+      id: "twh_1",
+      workspace_id: "wsp_1",
+      name: "Build Bot",
+      target_url: "https://example.com/thane/events",
+      event_types: JSON.stringify(["message.created"]),
+      signing_secret: "whsec_test",
+      token_hash: "hash",
+      bot_member_id: "tcm_webhook",
+      created_by_member_id: "tcm_owner",
+      status: "active" as const,
+      created_at: "2026-06-19T00:00:00.000Z",
+      updated_at: "2026-06-19T00:00:00.000Z",
+      last_delivered_at: null
+    };
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_webhooks") && sql.includes("token_hash = ?")) {
+        return webhookRow;
+      }
+      if (sql.includes("FROM thane_cli_workspace_members") && sql.includes("id = ?")) {
+        return {
+          id: "tcm_webhook",
+          account_id: "acct_webhook",
+          email: "webhook+twh_1@apps.thane.chat",
+          display_name: "Build Bot",
+          handle: "build-bot",
+          role: "member"
+        };
       }
       if (sql.includes("SELECT id, name, kind, visibility FROM thane_cli_channels")) {
         return { id: "tcc_1", name: "general", kind: "channel", visibility: "public" };
       }
-      if (sql.includes("FROM thane_cli_ask_thane_integrations")) {
-        return {
-          workspace_id: "wsp_1",
-          enabled: 1,
-          bot_member_id: "tcm_thane",
-          linked_account_email: "owner@example.com",
-          connected_at: "2026-06-18T00:00:00.000Z",
-          updated_at: "2026-06-18T00:00:00.000Z",
-          last_event_at: null
-        };
-      }
-      if (sql.includes("FROM thane_cli_workspace_members") && sql.includes("id = ?")) {
-        return {
-          id: "tcm_thane",
-          account_id: "acct_thane",
-          email: "thane@askthane.com",
-          display_name: "Ask Thane",
-          handle: "thane",
-          role: "member"
-        };
-      }
       return null;
     });
     const all = vi.fn(async function (this: { sql?: string }) {
-      const sql = this.sql ?? "";
-      if (sql.includes("FROM thane_cli_chat_messages")) {
-        return {
-          results: [
-            {
-              id: "tmsg_user",
-              text: "hello @thane",
-              created_at: "2026-06-18T00:00:00.000Z",
-              thread_root_id: null,
-              handle: "owner"
-            }
-          ]
-        };
+      if ((this.sql ?? "").includes("FROM thane_cli_webhooks")) {
+        return { results: [webhookRow] };
       }
       return { results: [] };
     });
@@ -1900,50 +1998,60 @@ describe("@ask-thane/api-worker", () => {
     const prepare = vi.fn((sql: string) => ({
       bind: vi.fn((...args: unknown[]) => ({
         run: run.bind({ sql, args }),
-        first: first.bind({ sql }),
-        all: all.bind({ sql })
+        first: first.bind({ sql, args }),
+        all: all.bind({ sql, args })
       }))
     }));
     const authEnv = {
       DB: { prepare },
       BUILD_ENV: "production",
-      THANE_CLI_AUTH_SECRET: "test-secret",
-      OPENAI_API_KEY: "sk-test",
-      DEFAULT_LLM_MODEL: "gpt-4.1-mini"
+      THANE_CLI_AUTH_SECRET: "test-secret"
     } as never;
 
     const res = await worker.fetch(
-      new Request("https://api.local/v1/thane-cli/messages", {
+      new Request("https://api.local/v1/thane-cli/webhooks/messages", {
         method: "POST",
-        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
-        body: JSON.stringify({ workspaceId: "wsp_1", channelId: "tcc_1", text: "hello @thane", source })
+        headers: { Authorization: "Bearer twk_test" },
+        body: JSON.stringify({ channelName: "general", text: "Build complete" })
       }),
       authEnv
     );
 
     expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.askThaneReply).toMatchObject({ text: "Native Ask Thane reply." });
-    expect(insertedMessages).toHaveLength(2);
-    expect(insertedMessages[1]?.args[4]).toBe("Native Ask Thane reply.");
-    expect(fetch).toHaveBeenCalledWith(
-      "https://api.openai.com/v1/chat/completions",
-      expect.objectContaining({ method: "POST" })
-    );
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      message: {
+        channelId: "tcc_1",
+        authorId: "tcm_webhook",
+        text: "Build complete",
+        source: "webhook"
+      }
+    });
+    expect(insertedMessages).toHaveLength(1);
+    expect(insertedMessages[0]?.args[3]).toBe("tcm_webhook");
+    expect(insertedMessages[0]?.args[4]).toBe("Build complete");
+    expect(insertedMessages[0]?.args[5]).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("routes terminal Ask Thane mentions through the shared bot runtime", async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          ok: true,
-          reply: { messageId: "reply_1", text: "Runtime reply." }
-        }),
-        { status: 200, headers: { "content-type": "application/json" } }
-      )
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const first = vi.fn(async function (this: { sql?: string }) {
+  it("does not deliver webhook events for private channels the app cannot access", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })));
+    const webhookRow = {
+      id: "twh_1",
+      workspace_id: "wsp_1",
+      name: "Build Bot",
+      target_url: "https://example.com/thane/events",
+      event_types: JSON.stringify(["message.created"]),
+      signing_secret: "whsec_test",
+      token_hash: "hash",
+      bot_member_id: "tcm_webhook",
+      created_by_member_id: "tcm_owner",
+      status: "active" as const,
+      created_at: "2026-06-19T00:00:00.000Z",
+      updated_at: "2026-06-19T00:00:00.000Z",
+      last_delivered_at: null
+    };
+    const first = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
       const sql = this.sql ?? "";
       if (sql.includes("FROM thane_cli_workspace_members") && sql.includes("email = ?")) {
         return {
@@ -1955,54 +2063,50 @@ describe("@ask-thane/api-worker", () => {
           role: "owner"
         };
       }
-      if (sql.includes("SELECT id, workspace_name, workspace_slug")) {
-        return { id: "wsp_1", workspace_name: "Acme", workspace_slug: "acme" };
-      }
       if (sql.includes("SELECT id, name, kind, visibility FROM thane_cli_channels")) {
-        return { id: "tcc_1", name: "general", kind: "channel", visibility: "public" };
+        return { id: "tcc_secret", name: "secret", kind: "channel", visibility: "private" };
+      }
+      if (sql.includes("FROM thane_cli_channel_members")) {
+        return this.args?.[1] === "tcm_owner" ? { left_at: null } : null;
       }
       return null;
+    });
+    const all = vi.fn(async function (this: { sql?: string }) {
+      if ((this.sql ?? "").includes("FROM thane_cli_webhooks")) {
+        return { results: [webhookRow] };
+      }
+      return { results: [] };
     });
     const run = vi.fn(async () => ({ meta: { changes: 1 } }));
     const prepare = vi.fn((sql: string) => ({
       bind: vi.fn((...args: unknown[]) => ({
         run,
         first: first.bind({ sql, args }),
-        all: vi.fn(async () => ({ results: [] }))
+        all: all.bind({ sql, args })
       }))
     }));
     const authEnv = {
       DB: { prepare },
       BUILD_ENV: "production",
-      THANE_CLI_AUTH_SECRET: "test-secret",
-      THANE_BOT_INTERNAL_BASE_URL: "https://bot.local",
-      INTERNAL_API_BEARER_TOKEN: "internal-secret"
+      THANE_CLI_AUTH_SECRET: "test-secret"
     } as never;
 
     const res = await worker.fetch(
       new Request("https://api.local/v1/thane-cli/messages", {
         method: "POST",
         headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
-        body: JSON.stringify({ workspaceId: "wsp_1", channelId: "tcc_1", text: "hello @thane", source: "terminal" })
+        body: JSON.stringify({ workspaceId: "wsp_1", channelId: "tcc_secret", text: "private note", source: "chat" })
       }),
       authEnv
     );
 
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toMatchObject({
-      askThaneReply: { messageId: "reply_1", text: "Runtime reply." }
-    });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://bot.local/internal/thane-chat/agent-message",
-      expect.objectContaining({
-        method: "POST",
-        body: expect.stringContaining('"shouldRespond":true')
-      })
-    );
+    expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("rate limits native Ask Thane mentions before paid model work", async () => {
+  it.each(["chat", "terminal"] as const)("stores @thane messages from %s without running Ask Thane", async (source) => {
     const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const insertedMessages: Array<{ args: unknown[] }> = [];
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })));
     const first = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
       const sql = this.sql ?? "";
@@ -2016,6 +2120,9 @@ describe("@ask-thane/api-worker", () => {
           role: "owner"
         };
       }
+      if (sql.includes("SELECT id, name, kind, visibility FROM thane_cli_channels")) {
+        return { id: "tcc_1", name: "general", kind: "channel", visibility: "public" };
+      }
       if (sql.includes("FROM thane_cli_rate_limits") && this.args?.[0] === "thane_cli_ask_thane_mention:member") {
         return {
           id: "rl_ask_thane",
@@ -2025,12 +2132,17 @@ describe("@ask-thane/api-worker", () => {
       }
       return null;
     });
-    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const run = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
+      if ((this.sql ?? "").includes("INSERT INTO thane_cli_chat_messages")) {
+        insertedMessages.push({ args: this.args ?? [] });
+      }
+      return { meta: { changes: 1 } };
+    });
     const prepare = vi.fn((sql: string) => ({
       bind: vi.fn((...args: unknown[]) => {
         calls.push({ sql, args });
         return {
-          run,
+          run: run.bind({ sql, args }),
           first: first.bind({ sql, args }),
           all: vi.fn(async () => ({ results: [] }))
         };
@@ -2040,59 +2152,35 @@ describe("@ask-thane/api-worker", () => {
       DB: { prepare },
       BUILD_ENV: "production",
       THANE_CLI_AUTH_SECRET: "test-secret",
-      OPENAI_API_KEY: "sk-test"
+      OPENAI_API_KEY: "sk-test",
+      THANE_BOT_INTERNAL_BASE_URL: "https://bot.local",
+      INTERNAL_API_BEARER_TOKEN: "internal-secret"
     } as never;
 
     const res = await worker.fetch(
       new Request("https://api.local/v1/thane-cli/messages", {
         method: "POST",
         headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
-        body: JSON.stringify({ workspaceId: "wsp_1", channelId: "tcc_1", text: "hello @thane", source: "chat" })
+        body: JSON.stringify({ workspaceId: "wsp_1", channelId: "tcc_1", text: "hello @thane", source })
       }),
       authEnv
     );
 
-    expect(res.status).toBe(429);
-    expect(res.headers.get("retry-after")).toMatch(/^\d+$/);
-    await expect(res.json()).resolves.toMatchObject({ ok: false, error: "rate_limited" });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.askThaneReply).toBeUndefined();
+    expect(body.passiveTaskCount).toBe(0);
+    expect(insertedMessages).toHaveLength(1);
+    expect(insertedMessages[0]?.args[4]).toBe("hello @thane");
     expect(fetch).not.toHaveBeenCalled();
-    expect(calls.some((call) => call.sql.includes("INSERT INTO thane_cli_chat_messages"))).toBe(false);
-    expect(calls.some((call) => call.sql.includes("SELECT id, workspace_name, workspace_slug"))).toBe(false);
+    expect(calls.some((call) => call.sql.includes("thane_cli_ask_thane_integrations"))).toBe(false);
+    expect(calls.some((call) => call.sql.includes("thane_cli_ask_thane_mention"))).toBe(false);
+    expect(calls.some((call) => call.sql.includes("conversation_sources"))).toBe(false);
+    expect(calls.some((call) => call.sql.includes("llm_usage_events"))).toBe(false);
   });
 
-  it("extracts tasks passively from native Thane Chat messages", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        new Response(
-          JSON.stringify({
-            choices: [
-              {
-                message: {
-                  content: JSON.stringify({
-                    reasoning_summary: "assigned native task",
-                    tasks: [
-                      {
-                        title: "Review onboarding notes",
-                        description: "Look over the draft before launch.",
-                        assignee_user_id: "danika",
-                        assignee_name: "Danika",
-                        urgency: "medium",
-                        difficulty: "medium",
-                        status: "incomplete",
-                        confidence: 0.92,
-                        due_at: null
-                      }
-                    ]
-                  })
-                }
-              }
-            ]
-          }),
-          { status: 200, headers: { "content-type": "application/json" } }
-        )
-      )
-    );
+  it("does not infer passive tasks from Thane Chat messages in the API worker", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })));
     const first = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
       const sql = this.sql ?? "";
       if (sql.includes("FROM thane_cli_workspace_members") && sql.includes("email = ?")) {
@@ -2105,23 +2193,8 @@ describe("@ask-thane/api-worker", () => {
           role: "owner"
         };
       }
-      if (sql.includes("SELECT id, workspace_name, workspace_slug")) {
-        return { id: "wsp_1", workspace_name: "Acme", workspace_slug: "acme" };
-      }
       if (sql.includes("SELECT id, name, kind, visibility FROM thane_cli_channels")) {
         return { id: "tcc_1", name: "general", kind: "channel", visibility: "public" };
-      }
-      if (sql.includes("SELECT plan_tier FROM thane_cli_workspaces")) {
-        return { plan_tier: "cli_team" };
-      }
-      if (sql.includes("COUNT(*) AS count FROM thane_cli_workspace_members")) {
-        return { count: 2 };
-      }
-      if (sql.includes("SUM(total_cost_usd)")) {
-        return { total: 0 };
-      }
-      if (sql.includes("SELECT external_user_id FROM users")) {
-        return { external_user_id: this.args?.[2] ?? null };
       }
       return null;
     });
@@ -2140,7 +2213,8 @@ describe("@ask-thane/api-worker", () => {
       BUILD_ENV: "production",
       THANE_CLI_AUTH_SECRET: "test-secret",
       OPENAI_API_KEY: "sk-test",
-      DEFAULT_LLM_MODEL: "gpt-4.1-mini"
+      THANE_BOT_INTERNAL_BASE_URL: "https://bot.local",
+      INTERNAL_API_BEARER_TOKEN: "internal-secret"
     } as never;
 
     const res = await worker.fetch(
@@ -2158,22 +2232,9 @@ describe("@ask-thane/api-worker", () => {
     );
 
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toMatchObject({ ok: true, passiveTaskCount: 1 });
-    expect(saveManyTasks).toHaveBeenCalledWith([
-      expect.objectContaining({
-        title: "Review onboarding notes",
-        assignee: expect.objectContaining({
-          platform: "thane_cli",
-          platformUserId: "danika",
-          displayName: "Danika"
-        }),
-        assigner: expect.objectContaining({
-          platform: "thane_cli",
-          platformUserId: "owner",
-          displayName: "Owner"
-        })
-      })
-    ]);
+    await expect(res.json()).resolves.toMatchObject({ ok: true, passiveTaskCount: 0 });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(saveManyTasks).not.toHaveBeenCalled();
   });
 
   it("renders browser-friendly Thane CLI invite pages", async () => {

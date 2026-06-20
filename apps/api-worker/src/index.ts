@@ -1,7 +1,4 @@
-import { createLlmClient } from "@ask-thane/ai";
 import { D1TaskRepository } from "@ask-thane/data";
-import type { MessageEvent } from "@ask-thane/domain";
-import { ingestMessageForTasks } from "@ask-thane/workflows";
 import { DurableObject } from "cloudflare:workers";
 import * as QRCode from "qrcode";
 
@@ -9,14 +6,8 @@ interface Env {
   DB: D1Database;
   EMAIL?: SendEmail;
   THANE_CHAT_EVENTS?: DurableObjectNamespace;
-  ANTHROPIC_API_KEY?: string;
   BILLING_LINK_SIGNING_SECRET?: string;
-  DEFAULT_LLM_MODEL?: string;
-  DEFAULT_LLM_PROVIDER?: "openai" | "anthropic";
   INTERNAL_API_BEARER_TOKEN?: string;
-  OPENAI_API_KEY?: string;
-  FREE_TIER_MONTHLY_AI_CAP_USD?: string;
-  THANE_BOT_INTERNAL_BASE_URL?: string;
   THANE_CLI_AUTH_DEV_CODES?: string;
   THANE_CLI_AUTH_SECRET?: string;
   THANE_CLI_EMAIL_FROM?: string;
@@ -118,8 +109,29 @@ interface ThaneCliMessageCreatePayload {
   threadRootId?: unknown;
 }
 
+type ThaneCliMessageOrigin = "chat" | "terminal" | "webhook";
+
 interface ThaneCliAskThanePayload {
   workspaceId?: unknown;
+}
+
+interface ThaneCliWebhookCreatePayload {
+  workspaceId?: unknown;
+  name?: unknown;
+  url?: unknown;
+  eventTypes?: unknown;
+}
+
+interface ThaneCliWebhookDisablePayload {
+  workspaceId?: unknown;
+  webhook?: unknown;
+}
+
+interface ThaneCliWebhookMessagePayload {
+  channelId?: unknown;
+  channelName?: unknown;
+  text?: unknown;
+  threadRootId?: unknown;
 }
 
 interface ThaneCliReactionCreatePayload {
@@ -260,17 +272,27 @@ interface ThaneCliAskThaneIntegrationRow {
   last_event_at: string | null;
 }
 
-interface NativeAgentRefs {
-  organizationId: string;
-  workspaceId: string;
-  userId: string;
-  conversationSourceId: string;
+interface ThaneCliWebhookRow {
+  id: string;
+  workspace_id: string;
+  name: string;
+  target_url: string;
+  event_types: string;
+  signing_secret: string;
+  token_hash: string;
+  bot_member_id: string;
+  created_by_member_id: string;
+  status: "active" | "disabled";
+  created_at: string;
+  updated_at: string;
+  last_delivered_at: string | null;
 }
 
 type ThaneCliConversationKind = "channel" | "dm";
 type ThaneCliConversationVisibility = "public" | "private";
 
 const RESERVED_THANE_CLI_HANDLES = new Set(["thane"]);
+const THANE_CLI_WEBHOOK_EVENT_TYPES = new Set(["message.created"]);
 
 function normalizeEmail(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -427,7 +449,7 @@ async function uniqueThaneCliHandle(
   const desired = normalizeHandle(input.desiredHandle) || "member";
   const seed = input.allowReserved || !isReservedThaneCliHandle(desired) ? desired : `${desired}-user`;
   const existingQuery = env.DB
-    .prepare("SELECT account_id, email, handle FROM thane_cli_workspace_members WHERE workspace_id = ?")
+    .prepare("SELECT account_id, email, handle FROM thane_cli_workspace_members WHERE workspace_id = ? AND left_at IS NULL")
     .bind(input.workspaceId);
   const existingRows =
     typeof existingQuery.all === "function"
@@ -860,6 +882,12 @@ function makeInviteToken(): string {
   return base64UrlEncode(bytes);
 }
 
+function makeWebhookCredential(prefix: string): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return `${prefix}_${base64UrlEncode(bytes)}`;
+}
+
 function hex(bytes: ArrayBuffer): string {
   return Array.from(new Uint8Array(bytes))
     .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -1058,7 +1086,7 @@ async function thaneCliAccountState(
     .bind(email)
     .first<{ email?: string }>();
   const workspaceRow = await env.DB
-    .prepare("SELECT COUNT(*) AS count FROM thane_cli_workspace_members WHERE email = ?")
+    .prepare("SELECT COUNT(*) AS count FROM thane_cli_workspace_members WHERE email = ? AND left_at IS NULL")
     .bind(email)
     .first<{ count?: number }>();
   const verifiedLoginRow = await env.DB
@@ -1375,9 +1403,9 @@ async function ensureThaneCliMember(env: Env, input: {
         });
   const now = nowIso();
   const existingMember = await env.DB
-    .prepare("SELECT id, joined_at FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = ? LIMIT 1")
+    .prepare("SELECT id, joined_at, left_at FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = ? LIMIT 1")
     .bind(input.workspaceId, input.email)
-    .first<{ id?: string; joined_at?: string | null }>();
+    .first<{ id?: string; joined_at?: string | null; left_at?: string | null }>();
   await env.DB
     .prepare(
       `INSERT INTO thane_cli_workspace_members (
@@ -1385,19 +1413,25 @@ async function ensureThaneCliMember(env: Env, input: {
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(workspace_id, email) DO UPDATE SET
          account_id = excluded.account_id,
+         joined_at = CASE
+           WHEN thane_cli_workspace_members.left_at IS NOT NULL THEN excluded.joined_at
+           ELSE thane_cli_workspace_members.joined_at
+         END,
          display_name = CASE
            WHEN thane_cli_workspace_members.display_name = ? THEN excluded.display_name
            ELSE COALESCE(NULLIF(thane_cli_workspace_members.display_name, ''), excluded.display_name)
          END,
          handle = CASE
+           WHEN thane_cli_workspace_members.left_at IS NOT NULL THEN excluded.handle
            WHEN thane_cli_workspace_members.handle = ? THEN excluded.handle
            WHEN thane_cli_workspace_members.handle = ? THEN excluded.handle
            ELSE COALESCE(NULLIF(thane_cli_workspace_members.handle, ''), excluded.handle)
          END,
          role = CASE
-           WHEN thane_cli_workspace_members.role = 'owner' THEN 'owner'
+           WHEN thane_cli_workspace_members.role = 'owner' AND thane_cli_workspace_members.left_at IS NULL THEN 'owner'
            ELSE excluded.role
          END,
+         left_at = NULL,
          updated_at = excluded.updated_at`
     )
     .bind(
@@ -1419,7 +1453,7 @@ async function ensureThaneCliMember(env: Env, input: {
     .prepare(
       `SELECT id, account_id, email, display_name, handle, role, joined_at
        FROM thane_cli_workspace_members
-       WHERE workspace_id = ? AND email = ?
+       WHERE workspace_id = ? AND email = ? AND left_at IS NULL
        LIMIT 1`
     )
     .bind(input.workspaceId, input.email)
@@ -1427,7 +1461,7 @@ async function ensureThaneCliMember(env: Env, input: {
   if (!row?.id || !row.account_id || !row.email || !row.handle || !row.role) {
     throw new Error("member_upsert_failed");
   }
-  if (!existingMember?.id && row.email !== "thane@askthane.com") {
+  if ((!existingMember?.id || existingMember.left_at) && row.email !== "thane@askthane.com") {
     await recordThaneCliWorkspaceJoinMessage(env, {
       workspaceId: input.workspaceId,
       memberId: row.id,
@@ -1530,8 +1564,8 @@ async function recordThaneCliWorkspaceJoinMessage(env: Env, input: {
   await env.DB
     .prepare(
       `INSERT INTO thane_cli_chat_messages (
-         id, workspace_id, channel_id, author_member_id, text, source, thread_root_id, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, 'chat', NULL, ?, ?)`
+         id, workspace_id, channel_id, author_member_id, text, source, origin, thread_root_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, 'chat', 'chat', NULL, ?, ?)`
     )
     .bind(messageId, input.workspaceId, channel.id, input.memberId, workspaceJoinMessageText(input.displayName), input.joinedAt, input.joinedAt)
     .run();
@@ -1558,7 +1592,7 @@ async function requireThaneCliWorkspaceMember(
     .prepare(
       `SELECT id, account_id, email, display_name, handle, role
        FROM thane_cli_workspace_members
-       WHERE workspace_id = ? AND email = ?
+       WHERE workspace_id = ? AND email = ? AND left_at IS NULL
        LIMIT 1`
     )
     .bind(workspaceId, email)
@@ -1586,7 +1620,7 @@ function isThaneCliWorkspaceAdmin(role: string | null | undefined): boolean {
 
 async function countThaneCliWorkspaceOwners(env: Env, workspaceId: string): Promise<number> {
   const row = await env.DB
-    .prepare("SELECT COUNT(*) AS count FROM thane_cli_workspace_members WHERE workspace_id = ? AND role = 'owner'")
+    .prepare("SELECT COUNT(*) AS count FROM thane_cli_workspace_members WHERE workspace_id = ? AND role = 'owner' AND left_at IS NULL")
     .bind(workspaceId)
     .first<{ count?: number }>();
   return Number(row?.count ?? 0);
@@ -1606,6 +1640,7 @@ async function resolveThaneCliWorkspaceMember(env: Env, input: {
       `SELECT id, account_id, email, display_name, handle, role
        FROM thane_cli_workspace_members
        WHERE workspace_id = ?
+         AND left_at IS NULL
          AND (id = ? OR email = ? OR handle = ?)
        LIMIT 1`
     )
@@ -1695,6 +1730,196 @@ async function ensureAskThaneMember(env: Env, workspaceId: string): Promise<{ id
   });
 }
 
+async function softLeaveAskThaneMember(env: Env, workspaceId: string, leftAt: string): Promise<string | null> {
+  const row = await env.DB
+    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' AND left_at IS NULL LIMIT 1")
+    .bind(workspaceId)
+    .first<{ id?: string }>();
+  if (!row?.id) {
+    return null;
+  }
+  await env.DB
+    .prepare("UPDATE thane_cli_channel_members SET left_at = ? WHERE member_id = ? AND left_at IS NULL")
+    .bind(leftAt, row.id)
+    .run();
+  await env.DB
+    .prepare("UPDATE thane_cli_workspace_members SET left_at = ?, updated_at = ? WHERE workspace_id = ? AND id = ? AND left_at IS NULL")
+    .bind(leftAt, leftAt, workspaceId, row.id)
+    .run();
+  return row.id;
+}
+
+function normalizeWebhookName(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const name = value.trim().replace(/\s+/g, " ").slice(0, 80);
+  return name || null;
+}
+
+function normalizeWebhookTargetUrl(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== "https:" && url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
+      return null;
+    }
+    return url.toString().slice(0, 1_000);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeWebhookEventTypes(value: unknown): string[] {
+  const raw = Array.isArray(value) ? value : typeof value === "string" && value.trim() ? [value] : ["message.created"];
+  const events = raw
+    .map((event) => (typeof event === "string" ? event.trim() : ""))
+    .filter((event) => THANE_CLI_WEBHOOK_EVENT_TYPES.has(event));
+  return [...new Set(events.length > 0 ? events : ["message.created"])];
+}
+
+function parseWebhookEventTypes(value: string | null | undefined): string[] {
+  if (!value) {
+    return ["message.created"];
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return normalizeWebhookEventTypes(parsed);
+  } catch {
+    return ["message.created"];
+  }
+}
+
+function renderThaneCliWebhook(row: ThaneCliWebhookRow) {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    name: row.name,
+    url: row.target_url,
+    eventTypes: parseWebhookEventTypes(row.event_types),
+    botUserId: row.bot_member_id,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.last_delivered_at ? { lastDeliveredAt: row.last_delivered_at } : {})
+  };
+}
+
+async function signWebhookBody(secret: string, timestamp: string, body: string): Promise<string> {
+  return `v1=${hex(await hmacSha256(`${timestamp}.${body}`, secret))}`;
+}
+
+async function activeThaneCliWebhooksForWorkspace(env: Env, workspaceId: string): Promise<ThaneCliWebhookRow[]> {
+  try {
+    const rows = await env.DB
+      .prepare(
+        `SELECT id, workspace_id, name, target_url, event_types, signing_secret, token_hash, bot_member_id,
+                created_by_member_id, status, created_at, updated_at, last_delivered_at
+         FROM thane_cli_webhooks
+         WHERE workspace_id = ? AND status = 'active'
+         ORDER BY created_at ASC`
+      )
+      .bind(workspaceId)
+      .all<ThaneCliWebhookRow>();
+    return rows.results ?? [];
+  } catch (error) {
+    if (String(error).toLowerCase().includes("no such table")) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function deliverThaneCliWebhookEvent(env: Env, input: {
+  type: "message.created";
+  workspaceId: string;
+  channelId: string;
+  channelVisibility: ThaneCliConversationVisibility;
+  messageId: string;
+  authorId: string;
+  authorHandle: string;
+  authorDisplayName: string | null;
+  text: string;
+  source: ThaneCliMessageOrigin;
+  threadRootId?: string | null;
+  createdAt: string;
+}): Promise<void> {
+  const webhooks = await activeThaneCliWebhooksForWorkspace(env, input.workspaceId);
+  if (webhooks.length === 0) {
+    return;
+  }
+  const deliveries = webhooks
+    .filter((webhook) => parseWebhookEventTypes(webhook.event_types).includes(input.type))
+    .filter((webhook) => webhook.bot_member_id !== input.authorId)
+    .map(async (webhook) => {
+      const canUseChannel = await canThaneCliMemberUseChannel(env, {
+        channelId: input.channelId,
+        visibility: input.channelVisibility,
+        memberId: webhook.bot_member_id
+      });
+      if (!canUseChannel) {
+        return;
+      }
+      const deliveryId = makeId("tdlv");
+      const timestamp = nowIso();
+      const body = JSON.stringify({
+        id: deliveryId,
+        type: input.type,
+        workspaceId: input.workspaceId,
+        channelId: input.channelId,
+        message: {
+          id: input.messageId,
+          workspaceId: input.workspaceId,
+          channelId: input.channelId,
+          authorId: input.authorId,
+          authorHandle: input.authorHandle,
+          ...(input.authorDisplayName ? { authorDisplayName: input.authorDisplayName } : {}),
+          text: input.text,
+          source: input.source,
+          ...(input.threadRootId ? { threadRootId: input.threadRootId } : {}),
+          createdAt: input.createdAt
+        }
+      });
+      const signature = await signWebhookBody(webhook.signing_secret, timestamp, body);
+      try {
+        const response = await fetch(webhook.target_url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "user-agent": "thane-chat-webhooks/1.0",
+            "x-thane-delivery-id": deliveryId,
+            "x-thane-event": input.type,
+            "x-thane-signature": signature,
+            "x-thane-timestamp": timestamp,
+            "x-thane-webhook-id": webhook.id
+          },
+          body
+        });
+        if (response.ok) {
+          await env.DB
+            .prepare("UPDATE thane_cli_webhooks SET last_delivered_at = ?, updated_at = ? WHERE id = ?")
+            .bind(timestamp, timestamp, webhook.id)
+            .run();
+        } else {
+          console.warn("thane_chat_webhook_delivery_failed", {
+            workspaceId: input.workspaceId,
+            webhookId: webhook.id,
+            status: response.status
+          });
+        }
+      } catch (error) {
+        console.warn("thane_chat_webhook_delivery_failed", {
+          workspaceId: input.workspaceId,
+          webhookId: webhook.id,
+          reason: error instanceof Error ? error.message : String(error)
+        });
+      }
+    });
+  await Promise.allSettled(deliveries);
+}
+
 function isThaneCliTeam(planTier: string | null | undefined): boolean {
   return planTier === "cli_team";
 }
@@ -1721,7 +1946,7 @@ async function thaneCliWorkspacePlanTier(env: Env, workspaceId: string): Promise
 
 async function countThaneCliWorkspaceMembers(env: Env, workspaceId: string): Promise<number> {
   const row = await env.DB
-    .prepare("SELECT COUNT(*) AS count FROM thane_cli_workspace_members WHERE workspace_id = ?")
+    .prepare("SELECT COUNT(*) AS count FROM thane_cli_workspace_members WHERE workspace_id = ? AND left_at IS NULL AND email != 'thane@askthane.com'")
     .bind(workspaceId)
     .first<{ count?: number | string | null }>();
   return Number(row?.count ?? 0);
@@ -1733,167 +1958,6 @@ async function countThaneCliPrivateChannels(env: Env, workspaceId: string): Prom
     .bind(workspaceId)
     .first<{ count?: number | string | null }>();
   return Number(row?.count ?? 0);
-}
-
-async function ensureNativeAgentRefs(
-  env: Env,
-  input: {
-    workspaceId: string;
-    workspaceSlug: string;
-    workspaceName: string;
-    channelId: string;
-    channelName: string;
-    channelKind: ThaneCliConversationKind;
-    channelVisibility: ThaneCliConversationVisibility;
-    memberId: string;
-    memberHandle: string;
-    memberDisplayName: string | null;
-    memberEmail: string;
-    memberRole: string;
-  }
-): Promise<NativeAgentRefs> {
-  const now = nowIso();
-  const organizationId = input.workspaceId;
-  await env.DB
-    .prepare(
-      `INSERT INTO organizations (id, slug, name, plan_tier, created_at, updated_at)
-       VALUES (?, ?, ?, (SELECT plan_tier FROM thane_cli_workspaces WHERE id = ?), ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         name = excluded.name,
-         plan_tier = COALESCE((SELECT plan_tier FROM thane_cli_workspaces WHERE id = ?), organizations.plan_tier),
-         updated_at = excluded.updated_at`
-    )
-    .bind(organizationId, input.workspaceSlug, input.workspaceName, input.workspaceId, now, now, input.workspaceId)
-    .run();
-  await env.DB
-    .prepare(
-      `INSERT INTO workspaces (id, organization_id, platform, external_workspace_id, name, plan_tier, created_at, updated_at)
-       VALUES (?, ?, 'thane_cli', ?, ?, (SELECT plan_tier FROM thane_cli_workspaces WHERE id = ?), ?, ?)
-       ON CONFLICT(platform, external_workspace_id) DO UPDATE SET
-         name = excluded.name,
-         plan_tier = COALESCE((SELECT plan_tier FROM thane_cli_workspaces WHERE id = ?), workspaces.plan_tier),
-         updated_at = excluded.updated_at`
-    )
-    .bind(input.workspaceId, organizationId, input.workspaceId, input.workspaceName, input.workspaceId, now, now, input.workspaceId)
-    .run();
-  const userId = `usr_thane_${input.memberId}`;
-  await env.DB
-    .prepare(
-      `INSERT INTO users (id, organization_id, workspace_id, platform, external_user_id, display_name, email, role, created_at, updated_at)
-       VALUES (?, ?, ?, 'thane_cli', ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(workspace_id, platform, external_user_id) DO UPDATE SET
-         display_name = excluded.display_name,
-         email = excluded.email,
-         role = excluded.role,
-         updated_at = excluded.updated_at`
-    )
-    .bind(
-      userId,
-      organizationId,
-      input.workspaceId,
-      input.memberHandle,
-      input.memberDisplayName || input.memberHandle,
-      input.memberEmail,
-      input.memberRole,
-      now,
-      now
-    )
-    .run();
-  const conversationSourceId = `conv_thane_${input.channelId}`;
-  const conversationKind =
-    input.channelKind === "dm" ? "dm" : input.channelVisibility === "private" ? "private_channel" : "public_channel";
-  const isPublic = conversationKind === "public_channel" ? 1 : 0;
-  await env.DB
-    .prepare(
-      `INSERT INTO conversation_sources (
-         id, organization_id, workspace_id, provider, provider_conversation_id,
-         conversation_kind, is_public, created_at, updated_at
-       ) VALUES (?, ?, ?, 'thane_cli', ?, ?, ?, ?, ?)
-       ON CONFLICT(organization_id, provider, provider_conversation_id) DO UPDATE SET
-         conversation_kind = excluded.conversation_kind,
-         is_public = excluded.is_public,
-         updated_at = excluded.updated_at`
-    )
-    .bind(conversationSourceId, organizationId, input.workspaceId, input.channelId, conversationKind, isPublic, now, now)
-    .run();
-  await env.DB
-    .prepare(
-      `INSERT OR IGNORE INTO conversation_memberships (
-         id, organization_id, workspace_id, conversation_source_id, user_id, role, is_active, synced_at
-       ) VALUES (?, ?, ?, ?, ?, 'member', 1, ?)`
-    )
-    .bind(makeId("cmem"), organizationId, input.workspaceId, conversationSourceId, userId, now)
-    .run();
-  return { organizationId, workspaceId: input.workspaceId, userId, conversationSourceId };
-}
-
-async function nativeAiGate(env: Env, workspaceId: string): Promise<{ ok: boolean; reason?: string }> {
-  const planTier = await thaneCliWorkspacePlanTier(env, workspaceId);
-  if (isThaneCliTeam(planTier)) {
-    return { ok: true };
-  }
-  const memberCount = await countThaneCliWorkspaceMembers(env, workspaceId);
-  if (memberCount > THANE_CLI_FREE_LIMITS.members) {
-    return { ok: false, reason: "free_member_limit_exceeded" };
-  }
-  const cap = Number(env.FREE_TIER_MONTHLY_AI_CAP_USD ?? "10");
-  if (Number.isFinite(cap) && cap > 0) {
-    const since = new Date();
-    since.setUTCDate(1);
-    since.setUTCHours(0, 0, 0, 0);
-    const row = await env.DB
-      .prepare(
-        `SELECT COALESCE(SUM(total_cost_usd), 0) AS total
-         FROM llm_usage_events
-         WHERE workspace_id = ?
-           AND created_at >= ?`
-      )
-      .bind(workspaceId, since.toISOString())
-      .first<{ total?: number | string | null }>();
-    if (Number(row?.total ?? 0) >= cap) {
-      return { ok: false, reason: "free_ai_spend_limit_exceeded" };
-    }
-  }
-  return { ok: true };
-}
-
-async function inferNativeTasksFromMessage(
-  env: Env,
-  input: {
-    refs: NativeAgentRefs;
-    text: string;
-    messageId: string;
-    channelId: string;
-    authorHandle: string;
-    authorDisplayName: string | null;
-    occurredAt: string;
-  }
-): Promise<number> {
-  const gate = await nativeAiGate(env, input.refs.workspaceId);
-  if (!gate.ok || !env.OPENAI_API_KEY) {
-    return 0;
-  }
-  const llm = createLlmClient({
-    provider: env.DEFAULT_LLM_PROVIDER ?? "openai",
-    model: env.DEFAULT_LLM_MODEL ?? "gpt-4.1-mini",
-    ...(env.OPENAI_API_KEY ? { openAiApiKey: env.OPENAI_API_KEY } : {}),
-    ...(env.ANTHROPIC_API_KEY ? { anthropicApiKey: env.ANTHROPIC_API_KEY } : {})
-  });
-  const event: MessageEvent = {
-    workspaceId: input.refs.workspaceId,
-    channelId: input.refs.conversationSourceId,
-    messageId: input.messageId,
-    text: input.text,
-    author: {
-      platform: "thane_cli",
-      platformUserId: input.authorHandle,
-      ...(input.authorDisplayName ? { displayName: input.authorDisplayName } : {})
-    },
-    occurredAt: input.occurredAt
-  };
-  const repo = new D1TaskRepository(env.DB);
-  const tasks = await ingestMessageForTasks(event, { llm, tasks: repo });
-  return tasks.length;
 }
 
 function validateInvite(row: Awaited<ReturnType<typeof inviteByToken>>): Response | null {
@@ -2448,7 +2512,7 @@ async function handleThaneCliProfileUpdate(request: Request, env: Env): Promise<
     assignments.push("updated_at = ?");
     values.push(nowIso(), workspaceId, email);
     await env.DB
-      .prepare(`UPDATE thane_cli_workspace_members SET ${assignments.join(", ")} WHERE workspace_id = ? AND email = ?`)
+      .prepare(`UPDATE thane_cli_workspace_members SET ${assignments.join(", ")} WHERE workspace_id = ? AND email = ? AND left_at IS NULL`)
       .bind(...values)
       .run();
     return Response.json({
@@ -2474,7 +2538,7 @@ async function handleThaneCliProfileUpdate(request: Request, env: Env): Promise<
     });
   }
   await env.DB
-    .prepare("UPDATE thane_cli_workspace_members SET display_name = ?, updated_at = ? WHERE email = ?")
+    .prepare("UPDATE thane_cli_workspace_members SET display_name = ?, updated_at = ? WHERE email = ? AND left_at IS NULL")
     .bind(displayName, nowIso(), email)
     .run();
   await setAccountProfileDisplayName(env, email, displayName);
@@ -2538,7 +2602,7 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
       `SELECT w.id, w.workspace_slug, w.workspace_name, w.ascii_art, w.plan_tier, w.created_at, w.updated_at, m.role
        FROM thane_cli_workspace_members m
        JOIN thane_cli_workspaces w ON w.id = m.workspace_id
-       WHERE m.email = ? AND w.status = 'active'
+       WHERE m.email = ? AND m.left_at IS NULL AND w.status = 'active'
        ORDER BY w.workspace_slug`
     )
     .bind(email)
@@ -2579,16 +2643,18 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
     });
   }
 
+  const rawAskThaneIntegration = await askThaneIntegrationForWorkspace(env, activeWorkspace.id);
+  const includeAskThaneMember = rawAskThaneIntegration?.enabled === 1;
   const memberRows = await env.DB
     .prepare(
       `SELECT id, account_id, email, display_name, handle, role, joined_at
        FROM thane_cli_workspace_members
-       WHERE workspace_id = ?
+       WHERE workspace_id = ? AND left_at IS NULL
        ORDER BY handle`
     )
     .bind(activeWorkspace.id)
     .all<{ id: string; account_id: string; email: string; display_name: string | null; handle: string; role: "owner" | "admin" | "member"; joined_at: string }>();
-  const members = memberRows.results ?? [];
+  const members = (memberRows.results ?? []).filter((member) => includeAskThaneMember || member.email !== "thane@askthane.com");
   const memberIds = members.map((member) => member.id);
   const currentMember = members.find((member) => member.email === email);
   const canSeeMemberEmails = isThaneCliWorkspaceAdmin(currentMember?.role);
@@ -2659,7 +2725,8 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
 
   const messageRows = await env.DB
     .prepare(
-      `SELECT msg.id, msg.workspace_id, msg.channel_id, msg.author_member_id, msg.text, msg.source, msg.thread_root_id, msg.created_at
+      `SELECT msg.id, msg.workspace_id, msg.channel_id, msg.author_member_id, msg.text,
+              COALESCE(msg.origin, msg.source) AS source, msg.thread_root_id, msg.created_at
        FROM thane_cli_chat_messages msg
        JOIN thane_cli_channels c ON c.id = msg.channel_id
        WHERE msg.workspace_id = ?
@@ -2674,7 +2741,7 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
       channel_id: string;
       author_member_id: string;
       text: string;
-      source: "chat" | "terminal";
+      source: ThaneCliMessageOrigin;
       thread_root_id: string | null;
       created_at: string;
     }>();
@@ -2714,7 +2781,7 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
     reactions: reactionsByMessage.get(message.id) ?? [],
     mentions: [...message.text.matchAll(/@([a-zA-Z0-9._-]+)/g)].map((match) => String(match[1] ?? "").toLowerCase()).filter(Boolean)
   }));
-  const askThaneIntegration = renderAskThaneIntegration(await askThaneIntegrationForWorkspace(env, activeWorkspace.id));
+  const askThaneIntegration = renderAskThaneIntegration(rawAskThaneIntegration);
 
   return Response.json({
     ok: true,
@@ -3052,238 +3119,6 @@ async function handleThaneCliChannelMemberRemove(request: Request, env: Env): Pr
   return Response.json({ ok: true, channelId: channel.id, memberId: targetMember.id, removed: true });
 }
 
-async function recentThaneChatContext(env: Env, input: { workspaceId: string; channelId: string; threadRootId?: string | null }): Promise<string> {
-  const messageRows = await env.DB
-    .prepare(
-      `SELECT msg.id, msg.text, msg.created_at, msg.thread_root_id, member.account_id, member.email, member.handle
-       FROM thane_cli_chat_messages msg
-       JOIN thane_cli_workspace_members member ON member.id = msg.author_member_id
-       WHERE msg.workspace_id = ?
-         AND msg.channel_id = ?
-       ORDER BY msg.created_at DESC
-       LIMIT 40`
-    )
-    .bind(input.workspaceId, input.channelId)
-    .all<{ id: string; text: string; created_at: string; thread_root_id: string | null; account_id: string; email: string; handle: string | null }>();
-  const rows = (messageRows.results ?? []).reverse();
-  const focusedRows = input.threadRootId
-    ? rows.filter((row) => row.id === input.threadRootId || row.thread_root_id === input.threadRootId)
-    : rows;
-  return focusedRows
-    .slice(-30)
-    .map((row) => `[${row.created_at}] @${publicHandleForMember(row)}: ${row.text}`)
-    .join("\n");
-}
-
-async function generateNativeAskThaneReply(
-  env: Env,
-  input: { workspaceName: string; channelName: string; context: string; text: string }
-): Promise<{ text: string; model: string; usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } } | null> {
-  if ((env.DEFAULT_LLM_PROVIDER ?? "openai") !== "openai" || !env.OPENAI_API_KEY) {
-    return null;
-  }
-  const model = env.DEFAULT_LLM_MODEL?.trim() || "gpt-4.1-mini";
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${env.OPENAI_API_KEY}`,
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.2,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are Ask Thane inside Thane Chat, an agent-first chat application. Reply helpfully and concisely in plain text. You can use recent chat context, but do not claim to have actions or tools you do not have. If the user asks you to perform a product action that is not possible from context, say what you can do next."
-        },
-        {
-          role: "user",
-          content:
-            `Workspace: ${input.workspaceName}\nChannel: #${input.channelName}\n\nRecent context:\n${input.context || "(no recent context)"}\n\nNew message mentioning @thane:\n${input.text}`
-        }
-      ]
-    })
-  });
-  const payload = (await response.json().catch(() => ({}))) as {
-    choices?: Array<{ message?: { content?: string | null } }>;
-    error?: { message?: string };
-    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-  };
-  if (!response.ok) {
-    console.warn("native_ask_thane_openai_failed", { status: response.status, reason: payload.error?.message ?? "unknown" });
-    return null;
-  }
-  const text = payload.choices?.[0]?.message?.content?.trim();
-  return text ? { text: text.slice(0, 4000), model, ...(payload.usage ? { usage: payload.usage } : {}) } : null;
-}
-
-async function recordNativeLlmUsage(
-  env: Env,
-  input: { organizationId: string; workspaceId: string; model: string; sourceMessageId: string; requestType: string; promptTokens?: number; completionTokens?: number; totalTokens?: number }
-): Promise<void> {
-  await env.DB
-    .prepare(
-      `INSERT INTO llm_usage_events (
-         id, organization_id, workspace_id, provider, model, prompt_tokens, completion_tokens, total_tokens,
-         prompt_cost_usd, completion_cost_usd, total_cost_usd, currency, pricing_version, api_endpoint,
-         request_type, source, source_message_id, created_at
-       ) VALUES (?, ?, ?, 'openai', ?, ?, ?, ?, NULL, NULL, NULL, 'usd', 'unpriced', 'chat.completions', ?, 'thane_chat', ?, ?)`
-    )
-    .bind(
-      makeId("llm"),
-      input.organizationId,
-      input.workspaceId,
-      input.model,
-      input.promptTokens ?? 0,
-      input.completionTokens ?? 0,
-      input.totalTokens ?? 0,
-      input.requestType,
-      input.sourceMessageId,
-      nowIso()
-    )
-    .run();
-}
-
-async function dispatchNativeAgentRuntime(
-  env: Env,
-  input: {
-    refs: NativeAgentRefs;
-    workspaceId: string;
-    channelId: string;
-    authorHandle: string;
-    authorEmail: string;
-    authorDisplayName: string | null;
-    messageId: string;
-    text: string;
-    threadRootId?: string | null;
-    occurredAt: string;
-    shouldRespond: boolean;
-  }
-): Promise<{
-  usedTools?: boolean;
-  createdTaskIds?: string[];
-  updatedTaskIds?: string[];
-  reply?: { messageId?: string; text?: string };
-} | null> {
-  const baseUrl = env.THANE_BOT_INTERNAL_BASE_URL?.trim().replace(/\/+$/g, "");
-  const bearerToken = env.INTERNAL_API_BEARER_TOKEN?.trim();
-  if (!baseUrl || !bearerToken) {
-    return null;
-  }
-  const response = await fetch(`${baseUrl}/internal/thane-chat/agent-message`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${bearerToken}`,
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({
-      organizationId: input.refs.organizationId,
-      workspaceId: input.workspaceId,
-      conversationSourceId: input.refs.conversationSourceId,
-      channelId: input.channelId,
-      authorExternalUserId: input.authorHandle,
-      authorEmail: input.authorEmail,
-      authorDisplayName: input.authorDisplayName,
-      messageId: input.messageId,
-      text: input.text,
-      threadRootId: input.threadRootId,
-      occurredAt: input.occurredAt,
-      shouldRespond: input.shouldRespond
-    })
-  });
-  const payload = (await response.json().catch(() => ({}))) as {
-    ok?: boolean;
-    error?: string;
-    usedTools?: boolean;
-    createdTaskIds?: string[];
-    updatedTaskIds?: string[];
-    reply?: { messageId?: string; text?: string };
-  };
-  if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error || `native_agent_runtime_failed:${response.status}`);
-  }
-  return payload;
-}
-
-async function maybeRespondWithNativeAskThane(
-  env: Env,
-  input: {
-    workspaceId: string;
-    workspaceName: string;
-    channelId: string;
-    channelName: string;
-    text: string;
-    sourceMessageId: string;
-    threadRootId?: string | null;
-  }
-): Promise<{ messageId?: string; text?: string; reason?: string }> {
-  if (!/@thane\b/i.test(input.text)) {
-    return { reason: "not_mentioned" };
-  }
-  const gate = await nativeAiGate(env, input.workspaceId);
-  if (!gate.ok) {
-    return { reason: gate.reason ?? "billing_gate_blocked" };
-  }
-  const integration = await askThaneIntegrationForWorkspace(env, input.workspaceId);
-  if (!integration || integration.enabled !== 1) {
-    return { reason: "disabled" };
-  }
-  const bot = integration.bot_member_id
-    ? await env.DB
-        .prepare("SELECT id, account_id, email, display_name, handle, role FROM thane_cli_workspace_members WHERE workspace_id = ? AND id = ? LIMIT 1")
-        .bind(input.workspaceId, integration.bot_member_id)
-        .first<{ id: string; account_id: string; email: string; display_name: string | null; handle: string; role: string }>()
-    : await ensureAskThaneMember(env, input.workspaceId);
-  const botMember = bot?.id ? bot : await ensureAskThaneMember(env, input.workspaceId);
-  const replyThreadRootId = input.threadRootId || null;
-  const context = await recentThaneChatContext(env, {
-    workspaceId: input.workspaceId,
-    channelId: input.channelId,
-    threadRootId: replyThreadRootId
-  });
-  const reply = await generateNativeAskThaneReply(env, {
-    workspaceName: input.workspaceName,
-    channelName: input.channelName,
-    context,
-    text: input.text
-  });
-  if (!reply) {
-    return { reason: "no_reply" };
-  }
-  const createdAt = nowIso();
-  const messageId = makeId("tmsg");
-  await env.DB
-    .prepare(
-      `INSERT INTO thane_cli_chat_messages (
-         id, workspace_id, channel_id, author_member_id, text, source, thread_root_id, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, 'chat', ?, ?, ?)`
-    )
-    .bind(messageId, input.workspaceId, input.channelId, botMember.id, reply.text, replyThreadRootId, createdAt, createdAt)
-    .run();
-  await recordNativeLlmUsage(env, {
-    organizationId: input.workspaceId,
-    workspaceId: input.workspaceId,
-    model: reply.model,
-    sourceMessageId: input.sourceMessageId,
-    requestType: "native_ask_thane_reply",
-    ...(reply.usage?.prompt_tokens !== undefined ? { promptTokens: reply.usage.prompt_tokens } : {}),
-    ...(reply.usage?.completion_tokens !== undefined ? { completionTokens: reply.usage.completion_tokens } : {}),
-    ...(reply.usage?.total_tokens !== undefined ? { totalTokens: reply.usage.total_tokens } : {})
-  }).catch((error) => {
-    console.warn("native_ask_thane_usage_record_failed", {
-      workspaceId: input.workspaceId,
-      reason: error instanceof Error ? error.message : String(error)
-    });
-  });
-  await env.DB
-    .prepare("UPDATE thane_cli_ask_thane_integrations SET bot_member_id = ?, last_event_at = ?, updated_at = ? WHERE workspace_id = ?")
-    .bind(botMember.id, createdAt, createdAt, input.workspaceId)
-    .run();
-  return { messageId, text: reply.text };
-}
-
 async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<Response> {
   const email = await requireAuthEmail(request, env);
   if (!email) {
@@ -3300,7 +3135,6 @@ async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<
     return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
   }
   const source = payload?.source === "terminal" ? "terminal" : "chat";
-  const mentionsAskThane = /@thane\b/i.test(text);
   const messageRateLimited = await enforceWorkspaceActionRateLimits(env, {
     action: "message_create",
     workspaceId,
@@ -3313,24 +3147,6 @@ async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<
   if (messageRateLimited) {
     return messageRateLimited;
   }
-  if (mentionsAskThane) {
-    const askThaneRateLimited = await enforceWorkspaceActionRateLimits(env, {
-      action: "ask_thane_mention",
-      workspaceId,
-      memberId: member.id,
-      email: member.email,
-      memberLimit: 10,
-      workspaceLimit: 60,
-      windowSeconds: 60
-    });
-    if (askThaneRateLimited) {
-      return askThaneRateLimited;
-    }
-  }
-  const workspace = await env.DB
-    .prepare("SELECT id, workspace_name, workspace_slug FROM thane_cli_workspaces WHERE id = ? LIMIT 1")
-    .bind(workspaceId)
-    .first<{ id: string; workspace_name: string | null; workspace_slug: string }>();
   const channelId = typeof payload?.channelId === "string" && payload.channelId.trim() ? payload.channelId.trim() : null;
   const channelName = normalizeChannelName(payload?.channelName);
   const channel = channelId
@@ -3358,96 +3174,11 @@ async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<
   await env.DB
     .prepare(
       `INSERT INTO thane_cli_chat_messages (
-         id, workspace_id, channel_id, author_member_id, text, source, thread_root_id, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         id, workspace_id, channel_id, author_member_id, text, source, origin, thread_root_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .bind(messageId, workspaceId, channel.id, member.id, text, source, threadRootId, createdAt, createdAt)
+    .bind(messageId, workspaceId, channel.id, member.id, text, source, source, threadRootId, createdAt, createdAt)
     .run();
-  let passiveTaskCount = 0;
-  let nativeRuntimeReply: { messageId?: string; text?: string } | null = null;
-  let usedSharedNativeRuntime = false;
-  if ((source === "chat" || mentionsAskThane) && workspace?.id) {
-    const refs = await ensureNativeAgentRefs(env, {
-      workspaceId,
-      workspaceSlug: workspace.workspace_slug,
-      workspaceName: workspace.workspace_name || workspace.workspace_slug,
-      channelId: channel.id,
-      channelName: channel.name,
-      channelKind: channel.kind,
-      channelVisibility: channel.visibility,
-      memberId: member.id,
-      memberHandle: member.handle,
-      memberDisplayName: member.display_name,
-      memberEmail: member.email,
-      memberRole: member.role
-    });
-    const shouldRespond = mentionsAskThane;
-    const runtimeResult = await dispatchNativeAgentRuntime(env, {
-      refs,
-      workspaceId,
-      channelId: channel.id,
-      authorHandle: member.handle,
-      authorEmail: member.email,
-      authorDisplayName: member.display_name,
-      messageId,
-      text,
-      threadRootId,
-      occurredAt: createdAt,
-      shouldRespond
-    }).catch((error) => {
-      console.warn("native_agent_runtime_failed", {
-        workspaceId,
-        channelId: channel.id,
-        reason: error instanceof Error ? error.message : String(error)
-      });
-      return null;
-    });
-    if (runtimeResult) {
-      usedSharedNativeRuntime = true;
-      passiveTaskCount = runtimeResult.createdTaskIds?.length ?? 0;
-      nativeRuntimeReply = runtimeResult.reply ?? null;
-    } else {
-      passiveTaskCount = await inferNativeTasksFromMessage(env, {
-        refs,
-        text,
-        messageId,
-        channelId: channel.id,
-        authorHandle: member.handle,
-        authorDisplayName: member.display_name,
-        occurredAt: createdAt
-      }).catch((error) => {
-        console.warn("native_task_extraction_failed", {
-          workspaceId,
-          channelId: channel.id,
-          reason: error instanceof Error ? error.message : String(error)
-        });
-        return 0;
-      });
-    }
-  }
-  const askThaneReply: { messageId?: string; text?: string; reason?: string } =
-    nativeRuntimeReply
-      ? nativeRuntimeReply
-      : usedSharedNativeRuntime && !mentionsAskThane
-        ? { reason: "handled_by_shared_runtime" }
-        : mentionsAskThane
-      ? await maybeRespondWithNativeAskThane(env, {
-          workspaceId,
-          workspaceName: workspace?.workspace_name || workspace?.workspace_slug || workspaceId,
-          channelId: channel.id,
-          channelName: channel.name,
-          text,
-          sourceMessageId: messageId,
-          threadRootId
-        }).catch((error) => {
-          console.warn("native_ask_thane_reply_failed", {
-            workspaceId,
-            channelId: channel.id,
-            reason: error instanceof Error ? error.message : String(error)
-          });
-          return { reason: "failed" };
-        })
-        : { reason: "non_chat_source" };
   await broadcastThaneChatEvent(env, {
     type: "message_created",
     workspaceId,
@@ -3461,21 +3192,26 @@ async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<
       reason: error instanceof Error ? error.message : String(error)
     });
   });
-  if (askThaneReply.messageId) {
-    await broadcastThaneChatEvent(env, {
-      type: "message_created",
+  await deliverThaneCliWebhookEvent(env, {
+    type: "message.created",
+    workspaceId,
+    channelId: channel.id,
+    channelVisibility: channel.visibility,
+    messageId,
+    authorId: member.id,
+    authorHandle: publicHandleForMember(member),
+    authorDisplayName: publicDisplayNameForMember(member),
+    text,
+    source,
+    threadRootId,
+    createdAt
+  }).catch((error) => {
+    console.warn("thane_chat_webhook_dispatch_failed", {
       workspaceId,
-      channelId: channel.id,
-      messageId: askThaneReply.messageId,
-      occurredAt: nowIso()
-    }).catch((error) => {
-      console.warn("thane_chat_ask_thane_reply_broadcast_failed", {
-        workspaceId,
-        channelId: channel.id,
-        reason: error instanceof Error ? error.message : String(error)
-      });
+      messageId,
+      reason: error instanceof Error ? error.message : String(error)
     });
-  }
+  });
   return Response.json({
     ok: true,
     message: {
@@ -3490,8 +3226,7 @@ async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<
       reactions: [],
       mentions: [...text.matchAll(/@([a-zA-Z0-9._-]+)/g)].map((match) => String(match[1] ?? "").toLowerCase()).filter(Boolean)
     },
-    passiveTaskCount,
-    ...(askThaneReply.messageId ? { askThaneReply } : {})
+    passiveTaskCount: 0
   });
 }
 
@@ -3791,8 +3526,15 @@ async function removeThaneCliWorkspaceMember(env: Env, input: {
   workspaceId: string;
   memberId: string;
 }): Promise<void> {
-  await env.DB.prepare("DELETE FROM thane_cli_channel_members WHERE member_id = ?").bind(input.memberId).run();
-  await env.DB.prepare("DELETE FROM thane_cli_workspace_members WHERE workspace_id = ? AND id = ?").bind(input.workspaceId, input.memberId).run();
+  const leftAt = nowIso();
+  await env.DB
+    .prepare("UPDATE thane_cli_channel_members SET left_at = ? WHERE member_id = ? AND left_at IS NULL")
+    .bind(leftAt, input.memberId)
+    .run();
+  await env.DB
+    .prepare("UPDATE thane_cli_workspace_members SET left_at = ?, updated_at = ? WHERE workspace_id = ? AND id = ? AND left_at IS NULL")
+    .bind(leftAt, leftAt, input.workspaceId, input.memberId)
+    .run();
 }
 
 async function handleThaneCliWorkspaceLeave(request: Request, env: Env): Promise<Response> {
@@ -3967,7 +3709,7 @@ async function handleThaneCliWorkspaceMemberRole(request: Request, env: Env): Pr
     return Response.json({ ok: false, error: "owner_required" }, { status: 403 });
   }
   await env.DB
-    .prepare("UPDATE thane_cli_workspace_members SET role = ?, updated_at = ? WHERE workspace_id = ? AND id = ?")
+    .prepare("UPDATE thane_cli_workspace_members SET role = ?, updated_at = ? WHERE workspace_id = ? AND id = ? AND left_at IS NULL")
     .bind(role, nowIso(), workspaceId, targetMember.id)
     .run();
   return Response.json({ ok: true, workspaceId, memberId: targetMember.id, role });
@@ -4045,6 +3787,287 @@ async function handleThaneCliBillingLinkCreate(request: Request, env: Env): Prom
   });
 }
 
+async function requireWebhookAdmin(request: Request, env: Env, workspaceId: string): Promise<{ email: string; member: NonNullable<Awaited<ReturnType<typeof requireThaneCliWorkspaceMember>>> } | Response> {
+  const email = await requireAuthEmail(request, env);
+  if (!email) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  const member = await requireThaneCliWorkspaceMember(env, workspaceId, email);
+  if (!member) {
+    return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
+  }
+  if (!isThaneCliWorkspaceAdmin(member.role)) {
+    return Response.json({ ok: false, error: "workspace_admin_required" }, { status: 403 });
+  }
+  return { email, member };
+}
+
+async function handleThaneCliWebhookList(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const workspaceId = url.searchParams.get("workspaceId")?.trim() || null;
+  if (!workspaceId) {
+    return Response.json({ ok: false, error: "workspace_id_required" }, { status: 400 });
+  }
+  const auth = await requireWebhookAdmin(request, env, workspaceId);
+  if (auth instanceof Response) {
+    return auth;
+  }
+  try {
+    const rows = await env.DB
+      .prepare(
+        `SELECT id, workspace_id, name, target_url, event_types, signing_secret, token_hash, bot_member_id,
+                created_by_member_id, status, created_at, updated_at, last_delivered_at
+         FROM thane_cli_webhooks
+         WHERE workspace_id = ?
+         ORDER BY created_at ASC`
+      )
+      .bind(workspaceId)
+      .all<ThaneCliWebhookRow>();
+    return Response.json({ ok: true, webhooks: (rows.results ?? []).map(renderThaneCliWebhook) });
+  } catch (error) {
+    if (String(error).toLowerCase().includes("no such table")) {
+      return Response.json({ ok: true, webhooks: [] });
+    }
+    throw error;
+  }
+}
+
+async function handleThaneCliWebhookCreate(request: Request, env: Env): Promise<Response> {
+  const payload = await parseJsonObject<ThaneCliWebhookCreatePayload>(request);
+  const workspaceId = typeof payload?.workspaceId === "string" && payload.workspaceId.trim() ? payload.workspaceId.trim() : null;
+  const name = normalizeWebhookName(payload?.name);
+  const targetUrl = normalizeWebhookTargetUrl(payload?.url);
+  if (!workspaceId || !name || !targetUrl) {
+    return Response.json({ ok: false, error: "workspace_id_name_and_https_url_required" }, { status: 400 });
+  }
+  const auth = await requireWebhookAdmin(request, env, workspaceId);
+  if (auth instanceof Response) {
+    return auth;
+  }
+  const rateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: "webhook_create",
+    workspaceId,
+    memberId: auth.member.id,
+    email: auth.email,
+    memberLimit: 20,
+    workspaceLimit: 100,
+    windowSeconds: 60 * 60
+  });
+  if (rateLimited) {
+    return rateLimited;
+  }
+  const existing = await env.DB
+    .prepare("SELECT id FROM thane_cli_webhooks WHERE workspace_id = ? AND name = ? AND status = 'active' LIMIT 1")
+    .bind(workspaceId, name)
+    .first<{ id?: string }>();
+  if (existing?.id) {
+    return Response.json({ ok: false, error: "webhook_name_exists" }, { status: 409 });
+  }
+  const id = makeId("twh");
+  const token = makeWebhookCredential("twk");
+  const signingSecret = makeWebhookCredential("whsec");
+  const eventTypes = normalizeWebhookEventTypes(payload?.eventTypes);
+  const now = nowIso();
+  const bot = await ensureThaneCliMember(env, {
+    workspaceId,
+    email: `webhook+${id}@apps.thane.chat`,
+    displayName: name,
+    role: "member"
+  });
+  await env.DB
+    .prepare(
+      `INSERT INTO thane_cli_webhooks (
+         id, workspace_id, name, target_url, event_types, signing_secret, token_hash, bot_member_id,
+         created_by_member_id, status, created_at, updated_at, last_delivered_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL)`
+    )
+    .bind(id, workspaceId, name, targetUrl, JSON.stringify(eventTypes), signingSecret, await sha256Hex(token), bot.id, auth.member.id, now, now)
+    .run();
+  const row = await env.DB
+    .prepare(
+      `SELECT id, workspace_id, name, target_url, event_types, signing_secret, token_hash, bot_member_id,
+              created_by_member_id, status, created_at, updated_at, last_delivered_at
+       FROM thane_cli_webhooks
+       WHERE id = ?
+       LIMIT 1`
+    )
+    .bind(id)
+    .first<ThaneCliWebhookRow>();
+  const postMessageEndpoint = `${new URL(request.url).origin}/v1/thane-cli/webhooks/messages`;
+  return Response.json({
+    ok: true,
+    webhook: row ? renderThaneCliWebhook(row) : {
+      id,
+      workspaceId,
+      name,
+      url: targetUrl,
+      eventTypes,
+      botUserId: bot.id,
+      status: "active",
+      createdAt: now,
+      updatedAt: now
+    },
+    token,
+    signingSecret,
+    postMessageEndpoint
+  });
+}
+
+async function handleThaneCliWebhookDisable(request: Request, env: Env): Promise<Response> {
+  const payload = await parseJsonObject<ThaneCliWebhookDisablePayload>(request);
+  const workspaceId = typeof payload?.workspaceId === "string" && payload.workspaceId.trim() ? payload.workspaceId.trim() : null;
+  const webhookRef = typeof payload?.webhook === "string" && payload.webhook.trim() ? payload.webhook.trim() : null;
+  if (!workspaceId || !webhookRef) {
+    return Response.json({ ok: false, error: "workspace_id_and_webhook_required" }, { status: 400 });
+  }
+  const auth = await requireWebhookAdmin(request, env, workspaceId);
+  if (auth instanceof Response) {
+    return auth;
+  }
+  const row = await env.DB
+    .prepare(
+      `SELECT id, workspace_id, name, target_url, event_types, signing_secret, token_hash, bot_member_id,
+              created_by_member_id, status, created_at, updated_at, last_delivered_at
+       FROM thane_cli_webhooks
+       WHERE workspace_id = ? AND (id = ? OR name = ?)
+       LIMIT 1`
+    )
+    .bind(workspaceId, webhookRef, webhookRef)
+    .first<ThaneCliWebhookRow>();
+  if (!row?.id) {
+    return Response.json({ ok: false, error: "webhook_not_found" }, { status: 404 });
+  }
+  const now = nowIso();
+  await removeThaneCliWorkspaceMember(env, { workspaceId, memberId: row.bot_member_id });
+  await env.DB
+    .prepare("UPDATE thane_cli_webhooks SET status = 'disabled', updated_at = ? WHERE workspace_id = ? AND id = ?")
+    .bind(now, workspaceId, row.id)
+    .run();
+  return Response.json({
+    ok: true,
+    webhook: renderThaneCliWebhook({ ...row, status: "disabled", updated_at: now })
+  });
+}
+
+async function handleThaneCliWebhookMessageCreate(request: Request, env: Env): Promise<Response> {
+  const authHeader = request.headers.get("authorization") ?? "";
+  const token = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice("bearer ".length).trim() : "";
+  if (!token) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  const payload = await parseJsonObject<ThaneCliWebhookMessagePayload>(request);
+  const text = normalizeChatText(payload?.text);
+  const channelId = typeof payload?.channelId === "string" && payload.channelId.trim() ? payload.channelId.trim() : null;
+  const channelName = normalizeChannelName(payload?.channelName);
+  if (!text || (!channelId && !channelName)) {
+    return Response.json({ ok: false, error: "channel_and_text_required" }, { status: 400 });
+  }
+  const tokenHash = await sha256Hex(token);
+  const webhook = await env.DB
+    .prepare(
+      `SELECT id, workspace_id, name, target_url, event_types, signing_secret, token_hash, bot_member_id,
+              created_by_member_id, status, created_at, updated_at, last_delivered_at
+       FROM thane_cli_webhooks
+       WHERE token_hash = ? AND status = 'active'
+       LIMIT 1`
+    )
+    .bind(tokenHash)
+    .first<ThaneCliWebhookRow>();
+  if (!webhook?.id) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  const bot = await env.DB
+    .prepare(
+      `SELECT id, account_id, email, display_name, handle, role
+       FROM thane_cli_workspace_members
+       WHERE workspace_id = ? AND id = ? AND left_at IS NULL
+       LIMIT 1`
+    )
+    .bind(webhook.workspace_id, webhook.bot_member_id)
+    .first<{ id: string; account_id: string; email: string; display_name: string | null; handle: string; role: string }>();
+  if (!bot?.id) {
+    return Response.json({ ok: false, error: "webhook_not_active" }, { status: 403 });
+  }
+  const rateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: "webhook_message_create",
+    workspaceId: webhook.workspace_id,
+    memberId: bot.id,
+    email: bot.email,
+    memberLimit: 120,
+    workspaceLimit: 1_200,
+    windowSeconds: 60
+  });
+  if (rateLimited) {
+    return rateLimited;
+  }
+  const channel = await resolveThaneCliChannel(env, { workspaceId: webhook.workspace_id, channelId, channelName });
+  if (!channel?.id || !channel.kind || !channel.visibility) {
+    return Response.json({ ok: false, error: "channel_not_found" }, { status: 404 });
+  }
+  if (!(await canThaneCliMemberUseChannel(env, { channelId: channel.id, visibility: channel.visibility, memberId: bot.id }))) {
+    return Response.json({ ok: false, error: "channel_not_found" }, { status: 404 });
+  }
+  const createdAt = nowIso();
+  const messageId = makeId("tmsg");
+  const threadRootId = typeof payload?.threadRootId === "string" && payload.threadRootId.trim() ? payload.threadRootId.trim() : null;
+  await env.DB
+    .prepare(
+      `INSERT INTO thane_cli_chat_messages (
+         id, workspace_id, channel_id, author_member_id, text, source, origin, thread_root_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, 'terminal', 'webhook', ?, ?, ?)`
+    )
+    .bind(messageId, webhook.workspace_id, channel.id, bot.id, text, threadRootId, createdAt, createdAt)
+    .run();
+  await broadcastThaneChatEvent(env, {
+    type: "message_created",
+    workspaceId: webhook.workspace_id,
+    channelId: channel.id,
+    messageId,
+    occurredAt: createdAt
+  }).catch((error) => {
+    console.warn("thane_chat_webhook_message_broadcast_failed", {
+      workspaceId: webhook.workspace_id,
+      channelId: channel.id,
+      reason: error instanceof Error ? error.message : String(error)
+    });
+  });
+  await deliverThaneCliWebhookEvent(env, {
+    type: "message.created",
+    workspaceId: webhook.workspace_id,
+    channelId: channel.id,
+    channelVisibility: channel.visibility,
+    messageId,
+    authorId: bot.id,
+    authorHandle: publicHandleForMember(bot),
+    authorDisplayName: publicDisplayNameForMember(bot),
+    text,
+    source: "webhook",
+    threadRootId,
+    createdAt
+  }).catch((error) => {
+    console.warn("thane_chat_webhook_dispatch_failed", {
+      workspaceId: webhook.workspace_id,
+      messageId,
+      reason: error instanceof Error ? error.message : String(error)
+    });
+  });
+  return Response.json({
+    ok: true,
+    message: {
+      id: messageId,
+      workspaceId: webhook.workspace_id,
+      channelId: channel.id,
+      authorId: bot.id,
+      text,
+      source: "webhook",
+      ...(threadRootId ? { threadRootId } : {}),
+      createdAt,
+      reactions: [],
+      mentions: [...text.matchAll(/@([a-zA-Z0-9._-]+)/g)].map((match) => String(match[1] ?? "").toLowerCase()).filter(Boolean)
+    }
+  });
+}
+
 async function handleThaneCliAskThaneStatus(request: Request, env: Env): Promise<Response> {
   const email = await requireAuthEmail(request, env);
   if (!email) {
@@ -4092,8 +4115,12 @@ async function handleThaneCliAskThaneToggle(request: Request, env: Env, enabled:
   if (rateLimited) {
     return rateLimited;
   }
-  const bot = await ensureAskThaneMember(env, workspaceId);
   const now = nowIso();
+  const existingIntegration = await askThaneIntegrationForWorkspace(env, workspaceId);
+  const bot = enabled ? await ensureAskThaneMember(env, workspaceId) : null;
+  if (!enabled) {
+    await softLeaveAskThaneMember(env, workspaceId, now);
+  }
   await env.DB
     .prepare(
       `INSERT INTO thane_cli_ask_thane_integrations (
@@ -4106,7 +4133,15 @@ async function handleThaneCliAskThaneToggle(request: Request, env: Env, enabled:
          updated_at = excluded.updated_at,
          last_event_at = excluded.last_event_at`
     )
-    .bind(workspaceId, enabled ? 1 : 0, bot.id, email, now, now, now)
+    .bind(
+      workspaceId,
+      enabled ? 1 : 0,
+      bot?.id ?? null,
+      enabled ? email : existingIntegration?.linked_account_email ?? email,
+      existingIntegration?.connected_at ?? now,
+      now,
+      enabled ? now : existingIntegration?.last_event_at ?? null
+    )
     .run();
   const integration = renderAskThaneIntegration(await askThaneIntegrationForWorkspace(env, workspaceId));
   return Response.json({ ok: true, integration });
@@ -4143,6 +4178,9 @@ async function handleThaneCliRequest(request: Request, env: Env): Promise<Respon
     return new Response(null, { status: 204 });
   }
 
+  if (url.pathname === "/v1/thane-cli/webhooks/messages" && request.method === "POST") {
+    return handleThaneCliWebhookMessageCreate(request, env);
+  }
   if (url.pathname === "/v1/thane-cli/auth/start" && request.method === "POST") {
     return handleThaneCliAuthStart(request, env);
   }
@@ -4175,6 +4213,15 @@ async function handleThaneCliRequest(request: Request, env: Env): Promise<Respon
   }
   if (url.pathname === "/v1/thane-cli/ask-thane/disable" && request.method === "POST") {
     return handleThaneCliAskThaneToggle(request, env, false);
+  }
+  if (url.pathname === "/v1/thane-cli/webhooks" && request.method === "GET") {
+    return handleThaneCliWebhookList(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/webhooks" && request.method === "POST") {
+    return handleThaneCliWebhookCreate(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/webhooks/disable" && request.method === "POST") {
+    return handleThaneCliWebhookDisable(request, env);
   }
   if (url.pathname === "/v1/thane-cli/workspaces" && request.method === "POST") {
     return handleThaneCliWorkspaceEnsure(request, env);

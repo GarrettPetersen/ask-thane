@@ -306,7 +306,7 @@ function renderMessage(message: MessageView, width: number, selected = false): s
     ? ` ${DIM}${message.reactions.map((reaction) => reaction.emoji).join(" ")}${RESET}`
     : "";
   const branch = isReply ? `${DIM}└─${RESET} ` : "";
-  const sourceMarker = message.source === "terminal" ? " 🤖" : "";
+  const sourceMarker = message.source === "terminal" ? " 🤖" : message.source === "webhook" ? " 🔌" : "";
   const pendingMarker = isPendingMessage(message) ? ` ${DIM}(sending)${RESET}` : "";
   const prefix = `${indent}${marker}${branch}${DIM}${time}${RESET} ${BOLD}${message.author}${sourceMarker}${RESET}${pendingMarker}: `;
   const bodyWidth = Math.max(10, width - visibleLength(prefix));
@@ -1102,6 +1102,23 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       sidePanelLines = undefined;
       workspacePickerOpen = false;
       showReactionPicker = false;
+      return;
+    }
+    if (trimmed === "/webhooks") {
+      sidePanelLines = [
+        `${BOLD}Webhooks${RESET}`,
+        "",
+        "Use the scriptable CLI for webhook setup:",
+        "thane webhooks docs",
+        "thane webhooks create <name> <https-url> --json",
+        "thane webhooks list --json",
+        "thane webhooks disable <id-or-name>"
+      ];
+      showHelp = false;
+      showMenu = false;
+      workspacePickerOpen = false;
+      showReactionPicker = false;
+      status = "Webhook setup commands";
       return;
     }
     if (trimmed === "/help" || trimmed === "/commands") {

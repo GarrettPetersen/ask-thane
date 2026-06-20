@@ -49,9 +49,21 @@ For membership and admin features, apply the same permission model everywhere. A
 ## Billing And Ask Thane
 
 - Ask Thane should be optional in Thane Chat, like the Slack integration.
+- Ask Thane should behave as an external app/user in Thane Chat. Thane Chat should not run Ask Thane logic inside its core message creation path.
+- External apps should use the generic Thane Chat webhook surface: `thane webhooks docs`, `thane webhooks create ... --json`, and `POST /v1/thane-cli/webhooks/messages`.
 - Billing gates should be enforced consistently across Slack and Thane Chat workspaces.
 - Match users across endpoints by email when sharing billing accounts or entitlements.
 - Keep scheduled DMs, task logging, and message-reading behavior endpoint-neutral where possible.
+
+## Webhook Surface
+
+- Admins create workspace webhooks with `thane webhooks create <name> <https-url> --json`.
+- Webhooks receive signed `message.created` events. Verify `x-thane-signature`, which signs `<x-thane-timestamp>.<raw body>` with the returned signing secret.
+- Webhook tokens are shown once. Use them only as bearer tokens for `POST /v1/thane-cli/webhooks/messages`.
+- Webhook apps post as their own workspace member identity. They are not special-cased by the chat message endpoint.
+- Treat message `source` as the public origin: `chat` for live UI messages, `terminal` for signed-in user commands/scripts, and `webhook` for external app identities.
+- Receiver URLs must be HTTPS except localhost. Token creation/list/disable is admin-only. Private-channel delivery must respect app channel access.
+- Agents should discover the exact current protocol with `thane webhooks docs` or `thane commands --json`.
 
 ## Data And Schema
 

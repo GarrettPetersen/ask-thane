@@ -140,9 +140,17 @@ async function parseJsonBody<T>(request: Request): Promise<{ ok: true; value: T 
   }
 }
 
+async function nativeAskThaneIntegrationEnabled(env: BotEnv, workspaceId: string): Promise<boolean> {
+  const row = await env.DB
+    .prepare("SELECT enabled FROM thane_cli_ask_thane_integrations WHERE workspace_id = ? LIMIT 1")
+    .bind(workspaceId)
+    .first<{ enabled?: number | string | null }>();
+  return Number(row?.enabled ?? 0) === 1;
+}
+
 async function ensureNativeAskThaneMember(env: BotEnv, workspaceId: string): Promise<string> {
   const existing = await env.DB
-    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' LIMIT 1")
+    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' AND left_at IS NULL LIMIT 1")
     .bind(workspaceId)
     .first<{ id?: string }>();
   if (existing?.id) {
@@ -158,12 +166,13 @@ async function ensureNativeAskThaneMember(env: BotEnv, workspaceId: string): Pro
        ON CONFLICT(workspace_id, email) DO UPDATE SET
          display_name = excluded.display_name,
          handle = excluded.handle,
+         left_at = NULL,
          updated_at = excluded.updated_at`
     )
     .bind(id, workspaceId, nowIso, nowIso)
     .run();
   const row = await env.DB
-    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' LIMIT 1")
+    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' AND left_at IS NULL LIMIT 1")
     .bind(workspaceId)
     .first<{ id?: string }>();
   return row?.id ?? id;
@@ -182,8 +191,8 @@ async function postNativeAskThaneReply(input: {
   await input.env.DB
     .prepare(
       `INSERT INTO thane_cli_chat_messages (
-         id, workspace_id, channel_id, author_member_id, text, source, thread_root_id, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, 'chat', ?, ?, ?)`
+         id, workspace_id, channel_id, author_member_id, text, source, origin, thread_root_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, 'terminal', 'webhook', ?, ?, ?)`
     )
     .bind(messageId, input.workspaceId, input.channelId, botMemberId, input.text, input.threadRootId ?? null, nowIso, nowIso)
     .run();
@@ -343,6 +352,9 @@ export default {
         !payload.text
       ) {
         return Response.json({ ok: false, error: "missing_native_agent_fields" }, { status: 400 });
+      }
+      if (!(await nativeAskThaneIntegrationEnabled(env, payload.workspaceId))) {
+        return Response.json({ ok: false, error: "ask_thane_not_enabled" }, { status: 403 });
       }
       const agentRun = await runConversationalAgentForThaneChatMessage({
         env,

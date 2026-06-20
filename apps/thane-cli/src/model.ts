@@ -1,6 +1,6 @@
 export type WorkspaceRole = "owner" | "admin" | "member";
 export type ChannelVisibility = "public" | "private";
-export type MessageSource = "chat" | "terminal";
+export type MessageSource = "chat" | "terminal" | "webhook";
 
 export interface ThaneAccount {
   id: string;

@@ -283,7 +283,7 @@ async function ensureNativeRuntimeUser(input: {
 
 async function ensureNativeAskThaneMemberForRuntime(env: BotEnv, workspaceId: string): Promise<string> {
   const existing = await env.DB
-    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' LIMIT 1")
+    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' AND left_at IS NULL LIMIT 1")
     .bind(workspaceId)
     .first<{ id?: string }>();
   if (existing?.id) {
@@ -299,12 +299,13 @@ async function ensureNativeAskThaneMemberForRuntime(env: BotEnv, workspaceId: st
        ON CONFLICT(workspace_id, email) DO UPDATE SET
          display_name = excluded.display_name,
          handle = excluded.handle,
+         left_at = NULL,
          updated_at = excluded.updated_at`
     )
     .bind(id, workspaceId, nowIso, nowIso)
     .run();
   const row = await env.DB
-    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' LIMIT 1")
+    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' AND left_at IS NULL LIMIT 1")
     .bind(workspaceId)
     .first<{ id?: string }>();
   return row?.id ?? id;
@@ -350,8 +351,8 @@ function createNativeThaneChatAdapter(input: {
       await input.env.DB
         .prepare(
           `INSERT INTO thane_cli_chat_messages (
-             id, workspace_id, channel_id, author_member_id, text, source, thread_root_id, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, 'chat', ?, ?, ?)`
+             id, workspace_id, channel_id, author_member_id, text, source, origin, thread_root_id, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, 'terminal', 'webhook', ?, ?, ?)`
         )
         .bind(crypto.randomUUID(), input.workspaceId, channelId, botMemberId, text, threadId ?? null, nowIso, nowIso)
         .run();
