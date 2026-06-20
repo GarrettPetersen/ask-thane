@@ -8,18 +8,6 @@ binding = "ASSETS"
 html_handling = "none"
 run_worker_first = true
 
-[[routes]]
-pattern = "askthane.com"
-custom_domain = true
-
-[[routes]]
-pattern = "www.askthane.com"
-custom_domain = true
-
-[[routes]]
-pattern = "chat.askthane.com"
-custom_domain = true
-
 [[d1_databases]]
 binding = "DB"
 database_name = "ask-thane"
