@@ -1733,7 +1733,7 @@ describe("@ask-thane/api-worker", () => {
     await expect(res.json()).resolves.toMatchObject({ ok: false, error: "workspace_admin_required" });
   });
 
-  it("enables native Ask Thane for workspace admins", async () => {
+  it("enables native Ask Thane for team admins", async () => {
     const calls: Array<{ sql: string; args: unknown[] }> = [];
     const first = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
       const sql = this.sql ?? "";
@@ -1890,7 +1890,7 @@ describe("@ask-thane/api-worker", () => {
     expect(calls.some((call) => call.sql.includes("UPDATE thane_cli_webhooks SET status = 'disabled'"))).toBe(true);
   });
 
-  it("creates signed Thane Chat webhooks for workspace admins", async () => {
+  it("creates signed Thane Chat webhooks for team admins", async () => {
     const calls: Array<{ sql: string; args: unknown[] }> = [];
     const first = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
       const sql = this.sql ?? "";

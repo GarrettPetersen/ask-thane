@@ -31,7 +31,7 @@ describe("Thane Chat webhook receiver", () => {
     vi.clearAllMocks();
   });
 
-  it("runs Ask Thane from a signed webhook and reacts when a task is created", async () => {
+  it("runs Ask Thane from a signed team webhook and reacts when a task is created", async () => {
     agentMocks.runConversationalAgentForThaneChatMessage.mockResolvedValue({
       usedTools: true,
       createdTaskIds: ["task_1"],
