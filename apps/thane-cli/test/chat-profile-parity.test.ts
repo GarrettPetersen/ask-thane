@@ -21,24 +21,24 @@ function findSlashCommand(name: string) {
 }
 
 describe("chat profile action parity", () => {
-  it("exposes workspace handle plus display-name actions across web, terminal, and CLI", () => {
+  it("exposes team handle plus display-name actions across web, terminal, and CLI", () => {
     const workspaceCli = findCliCommand("thane profile name <display-name> [--json]");
-    expect(workspaceCli?.description).toContain("active workspace");
+    expect(workspaceCli?.description).toContain("active team");
 
     const handleCli = findCliCommand("thane profile handle <handle> [--json]");
     expect(handleCli?.description).toContain("@handle");
 
     const accountCli = findCliCommand("thane profile account-name <display-name> [--json]");
-    expect(accountCli?.description).toContain("newly joined workspaces");
+    expect(accountCli?.description).toContain("newly joined teams");
 
     expect(findSlashCommand("/name")).toMatchObject({
       usage: "/name <display-name>",
-      description: expect.stringContaining("this workspace"),
+      description: expect.stringContaining("this team"),
       needsArgument: true
     });
     expect(findSlashCommand("/account-name")).toMatchObject({
       usage: "/account-name <display-name>",
-      description: expect.stringContaining("new workspaces"),
+      description: expect.stringContaining("new teams"),
       needsArgument: true
     });
     expect(findSlashCommand("/handle")).toMatchObject({
@@ -49,9 +49,9 @@ describe("chat profile action parity", () => {
 
     expect(chatAppHtml).toContain("updateWorkspaceDisplayName");
     expect(chatAppHtml).toContain('scope: "workspace"');
-    expect(chatAppHtml).toContain("Workspace display name");
+    expect(chatAppHtml).toContain("Team display name");
     expect(chatAppHtml).toContain("updateWorkspaceHandle");
-    expect(chatAppHtml).toContain("Workspace handle");
+    expect(chatAppHtml).toContain("Team handle");
     expect(chatAppHtml).toContain("If you leave handle blank, Thane creates a unique @handle from your name.");
     expect(chatAppHtml).not.toContain("pendingHandle");
     expect(chatAppHtml).toContain("updateAccountDisplayName");
@@ -107,7 +107,7 @@ describe("chat profile action parity", () => {
     expect(chatAppHtml).toContain("qr-card");
   });
 
-  it("renders workspace join events across web, terminal, and CLI commands", () => {
+  it("renders team join events across web, terminal, and CLI commands", () => {
     const rendered = renderMessages([
       {
         id: "evt_join_mbr_1",
@@ -115,7 +115,7 @@ describe("chat profile action parity", () => {
         channel: "general",
         conversationKind: "channel",
         author: "Garrett",
-        text: "Garrett joined the workspace.",
+        text: "Garrett joined the team.",
         createdAt: "2026-06-18T00:00:00.000Z",
         replyCount: 0,
         reactions: [],
@@ -124,7 +124,7 @@ describe("chat profile action parity", () => {
       }
     ]);
 
-    expect(rendered).toContain("#general * Garrett joined the workspace.");
+    expect(rendered).toContain("#general * Garrett joined the team.");
     expect(chatAppHtml).toContain("isWorkspaceJoinMessage");
     expect(chatAppHtml).toContain("message system-event");
     expect(terminalChatSource).toContain("isWorkspaceJoinMessage");
@@ -149,7 +149,7 @@ describe("chat profile action parity", () => {
     expect(memberCommands).not.toContain("/invite-link");
     expect(memberCommands).not.toContain("/member-ban");
     expect(memberCommands).toContain("/mfa-setup");
-    expect(memberCommands).toContain("/workspace-leave");
+    expect(memberCommands).toContain("/team-leave");
   });
 
   it("surfaces hosted rate-limit retry hints across web, terminal, and CLI", () => {

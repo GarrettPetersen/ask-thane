@@ -22,6 +22,7 @@ import { getOpsSummary, getWorkspaceOpsSummary } from "./services/ops-dashboard"
 import { runScheduledReminderDigests, runWorkspaceReminderDigestsNow } from "./services/reminder-digests";
 import { pollSlackWorkspacesForTasks } from "./services/slack-poller";
 import { SlackInstallStore } from "./services/slack-install-store";
+import { mapTaskActionTypesToThaneChatReactions } from "./services/slack-task-reactions";
 import type { BotEnv } from "./services/task-inference";
 
 function getBuildInfo(env: BotEnv) {
@@ -138,6 +139,477 @@ async function parseJsonBody<T>(request: Request): Promise<{ ok: true; value: T 
   } catch {
     return { ok: false, response: Response.json({ ok: false, error: "invalid_json_body" }, { status: 400 }) };
   }
+}
+
+interface ThaneChatWebhookRow {
+  id: string;
+  workspace_id: string;
+  name: string;
+  signing_secret: string;
+  bot_member_id: string;
+  status: string;
+}
+
+interface ThaneChatWebhookPayload {
+  id?: string;
+  type?: string;
+  workspaceId?: string;
+  channelId?: string;
+  message?: {
+    id?: string;
+    workspaceId?: string;
+    channelId?: string;
+    authorId?: string;
+    authorHandle?: string;
+    authorDisplayName?: string;
+    text?: string;
+    source?: string;
+    threadRootId?: string;
+    createdAt?: string;
+  };
+}
+
+interface ThaneChatChannelBridge {
+  organizationId: string;
+  workspaceId: string;
+  conversationSourceId: string;
+  channelId: string;
+  channelKind: string;
+}
+
+interface ThaneChatMemberRow {
+  id: string;
+  account_id: string;
+  email: string;
+  display_name: string | null;
+  handle: string;
+}
+
+function hex(bytes: ArrayBuffer): string {
+  return Array.from(new Uint8Array(bytes))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function hmacSha256Hex(value: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  return hex(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value)));
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  let diff = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    diff |= a.charCodeAt(index) ^ b.charCodeAt(index);
+  }
+  return diff === 0;
+}
+
+async function verifyThaneChatWebhookSignature(input: {
+  request: Request;
+  signingSecret: string;
+  rawBody: string;
+}): Promise<boolean> {
+  const timestamp = input.request.headers.get("x-thane-timestamp")?.trim() ?? "";
+  const signature = input.request.headers.get("x-thane-signature")?.trim() ?? "";
+  if (!timestamp || !signature) {
+    return false;
+  }
+  const timestampMs = Date.parse(timestamp);
+  if (!Number.isFinite(timestampMs) || Math.abs(Date.now() - timestampMs) > 5 * 60 * 1000) {
+    return false;
+  }
+  const expected = `v1=${await hmacSha256Hex(`${timestamp}.${input.rawBody}`, input.signingSecret)}`;
+  return timingSafeEqual(signature, expected);
+}
+
+function coreOrganizationIdForThaneChatWorkspace(workspaceId: string): string {
+  const suffix = workspaceId.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 80) || "workspace";
+  return `org_thane_${suffix}`;
+}
+
+function coreOrganizationSlugForThaneChatWorkspace(workspaceId: string): string {
+  const suffix = workspaceId.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 70) || "workspace";
+  return `thane-${suffix}`;
+}
+
+function nativeConversationKind(channel: { kind: string; visibility: string }): string {
+  if (channel.kind === "dm") {
+    return "dm";
+  }
+  return channel.visibility === "private" ? "private_channel" : "public_channel";
+}
+
+async function ensureNativeAgentUser(env: BotEnv, input: {
+  organizationId: string;
+  workspaceId: string;
+  member: ThaneChatMemberRow;
+}): Promise<string> {
+  const existing = await env.DB
+    .prepare(
+      `SELECT id
+       FROM users
+       WHERE organization_id = ?
+         AND workspace_id = ?
+         AND platform = 'thane_cli'
+         AND external_user_id = ?
+       LIMIT 1`
+    )
+    .bind(input.organizationId, input.workspaceId, input.member.email)
+    .first<{ id?: string }>();
+  const nowIso = new Date().toISOString();
+  if (existing?.id) {
+    await env.DB
+      .prepare("UPDATE users SET display_name = COALESCE(?, display_name), email = COALESCE(?, email), updated_at = ? WHERE id = ?")
+      .bind(input.member.display_name ?? null, input.member.email || null, nowIso, existing.id)
+      .run();
+    return existing.id;
+  }
+  const userId = `usr_thane_${crypto.randomUUID().replace(/-/g, "")}`;
+  await env.DB
+    .prepare(
+      `INSERT INTO users (
+         id, organization_id, workspace_id, platform, external_user_id,
+         display_name, email, role, created_at, updated_at
+       ) VALUES (?, ?, ?, 'thane_cli', ?, ?, ?, 'member', ?, ?)`
+    )
+    .bind(
+      userId,
+      input.organizationId,
+      input.workspaceId,
+      input.member.email,
+      input.member.display_name ?? input.member.handle,
+      input.member.email || null,
+      nowIso,
+      nowIso
+    )
+    .run();
+  return userId;
+}
+
+async function upsertNativeConversationMembership(env: BotEnv, input: {
+  organizationId: string;
+  workspaceId: string;
+  conversationSourceId: string;
+  userId: string;
+  nowIso: string;
+}): Promise<void> {
+  await env.DB
+    .prepare(
+      `INSERT INTO conversation_memberships (
+         id, organization_id, workspace_id, conversation_source_id, user_id,
+         role, is_active, version, synced_at
+       ) VALUES (?, ?, ?, ?, ?, NULL, 1, ?, ?)
+       ON CONFLICT(conversation_source_id, user_id)
+       DO UPDATE SET is_active = 1, version = excluded.version, synced_at = excluded.synced_at`
+    )
+    .bind(
+      crypto.randomUUID(),
+      input.organizationId,
+      input.workspaceId,
+      input.conversationSourceId,
+      input.userId,
+      input.nowIso,
+      input.nowIso
+    )
+    .run();
+}
+
+async function ensureThaneChatAgentBridge(env: BotEnv, input: {
+  workspaceId: string;
+  channelId: string;
+  authorMemberId: string;
+  botMemberId: string;
+}): Promise<ThaneChatChannelBridge> {
+  const workspace = await env.DB
+    .prepare(
+      `SELECT id, workspace_slug, workspace_name
+       FROM thane_cli_workspaces
+       WHERE id = ?
+       LIMIT 1`
+    )
+    .bind(input.workspaceId)
+    .first<{ id?: string; workspace_slug?: string; workspace_name?: string | null }>();
+  const channel = await env.DB
+    .prepare(
+      `SELECT id, kind, visibility
+       FROM thane_cli_channels
+       WHERE workspace_id = ? AND id = ?
+       LIMIT 1`
+    )
+    .bind(input.workspaceId, input.channelId)
+    .first<{ id?: string; kind?: string; visibility?: string }>();
+  if (!workspace?.id || !channel?.id || !channel.kind || !channel.visibility) {
+    throw new Error("thane_chat_workspace_or_channel_not_found");
+  }
+
+  const organizationId = coreOrganizationIdForThaneChatWorkspace(workspace.id);
+  const workspaceName = workspace.workspace_name?.trim() || workspace.workspace_slug || workspace.id;
+  const nowIso = new Date().toISOString();
+  await env.DB
+    .prepare(
+      `INSERT INTO organizations (id, slug, name, plan_tier, created_at, updated_at)
+       VALUES (?, ?, ?, 'free', ?, ?)
+       ON CONFLICT(id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at`
+    )
+    .bind(organizationId, coreOrganizationSlugForThaneChatWorkspace(workspace.id), workspaceName, nowIso, nowIso)
+    .run();
+  await env.DB
+    .prepare(
+      `INSERT INTO workspaces (
+         id, organization_id, platform, external_workspace_id, name, plan_tier, created_at, updated_at
+       ) VALUES (?, ?, 'thane_cli', ?, ?, 'free', ?, ?)
+       ON CONFLICT(platform, external_workspace_id) DO UPDATE SET
+         organization_id = excluded.organization_id,
+         name = excluded.name,
+         updated_at = excluded.updated_at`
+    )
+    .bind(workspace.id, organizationId, workspace.id, workspaceName, nowIso, nowIso)
+    .run();
+  const conversationKind = nativeConversationKind({ kind: channel.kind, visibility: channel.visibility });
+  await env.DB
+    .prepare(
+      `INSERT INTO conversation_sources (
+         id, organization_id, workspace_id, provider, provider_conversation_id,
+         conversation_kind, is_public, visibility_version, created_at, updated_at
+       ) VALUES (?, ?, ?, 'thane_cli', ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(organization_id, provider, provider_conversation_id)
+       DO UPDATE SET
+         workspace_id = excluded.workspace_id,
+         conversation_kind = excluded.conversation_kind,
+         is_public = excluded.is_public,
+         visibility_version = excluded.visibility_version,
+         updated_at = excluded.updated_at`
+    )
+    .bind(
+      crypto.randomUUID(),
+      organizationId,
+      workspace.id,
+      channel.id,
+      conversationKind,
+      channel.visibility === "public" ? 1 : 0,
+      nowIso,
+      nowIso,
+      nowIso
+    )
+    .run();
+  const source = await env.DB
+    .prepare(
+      `SELECT id
+       FROM conversation_sources
+       WHERE organization_id = ? AND provider = 'thane_cli' AND provider_conversation_id = ?
+       LIMIT 1`
+    )
+    .bind(organizationId, channel.id)
+    .first<{ id?: string }>();
+  if (!source?.id) {
+    throw new Error("thane_chat_conversation_source_not_found");
+  }
+
+  const membersResult = await env.DB
+    .prepare(
+      `SELECT id, account_id, email, display_name, handle
+       FROM thane_cli_workspace_members
+       WHERE workspace_id = ? AND left_at IS NULL
+       LIMIT 250`
+    )
+    .bind(workspace.id)
+    .all<ThaneChatMemberRow>();
+  const userIdByMemberId = new Map<string, string>();
+  for (const member of membersResult.results ?? []) {
+    const userId = await ensureNativeAgentUser(env, {
+      organizationId,
+      workspaceId: workspace.id,
+      member
+    });
+    userIdByMemberId.set(member.id, userId);
+  }
+
+  const channelMemberships = await env.DB
+    .prepare(
+      `SELECT member_id
+       FROM thane_cli_channel_members
+       WHERE channel_id = ? AND left_at IS NULL`
+    )
+    .bind(channel.id)
+    .all<{ member_id: string }>();
+  const activeMemberIds = new Set((channelMemberships.results ?? []).map((row) => row.member_id));
+  activeMemberIds.add(input.authorMemberId);
+  activeMemberIds.add(input.botMemberId);
+  for (const memberId of activeMemberIds) {
+    const userId = userIdByMemberId.get(memberId);
+    if (!userId) {
+      continue;
+    }
+    await upsertNativeConversationMembership(env, {
+      organizationId,
+      workspaceId: workspace.id,
+      conversationSourceId: source.id,
+      userId,
+      nowIso
+    });
+  }
+
+  return {
+    organizationId,
+    workspaceId: workspace.id,
+    conversationSourceId: source.id,
+    channelId: channel.id,
+    channelKind: channel.kind
+  };
+}
+
+function shouldRespondToThaneChatWebhookMessage(input: {
+  text: string;
+  channelKind: string;
+}): boolean {
+  if (input.channelKind === "dm") {
+    return true;
+  }
+  return /(^|[^a-z0-9._-])@thane([^a-z0-9._-]|$)/i.test(input.text);
+}
+
+async function addNativeThaneChatReaction(input: {
+  env: BotEnv;
+  messageId: string;
+  memberId: string;
+  emoji: string;
+  createdAt?: string;
+}): Promise<void> {
+  await input.env.DB
+    .prepare(
+      `INSERT OR IGNORE INTO thane_cli_message_reactions (id, message_id, member_id, emoji, created_at)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .bind(crypto.randomUUID(), input.messageId, input.memberId, input.emoji, input.createdAt ?? new Date().toISOString())
+    .run();
+}
+
+async function handleThaneChatWebhookEvent(request: Request, env: BotEnv): Promise<Response> {
+  const webhookId = request.headers.get("x-thane-webhook-id")?.trim() ?? "";
+  if (!webhookId) {
+    return Response.json({ ok: false, error: "missing_webhook_id" }, { status: 401 });
+  }
+  const webhook = await env.DB
+    .prepare(
+      `SELECT id, workspace_id, name, signing_secret, bot_member_id, status
+       FROM thane_cli_webhooks
+       WHERE id = ? AND status = 'active'
+       LIMIT 1`
+    )
+    .bind(webhookId)
+    .first<ThaneChatWebhookRow>();
+  if (!webhook?.id) {
+    return Response.json({ ok: false, error: "unknown_webhook" }, { status: 401 });
+  }
+  const rawBody = await request.text();
+  if (!(await verifyThaneChatWebhookSignature({ request, signingSecret: webhook.signing_secret, rawBody }))) {
+    return Response.json({ ok: false, error: "invalid_signature" }, { status: 401 });
+  }
+  let payload: ThaneChatWebhookPayload;
+  try {
+    payload = JSON.parse(rawBody) as ThaneChatWebhookPayload;
+  } catch {
+    return Response.json({ ok: false, error: "invalid_json_body" }, { status: 400 });
+  }
+  const message = payload.message;
+  if (
+    payload.type !== "message.created" ||
+    !payload.workspaceId ||
+    !payload.channelId ||
+    !message?.id ||
+    !message.authorId ||
+    !message.text ||
+    webhook.workspace_id !== payload.workspaceId
+  ) {
+    return Response.json({ ok: false, error: "invalid_webhook_payload" }, { status: 400 });
+  }
+  if (message.authorId === webhook.bot_member_id) {
+    return Response.json({ ok: true, ignored: true, reason: "self_message" });
+  }
+  const author = await env.DB
+    .prepare(
+      `SELECT id, account_id, email, display_name, handle
+       FROM thane_cli_workspace_members
+       WHERE workspace_id = ? AND id = ? AND left_at IS NULL
+       LIMIT 1`
+    )
+    .bind(webhook.workspace_id, message.authorId)
+    .first<ThaneChatMemberRow>();
+  if (!author?.id) {
+    return Response.json({ ok: false, error: "author_not_found" }, { status: 404 });
+  }
+
+  const bridge = await ensureThaneChatAgentBridge(env, {
+    workspaceId: webhook.workspace_id,
+    channelId: payload.channelId,
+    authorMemberId: author.id,
+    botMemberId: webhook.bot_member_id
+  });
+  const shouldRespond = shouldRespondToThaneChatWebhookMessage({
+    text: message.text,
+    channelKind: bridge.channelKind
+  });
+  const authorDisplayName = author.display_name ?? message.authorDisplayName;
+  const agentRun = await runConversationalAgentForThaneChatMessage({
+    env,
+    organizationId: bridge.organizationId,
+    workspaceId: bridge.workspaceId,
+    conversationSourceId: bridge.conversationSourceId,
+    channelId: bridge.channelId,
+    authorExternalUserId: author.email,
+    authorEmail: author.email,
+    ...(authorDisplayName ? { authorDisplayName } : {}),
+    messageId: message.id,
+    text: message.text,
+    ...(message.threadRootId ? { threadRootId: message.threadRootId } : {}),
+    occurredAt: message.createdAt ?? new Date().toISOString(),
+    interactionMode: shouldRespond ? "dm_reply" : "passive_ingest"
+  });
+  const reactionEmojis = mapTaskActionTypesToThaneChatReactions(agentRun.taskActionTypes);
+  for (const emoji of reactionEmojis) {
+    await addNativeThaneChatReaction({
+      env,
+      messageId: message.id,
+      memberId: webhook.bot_member_id,
+      emoji,
+      createdAt: new Date().toISOString()
+    });
+  }
+  let replyMessageId: string | undefined;
+  if (shouldRespond && agentRun.replyText?.trim()) {
+    replyMessageId = await postNativeAskThaneReply({
+      env,
+      workspaceId: bridge.workspaceId,
+      channelId: bridge.channelId,
+      text: agentRun.replyText.trim(),
+      threadRootId: message.threadRootId ?? message.id
+    });
+  }
+  const processedAt = new Date().toISOString();
+  await env.DB
+    .prepare("UPDATE thane_cli_ask_thane_integrations SET last_event_at = ?, updated_at = ? WHERE workspace_id = ? AND enabled = 1")
+    .bind(processedAt, processedAt, webhook.workspace_id)
+    .run();
+  return Response.json({
+    ok: true,
+    usedTools: agentRun.usedTools,
+    createdTaskIds: agentRun.createdTaskIds,
+    updatedTaskIds: agentRun.updatedTaskIds,
+    taskActionTypes: agentRun.taskActionTypes,
+    eventTypes: agentRun.eventTypes,
+    reactions: reactionEmojis,
+    ...(agentRun.finalSummary ? { finalSummary: agentRun.finalSummary } : {}),
+    ...(replyMessageId ? { reply: { messageId: replyMessageId, text: agentRun.replyText } } : {})
+  });
 }
 
 async function nativeAskThaneIntegrationEnabled(env: BotEnv, workspaceId: string): Promise<boolean> {
@@ -309,6 +781,10 @@ export default {
 
     if (pathname === "/webhooks/slack/events" && request.method === "POST") {
       return handleSlackEvents(request, env, ctx);
+    }
+
+    if (pathname === "/webhooks/thane-chat/events" && request.method === "POST") {
+      return handleThaneChatWebhookEvent(request, env);
     }
 
     if (pathname === "/slack/install" && request.method === "GET") {

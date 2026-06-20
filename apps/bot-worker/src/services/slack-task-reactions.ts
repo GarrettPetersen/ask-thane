@@ -33,6 +33,29 @@ export function mapTaskActionTypesToSlackReactions(actionTypes: TaskActionType[]
   return reactions;
 }
 
+const ACTION_TO_THANE_CHAT_REACTION: Record<TaskActionType, string> = {
+  create: "📝",
+  mark_done: "✅",
+  mark_cancelled: "❌",
+  mark_blocked: "⚠️",
+  reopen: "🔄",
+  merge_into: "🔀",
+  edit: "✏️"
+};
+
+export function mapTaskActionTypesToThaneChatReactions(actionTypes: TaskActionType[]): string[] {
+  const actionSet = new Set(actionTypes);
+  const reactions: string[] = [];
+
+  for (const actionType of REACTION_ORDER) {
+    if (actionSet.has(actionType)) {
+      reactions.push(ACTION_TO_THANE_CHAT_REACTION[actionType]);
+    }
+  }
+
+  return reactions;
+}
+
 const EVENT_TO_REACTION: Record<string, string> = {
   feedback_recorded: "mag",
   note_written: "spiral_note_pad",

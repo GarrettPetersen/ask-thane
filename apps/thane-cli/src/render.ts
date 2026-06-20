@@ -43,7 +43,7 @@ export function renderMembers(
 
 export function renderWorkspaces(workspaces: ThaneWorkspace[], activeWorkspaceId: string): string {
   if (workspaces.length === 0) {
-    return "No workspaces yet.";
+    return "No teams yet.";
   }
   return workspaces
     .map((workspace) => `${workspace.id === activeWorkspaceId ? "*" : " "} ${workspace.slug} - ${workspace.name}`)

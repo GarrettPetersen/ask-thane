@@ -748,7 +748,7 @@
         state.activeWorkspaceId = body.workspace?.id || state.activeWorkspaceId;
         state.activeChannelId = "";
         state.replyToId = "";
-        state.status = `Joined ${body.workspace?.slug || "workspace"}`;
+        state.status = `Joined ${body.workspace?.slug || "team"}`;
         history.replaceState(null, "", "/");
         await sync();
         return true;
@@ -1417,7 +1417,7 @@
         state.replyToId = "";
         state.inviteLinkResult = null;
         rememberAccountSelection();
-        state.status = `Created workspace ${body.workspace?.slug || rawName}`;
+        state.status = `Created team ${body.workspace?.slug || rawName}`;
         await sync();
         render();
       }
@@ -1444,7 +1444,7 @@
           return;
         }
         if (needsWorkspace && !workspaceName) {
-          state.error = "Workspace name is required.";
+          state.error = "Team name is required.";
           render();
           return;
         }
@@ -1497,7 +1497,7 @@
 
       async function leaveWorkspace() {
         const workspace = state.snapshot?.workspaces?.find((item) => item.id === state.activeWorkspaceId);
-        if (!workspace || !confirm(`Leave workspace ${workspace.slug}?`)) return;
+        if (!workspace || !confirm(`Leave team ${workspace.slug}?`)) return;
         try {
           await api("/v1/thane-cli/workspaces/leave", {
             method: "POST",
@@ -1575,7 +1575,7 @@
       }
 
       async function removeWorkspaceMember(target, ban) {
-        if (!target || !confirm(`${ban ? "Ban" : "Remove"} ${target} from this workspace?`)) return;
+        if (!target || !confirm(`${ban ? "Ban" : "Remove"} ${target} from this team?`)) return;
         try {
           await api(ban ? "/v1/thane-cli/workspace-members/ban" : "/v1/thane-cli/workspace-members/remove", {
             method: "POST",
@@ -1745,7 +1745,7 @@
           });
           saveSession({ ...state.session, ...(body.account || {}) });
           state.workspaceProfileDraft = body.workspaceDisplayName || body.displayName || displayName;
-          state.status = `Workspace name: ${body.workspaceDisplayName || body.displayName || displayName}`;
+          state.status = `Team name: ${body.workspaceDisplayName || body.displayName || displayName}`;
           state.error = "";
           await sync();
         } catch (error) {
@@ -1767,7 +1767,7 @@
         saveSession({ ...state.session, ...(body.account || {}) });
         const workspaceHandle = body.workspaceHandle || body.handle || cleaned;
         state.workspaceHandleDraft = workspaceHandle;
-        state.status = `Workspace handle: @${workspaceHandle}`;
+        state.status = `Team handle: @${workspaceHandle}`;
         state.error = "";
         await sync();
         return body;
@@ -1999,7 +1999,7 @@
               <div class="modal-head">
                 <div class="modal-title">
                   <h2 id="settings-menu-title">Menu</h2>
-                  <p class="muted small">${esc(workspace?.slug || "workspace")} / ${esc(role || "member")}</p>
+                  <p class="muted small">${esc(workspace?.slug || "team")} / ${esc(role || "member")}</p>
                 </div>
                 <button class="icon-button" onclick="closeSettingsMenu()" aria-label="Close menu">x</button>
               </div>
@@ -2007,12 +2007,12 @@
                 <section class="settings-group">
                   <h3>Profile</h3>
                   <form class="list" onsubmit="updateWorkspaceDisplayName(event)">
-                    <input name="displayName" value="${esc(state.workspaceProfileDraft ?? currentUser?.displayName ?? "")}" placeholder="Workspace display name" oninput="state.workspaceProfileDraft=this.value" />
-                    <button>Update workspace name</button>
+                    <input name="displayName" value="${esc(state.workspaceProfileDraft ?? currentUser?.displayName ?? "")}" placeholder="Team display name" oninput="state.workspaceProfileDraft=this.value" />
+                    <button>Update team name</button>
                   </form>
                   <form class="list" onsubmit="updateWorkspaceHandle(event)">
-                    <input name="handle" value="${esc(state.workspaceHandleDraft ?? currentUser?.handle ?? "")}" placeholder="Workspace handle" oninput="state.workspaceHandleDraft=this.value" />
-                    <button>Update workspace handle</button>
+                    <input name="handle" value="${esc(state.workspaceHandleDraft ?? currentUser?.handle ?? "")}" placeholder="Team handle" oninput="state.workspaceHandleDraft=this.value" />
+                    <button>Update team handle</button>
                   </form>
                   <form class="list" onsubmit="updateAccountDisplayName(event)">
                     <input name="displayName" value="${esc(state.accountProfileDraft ?? state.session.displayName ?? "")}" placeholder="Account default name" oninput="state.accountProfileDraft=this.value" />
@@ -2038,10 +2038,10 @@
                   </div>
                 </section>
                 <section class="settings-group">
-                  <h3>Workspace</h3>
+                  <h3>Team</h3>
                   <form class="list" onsubmit="createWorkspace(event)">
                     <input name="name" placeholder="Acme Team" />
-                    <button>Create workspace</button>
+                    <button>Create team</button>
                   </form>
                   <form class="list" onsubmit="createChannel(event)">
                     <input name="name" placeholder="book-club" />
@@ -2049,13 +2049,13 @@
                   </form>
                   <div class="kv">
                     <button onclick="leaveChannel()">Leave current channel</button>
-                    <button onclick="leaveWorkspace()">Leave workspace</button>
+                    <button onclick="leaveWorkspace()">Leave team</button>
                   </div>
                 </section>
                 <section class="settings-group">
                   <h3>Members</h3>
                   <div class="kv">
-                    <div class="muted small">Workspace members</div>
+                    <div class="muted small">Team members</div>
                     ${renderMemberRows(snap.users || [], { includeChannelControls: false })}
                   </div>
                   <div class="kv">
@@ -2114,7 +2114,7 @@
                     <div>members: ${snap.users.length}/${isTeamPlan ? "unlimited" : freeLimits.members}</div>
                     <div>private channels: ${privateChannels}/${isTeamPlan ? "unlimited" : freeLimits.privateChannels}</div>
                     ${isAdmin ? `
-                      ${isTeamPlan ? `<button onclick="openBilling('portal')" ${state.billingBusy ? "disabled" : ""}>Manage billing</button>` : `<button onclick="openBilling('checkout')" ${state.billingBusy ? "disabled" : ""}>Upgrade workspace</button>`}
+                      ${isTeamPlan ? `<button onclick="openBilling('portal')" ${state.billingBusy ? "disabled" : ""}>Manage billing</button>` : `<button onclick="openBilling('checkout')" ${state.billingBusy ? "disabled" : ""}>Upgrade team</button>`}
                     ` : `<div class="muted small">admin required</div>`}
                   </div>
                 </section>
@@ -2131,8 +2131,8 @@
             <section class="login-card">
               <div class="brand">
                 <div class="sig">╭─ THANE CHAT ─╮\n│              │\n╰─ ONLINE     ─╯</div>
-                <div class="title"><h1>${invite ? `Join ${esc(invite.workspace?.name || "workspace")}` : "Sign in"}</h1><span class="state">hosted</span></div>
-                ${invite ? `<p class="muted small">Workspace: ${esc(invite.workspace?.slug || "")} · role: ${esc(invite.role || "member")}</p>` : ""}
+                <div class="title"><h1>${invite ? `Join ${esc(invite.workspace?.name || "team")}` : "Sign in"}</h1><span class="state">hosted</span></div>
+                ${invite ? `<p class="muted small">Team: ${esc(invite.workspace?.slug || "")} · role: ${esc(invite.role || "member")}</p>` : ""}
               </div>
               <form class="login-form" onsubmit="${codeForm ? (state.authStep === "mfa" ? "verifyMfa(event)" : "verifyLogin(event)") : "startLogin(event)"}">
                 ${codeForm ? `<p class="muted small">${esc(state.status)}</p>` : ""}
@@ -2155,8 +2155,8 @@
             <section class="login-card">
               <div class="brand">
                 <div class="sig">╭─ THANE CHAT ─╮\n│              │\n╰─ SETUP      ─╯</div>
-                <div class="title"><h1>${needsWorkspace ? "Create your workspace" : "Set up your profile"}</h1><span class="state">setup</span></div>
-                <p class="muted small">${needsWorkspace ? "Name yourself and create the first workspace." : "Name yourself for this workspace."}</p>
+                <div class="title"><h1>${needsWorkspace ? "Create your team" : "Set up your profile"}</h1><span class="state">setup</span></div>
+                <p class="muted small">${needsWorkspace ? "Name yourself and create the first team." : "Name yourself for this team."}</p>
               </div>
               <form class="login-form" onsubmit="completeSetup(event)">
                 <div class="setup-grid">
@@ -2169,7 +2169,7 @@
                     <input name="handle" autocomplete="username" value="${esc(state.setupDraft.handle)}" oninput="updateSetupDraft('handle', this.value)" placeholder="optional" ${state.busy ? "disabled" : ""} />
                   </div>
                   ${needsWorkspace ? `<div class="row">
-                    <label>Workspace name</label>
+                    <label>Team name</label>
                     <input name="workspaceName" value="${esc(state.setupDraft.workspaceName)}" oninput="updateSetupDraft('workspaceName', this.value)" placeholder="Acme Team" required ${state.busy ? "disabled" : ""} />
                   </div>` : ""}
                   <div class="row">
@@ -2259,8 +2259,8 @@
                 <p class="muted small">${esc(userDisplayLabel(activeUser))}${activeUser?.handle ? ` @${esc(activeUser.handle)}` : ""}</p>
               </div>
               <section class="section">
-                <div class="section-head"><button class="section-toggle" data-menu-toggle="workspaces" type="button"><span class="menu-caret">${state.workspaceMenuOpen ? "v" : ">"}</span><span>Workspaces</span><span class="summary">${esc(workspace?.slug || "none")}</span></button><button onclick="sync().then(render)">sync</button></div>
-                ${state.workspaceMenuOpen ? `<div class="list">${snap.workspaces.map((item) => `<button class="item ${item.id === state.activeWorkspaceId ? "active" : ""}" data-workspace-id="${esc(item.id)}" type="button"><span class="cursor">${item.id === state.activeWorkspaceId ? ">" : " "}</span> ${esc(item.slug)}</button>`).join("") || `<div class="empty">No workspaces yet</div>`}</div>` : ""}
+                <div class="section-head"><button class="section-toggle" data-menu-toggle="workspaces" type="button"><span class="menu-caret">${state.workspaceMenuOpen ? "v" : ">"}</span><span>Teams</span><span class="summary">${esc(workspace?.slug || "none")}</span></button><button onclick="sync().then(render)">sync</button></div>
+                ${state.workspaceMenuOpen ? `<div class="list">${snap.workspaces.map((item) => `<button class="item ${item.id === state.activeWorkspaceId ? "active" : ""}" data-workspace-id="${esc(item.id)}" type="button"><span class="cursor">${item.id === state.activeWorkspaceId ? ">" : " "}</span> ${esc(item.slug)}</button>`).join("") || `<div class="empty">No teams yet</div>`}</div>` : ""}
               </section>
               <section class="section">
                 <div class="section-head"><button class="section-toggle" data-menu-toggle="channels" type="button"><span class="menu-caret">${state.channelMenuOpen ? "v" : ">"}</span><span>Channels</span><span class="summary">#${esc(channel?.name || "general")}</span></button></div>
@@ -2298,9 +2298,9 @@
             </main>
             <aside class="side">
               <section class="section">
-                <div class="section-head"><span>Workspace</span></div>
+                <div class="section-head"><span>Team</span></div>
                 <div class="kv">
-                  <div class="cmdline">${esc(workspace?.name || "No workspace")}</div>
+                  <div class="cmdline">${esc(workspace?.name || "No team")}</div>
                   <div>${esc(userDisplayLabel(activeUser))}${activeUser?.handle ? ` @${esc(activeUser.handle)}` : ""}</div>
                   <div>role: ${esc(role || "member")}</div>
                   <div>${snap.users.length} member${snap.users.length === 1 ? "" : "s"}</div>

@@ -123,7 +123,7 @@ function workspaceJoinMessageId(memberId: string): string {
 }
 
 function workspaceJoinMessageText(user: ThaneUser | undefined): string {
-  return `${userDisplayLabel(user, "A member")} joined the workspace.`;
+  return `${userDisplayLabel(user, "A member")} joined the team.`;
 }
 
 function makeLoginCode(): string {

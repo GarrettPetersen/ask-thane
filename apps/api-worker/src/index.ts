@@ -8,6 +8,7 @@ interface Env {
   THANE_CHAT_EVENTS?: DurableObjectNamespace;
   BILLING_LINK_SIGNING_SECRET?: string;
   INTERNAL_API_BEARER_TOKEN?: string;
+  THANE_BOT_INTERNAL_BASE_URL?: string;
   THANE_CLI_AUTH_DEV_CODES?: string;
   THANE_CLI_AUTH_SECRET?: string;
   THANE_CLI_EMAIL_FROM?: string;
@@ -1543,7 +1544,7 @@ function workspaceJoinMessageId(memberId: string): string {
 }
 
 function workspaceJoinMessageText(displayName: string): string {
-  return `${displayName.trim() || "A member"} joined the workspace.`;
+  return `${displayName.trim() || "A member"} joined the team.`;
 }
 
 async function recordThaneCliWorkspaceJoinMessage(env: Env, input: {
@@ -1747,6 +1748,142 @@ async function softLeaveAskThaneMember(env: Env, workspaceId: string, leftAt: st
     .bind(leftAt, leftAt, workspaceId, row.id)
     .run();
   return row.id;
+}
+
+function askThaneWebhookTargetUrl(env: Env): string | null {
+  const baseUrl = env.THANE_BOT_INTERNAL_BASE_URL?.trim();
+  if (!baseUrl) {
+    return null;
+  }
+  try {
+    return new URL("/webhooks/thane-chat/events", baseUrl).toString();
+  } catch {
+    return null;
+  }
+}
+
+async function ensureAskThaneWebhookSubscription(env: Env, input: {
+  workspaceId: string;
+  botMemberId: string;
+  createdByMemberId: string;
+}): Promise<void> {
+  const targetUrl = askThaneWebhookTargetUrl(env);
+  if (!targetUrl) {
+    throw new Error("ask_thane_webhook_not_configured");
+  }
+  const id = makeId("twh");
+  const token = makeWebhookCredential("twk");
+  const signingSecret = makeWebhookCredential("whsec");
+  const now = nowIso();
+  await env.DB
+    .prepare(
+      `INSERT INTO thane_cli_webhooks (
+         id, workspace_id, name, target_url, event_types, signing_secret, token_hash, bot_member_id,
+         created_by_member_id, status, created_at, updated_at, last_delivered_at
+       ) VALUES (?, ?, 'Ask Thane', ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL)
+       ON CONFLICT(workspace_id, name) DO UPDATE SET
+         target_url = excluded.target_url,
+         event_types = excluded.event_types,
+         signing_secret = excluded.signing_secret,
+         token_hash = excluded.token_hash,
+         bot_member_id = excluded.bot_member_id,
+         created_by_member_id = excluded.created_by_member_id,
+         status = 'active',
+         updated_at = excluded.updated_at`
+    )
+    .bind(
+      id,
+      input.workspaceId,
+      targetUrl,
+      JSON.stringify(["message.created"]),
+      signingSecret,
+      await sha256Hex(token),
+      input.botMemberId,
+      input.createdByMemberId,
+      now,
+      now
+    )
+    .run();
+}
+
+async function disableAskThaneWebhookSubscription(env: Env, workspaceId: string, disabledAt: string): Promise<void> {
+  try {
+    await env.DB
+      .prepare("UPDATE thane_cli_webhooks SET status = 'disabled', updated_at = ? WHERE workspace_id = ? AND name = 'Ask Thane'")
+      .bind(disabledAt, workspaceId)
+      .run();
+  } catch (error) {
+    if (String(error).toLowerCase().includes("no such table")) {
+      return;
+    }
+    throw error;
+  }
+}
+
+async function askThaneWebhookSubscriptionActive(env: Env, workspaceId: string): Promise<boolean> {
+  try {
+    const row = await env.DB
+      .prepare("SELECT id FROM thane_cli_webhooks WHERE workspace_id = ? AND name = 'Ask Thane' AND status = 'active' LIMIT 1")
+      .bind(workspaceId)
+      .first<{ id?: string }>();
+    return Boolean(row?.id);
+  } catch (error) {
+    if (String(error).toLowerCase().includes("no such table")) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function askThaneWebhookCreatorMemberId(env: Env, input: {
+  workspaceId: string;
+  linkedAccountEmail?: string | null;
+}): Promise<string | null> {
+  if (input.linkedAccountEmail) {
+    const linkedMember = await env.DB
+      .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = ? AND left_at IS NULL LIMIT 1")
+      .bind(input.workspaceId, input.linkedAccountEmail)
+      .first<{ id?: string }>();
+    if (linkedMember?.id) {
+      return linkedMember.id;
+    }
+  }
+  const admin = await env.DB
+    .prepare(
+      `SELECT id
+       FROM thane_cli_workspace_members
+       WHERE workspace_id = ?
+         AND left_at IS NULL
+         AND role IN ('owner', 'admin')
+       ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, joined_at ASC
+       LIMIT 1`
+    )
+    .bind(input.workspaceId)
+    .first<{ id?: string }>();
+  return admin?.id ?? null;
+}
+
+async function ensureAskThaneWebhookForEnabledIntegration(env: Env, workspaceId: string): Promise<void> {
+  if (!askThaneWebhookTargetUrl(env) || (await askThaneWebhookSubscriptionActive(env, workspaceId))) {
+    return;
+  }
+  const integration = await askThaneIntegrationForWorkspace(env, workspaceId);
+  if (!integration || integration.enabled !== 1) {
+    return;
+  }
+  const bot = await ensureAskThaneMember(env, workspaceId);
+  const createdByMemberId = await askThaneWebhookCreatorMemberId(env, {
+    workspaceId,
+    linkedAccountEmail: integration.linked_account_email
+  });
+  if (!createdByMemberId) {
+    return;
+  }
+  await ensureAskThaneWebhookSubscription(env, {
+    workspaceId,
+    botMemberId: bot.id,
+    createdByMemberId
+  });
 }
 
 function normalizeWebhookName(value: unknown): string | null {
@@ -3192,6 +3329,13 @@ async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<
       reason: error instanceof Error ? error.message : String(error)
     });
   });
+  await ensureAskThaneWebhookForEnabledIntegration(env, workspaceId).catch((error) => {
+    console.warn("thane_chat_ask_thane_webhook_backfill_failed", {
+      workspaceId,
+      messageId,
+      reason: error instanceof Error ? error.message : String(error)
+    });
+  });
   await deliverThaneCliWebhookEvent(env, {
     type: "message.created",
     workspaceId,
@@ -4031,6 +4175,13 @@ async function handleThaneCliWebhookMessageCreate(request: Request, env: Env): P
       reason: error instanceof Error ? error.message : String(error)
     });
   });
+  await ensureAskThaneWebhookForEnabledIntegration(env, webhook.workspace_id).catch((error) => {
+    console.warn("thane_chat_ask_thane_webhook_backfill_failed", {
+      workspaceId: webhook.workspace_id,
+      messageId,
+      reason: error instanceof Error ? error.message : String(error)
+    });
+  });
   await deliverThaneCliWebhookEvent(env, {
     type: "message.created",
     workspaceId: webhook.workspace_id,
@@ -4120,6 +4271,13 @@ async function handleThaneCliAskThaneToggle(request: Request, env: Env, enabled:
   const bot = enabled ? await ensureAskThaneMember(env, workspaceId) : null;
   if (!enabled) {
     await softLeaveAskThaneMember(env, workspaceId, now);
+    await disableAskThaneWebhookSubscription(env, workspaceId, now);
+  } else if (bot?.id) {
+    await ensureAskThaneWebhookSubscription(env, {
+      workspaceId,
+      botMemberId: bot.id,
+      createdByMemberId: member.id
+    });
   }
   await env.DB
     .prepare(

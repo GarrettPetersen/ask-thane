@@ -36,7 +36,7 @@ Instead of asking people to maintain Jira/Linear-style tickets manually, Thane l
   - includes hosted pricing/checkout page at `/subscribe` and checkout session API at `/api/checkout/session`
 - `apps/landing`: marketing site worker for `askthane.com`.
   - includes public legal pages: Privacy, Terms, Acceptable Use, Subprocessors
-- `apps/thane-cli`: local-first MVP for Thane Chat, a Slack-like terminal chat surface with matching scriptable commands for humans and agents.
+- `apps/thane-cli`: Thane Chat CLI, with a live terminal chat surface and matching scriptable commands for humans and agents.
 
 ### Shared packages
 - `@ask-thane/domain`: entity and enum types.
@@ -154,7 +154,7 @@ pnpm dev:landing
 - `pnpm test`
 
 ## Thane CLI MVP
-Thane CLI is a separate local-first chat MVP. It provides a Slack-like terminal command surface now, with stable JSON output for agents and a storage boundary that can later move to the Cloudflare backend.
+Thane CLI is the terminal and scriptable command surface for Thane Chat. It provides live chat, stable JSON output for agents, and hosted-team sync through the Cloudflare backend.
 
 Build it:
 ```bash
@@ -171,13 +171,13 @@ Navigate inside chat:
 /commands          show all slash commands
 /menu              open an arrow-key command menu
 /update            check whether a newer CLI is available
-/inbox              show unread conversation summaries in the active workspace
-/inbox all          show unread summaries across all workspaces
-/workspaces         list workspaces and mark the active one
-/workspace acme     switch workspace and focus #general
-/workspace-art      show workspace ASCII art setup commands
+/inbox              show unread conversation summaries in the active team
+/inbox all          show unread summaries across all teams
+/teams              list teams and mark the active one
+/team acme          switch team and focus #general
+/team-art           show team ASCII art setup commands
 /webhooks          show webhook setup commands
-/channels           list channels in the active workspace
+/channels           list channels in the active team
 /join book-club     switch to a channel
 /leave              leave the focused channel
 /members            list focused channel members/subscribers
@@ -195,19 +195,19 @@ Enter              open the selected channel/DM, reply to the selected message, 
 r                  reply to the selected message
 e                  open a reaction picker for the selected message
 1-8                apply the visible quick reaction while the picker is open
-Tab                autocomplete slash commands, channels, workspaces, users, and mentions
+Tab                autocomplete slash commands, channels, teams, users, and mentions
 Esc                close menu/help, cancel reply/react, or return to typing
 ```
 
 Thread replies render indented under their parent message, and selecting a channel or DM from the sidebar keeps focus in the sidebar so you can keep browsing. The selected message shows dim reply/react hints inline. In the reaction picker, use arrows or number keys to choose a common reaction, Enter to apply it, or `c` to type a custom reaction.
 Messages sent through scriptable terminal commands render with a bot marker in chat, so teammates can distinguish likely automation from live typing.
 
-Create and switch workspaces:
+Create and switch teams:
 ```bash
-pnpm thane workspaces
-pnpm thane workspace create "Acme Inc"
-pnpm thane workspace use acme-inc
-pnpm thane workspace current --json
+pnpm thane teams
+pnpm thane team create "Acme Inc"
+pnpm thane team use acme-inc
+pnpm thane team current --json
 ```
 
 Check for CLI updates:
@@ -216,12 +216,12 @@ pnpm thane update
 pnpm thane update --json
 ```
 
-Workspace admins can keep the generated workspace crest or set custom ASCII art shown above the channel list:
+Team admins can keep the generated team crest or set custom ASCII art shown above the channel list:
 ```bash
-pnpm thane workspace art show
-pnpm thane workspace art set --file ./workspace-art.txt
-printf 'ACME\n====' | pnpm thane workspace art set --stdin
-pnpm thane workspace art reset
+pnpm thane team art show
+pnpm thane team art set --file ./team-art.txt
+printf 'ACME\n====' | pnpm thane team art set --stdin
+pnpm thane team art reset
 ```
 
 Create and use accounts:
@@ -241,7 +241,7 @@ pnpm thane mfa setup
 pnpm thane mfa disable 123456
 ```
 
-Manage workspace members:
+Manage team members:
 ```bash
 pnpm thane members --json
 pnpm thane invite alex@example.com --role admin --expires 7d
@@ -250,9 +250,9 @@ pnpm thane invite-link accept https://api.askthane.com/invite/...
 pnpm thane member role alex member
 ```
 
-Workspace owners and admins can add people to a workspace. Members can create channels.
+Team owners and admins can add people to a team. Members can create channels.
 
-For hosted workspaces, `thane invite <email>` emails a one-use invite link for the active workspace. Invite emails
+For hosted teams, `thane invite <email>` emails a one-use invite link for the active team. Invite emails
 default to member access and expire after 7 days; use `--role admin` or `--expires 24h` for narrower access. You can
 still create a copyable link with `thane invite-link create`, and the teammate accepts after `thane init` with
 `thane invite-link accept <link>`.
@@ -261,13 +261,13 @@ Inside `thane chat`, owners/admins can run `/invite <email>` to email an invite 
 
 Import a one-time Slack export ZIP:
 ```bash
-pnpm thane workspace create-from-slack ./slack-export.zip --slug acme --apply
+pnpm thane team create-from-slack ./slack-export.zip --slug acme --apply
 pnpm thane import slack-export ./slack-export.zip --preview
 pnpm thane import slack-export ./slack-export.zip --apply
 pnpm thane import slack-export ./slack-export.zip --preview --json
 ```
 
-The most natural migration path is `workspace create-from-slack`: it creates or reuses a Thane workspace, switches to it, then imports the ZIP. The lower-level `import slack-export` command imports into the active workspace. The importer reads Slack's official export archive shape: `users.json`, `channels.json`, optional `groups.json`/`dms.json`/`mpims.json`, and per-conversation daily JSON message files. It preserves authors, timestamps, basic reactions, file links, mentions, and Slack thread roots. Imports are idempotent, so rerunning the same ZIP skips already-imported messages. Applying an export requires the current user to be a workspace owner/admin, and free workspaces must stay within the 10-member/3-private-channel limits.
+The most natural migration path is `team create-from-slack`: it creates or reuses a Thane team, switches to it, then imports the ZIP. The lower-level `import slack-export` command imports into the active team. The importer reads Slack's official export archive shape: `users.json`, `channels.json`, optional `groups.json`/`dms.json`/`mpims.json`, and per-conversation daily JSON message files. It preserves authors, timestamps, basic reactions, file links, mentions, and Slack thread roots. Imports are idempotent, so rerunning the same ZIP skips already-imported messages. Applying an export requires the current user to be a team owner/admin, and free teams must stay within the 100-member/10-private-channel limits.
 
 Create public and private channels:
 ```bash
@@ -279,9 +279,9 @@ pnpm thane channel leave design
 pnpm thane channel members design --json
 ```
 
-Public channel membership means subscription: any workspace member can discover/read a public channel, but only joined public channels feed normal inbox/unread activity. Direct `@you` mentions in readable public channels still surface. Posting in a public channel auto-joins it.
+Public channel membership means subscription: any team member can discover/read a public channel, but only joined public channels feed normal inbox/unread activity. Direct `@you` mentions in readable public channels still surface. Posting in a public channel auto-joins it.
 
-Private channel membership means access: only members can discover, read, search, post, or receive notifications from private channels. Existing private-channel members can invite other workspace members.
+Private channel membership means access: only members can discover, read, search, post, or receive notifications from private channels. Existing private-channel members can invite other team members.
 
 Check or upgrade billing:
 ```bash
@@ -291,14 +291,14 @@ THANE_PAYMENTS_BASE_URL=https://pay.askthane.com \
   pnpm thane billing checkout
 ```
 
-Free Thane CLI workspaces are intentionally useful: up to 100 members, 10 private channels, public channels, DMs, threads, mentions, inbox/search, and JSON-friendly commands. Thane CLI Team is `$8/member/mo` and removes the member/private-channel limits for larger hosted teams.
+Free Thane Chat teams are intentionally useful: up to 100 members, 10 private channels, public channels, DMs, threads, mentions, inbox/search, and JSON-friendly commands. Thane Chat Team is `$8/member/mo` and removes the member/private-channel limits for larger hosted teams.
 
 Use scriptable commands:
 ```bash
 pnpm thane commands
 pnpm thane commands --json
 pnpm thane inbox --json
-pnpm thane inbox --all-workspaces --json
+pnpm thane inbox --all-teams --json
 pnpm thane channels --json
 pnpm thane channel create book-club --topic "Books, links, and plans"
 pnpm thane send general "Hello everyone"
@@ -307,7 +307,7 @@ pnpm thane mentions --since yesterday --json
 pnpm thane reply <message-id> "I can review this afternoon"
 ```
 
-Create generic workspace webhooks for external apps:
+Create generic team webhooks for external apps:
 ```bash
 pnpm thane webhooks docs
 pnpm thane webhooks create build-bot https://example.com/thane/events --json
@@ -315,7 +315,7 @@ pnpm thane webhooks list --json
 pnpm thane webhooks disable build-bot
 ```
 
-Webhook receivers get signed `message.created` events with `x-thane-signature`, `x-thane-timestamp`, and a JSON body containing workspace, channel, and message data. The app token returned at creation can post back through `POST /v1/thane-cli/webhooks/messages` with `Authorization: Bearer <token>`. Tokens are shown once. Message `source` values are:
+Webhook receivers get signed `message.created` events with `x-thane-signature`, `x-thane-timestamp`, and a JSON body containing team, channel, and message data. The app token returned at creation can post back through `POST /v1/thane-cli/webhooks/messages` with `Authorization: Bearer <token>`. Tokens are shown once. Message `source` values are:
 
 - `chat`: sent from the web or terminal chat UI.
 - `terminal`: sent through a command/script acting as a signed-in user.
@@ -328,7 +328,7 @@ Webhook app development contract:
 - Receivers should verify `x-thane-signature` over `<x-thane-timestamp>.<raw body>` and reject stale timestamps.
 - App tokens are stored hashed and are accepted only as bearer tokens on the webhook post-message endpoint.
 - Private-channel events are delivered only when the app identity can access that channel.
-- Webhook messages are rate-limited per app identity and workspace.
+- Webhook messages are rate-limited per app identity and team.
 
 Manage users, mentions, and DMs:
 ```bash
@@ -349,7 +349,7 @@ pnpm thane send general "@thane can you track this review?"
 pnpm thane thread <message-id> --json
 ```
 
-Ask Thane is disabled by default. When enabled, it should behave like an external app identity in the workspace, using the generic webhook/API surface rather than logic embedded in Thane Chat message creation. If Ask Thane is not enabled, it is not an active workspace member and receives no events.
+Ask Thane is disabled by default. When enabled, it behaves like an external app identity in the team, using the generic webhook/API surface rather than logic embedded in Thane Chat message creation. If Ask Thane is not enabled, it is not an active team member and receives no events.
 
 Cross-platform identity is email-based: a Thane CLI account with `garrett@example.com` should resolve to the same `person` as a Slack identity with that email through the existing `identity_accounts` table. The CLI provider key is `thane_cli`, with `external_user_id` set to the verified account email.
 
@@ -384,7 +384,7 @@ THANE_STORE_PATH=/tmp/thane-store.json pnpm thane recent --json
 pnpm thane --store ./.thane/store.json recent --json
 ```
 
-The CLI always scopes channels, messages, threads, unread state, mentions, and search to the active workspace. That keeps `#general` in one workspace separate from `#general` in another.
+The CLI always scopes channels, messages, threads, unread state, mentions, and search to the active team. That keeps `#general` in one team separate from `#general` in another.
 
 ## Testing
 - The repo includes a full automated test suite across workers and shared packages, including agent tool-call behavior, workflow logic, Slack payload normalization, and route-level worker behavior.
@@ -393,8 +393,8 @@ The CLI always scopes channels, messages, threads, unread state, mentions, and s
 - Push/PR CI (`.github/workflows/ci.yml`) also runs `pnpm test`.
 
 ## Pricing Defaults
-- Thane CLI Free: CLI-first team chat for up to 100 workspace members, 10 private channels, public channels, DMs, threads, mentions, inbox/search, JSON-friendly commands, and optional local Ask Thane integration.
-- Thane CLI Team: `$8/member/mo`, unlocks larger workspaces, unlimited private channels, long-lived hosted history, and org-scale admin controls. Configure with `STRIPE_PRICE_CLI_TEAM_MONTHLY`.
+- Thane Chat Free: CLI-first team chat for up to 100 team members, 10 private channels, public channels, DMs, threads, mentions, inbox/search, JSON-friendly commands, and optional local Ask Thane integration.
+- Thane Chat Team: `$8/member/mo`, unlocks larger teams, unlimited private channels, long-lived hosted history, and org-scale admin controls. Configure with `STRIPE_PRICE_CLI_TEAM_MONTHLY`.
 - Ask Thane Free: 10 active participants max (hard cap), no AI credit.
   - Free tier also enforces a monthly AI spend safety cap (`FREE_TIER_MONTHLY_AI_CAP_USD`, default `$10`).
 - Ask Thane Team: `$99/mo`, includes 25 active participants, `+$3` per additional participant, `$20` included monthly AI cost credit, `1.35x` AI overage multiplier.

@@ -410,7 +410,7 @@ function renderSlackImportSummary(summary: SlackImportPreview | SlackImportResul
 }
 
 function help(): string {
-  return `Thane CLI MVP
+  return `Thane Chat CLI
 
 Command discovery:
   thane --version
@@ -495,19 +495,19 @@ Members, users, and DMs:
   thane dm-send <handle> <message>
   thane dm-send <handle> --stdin
 
-Workspaces:
-  thane workspaces [--json]
-  thane workspace current [--json]
-  thane workspace create <name> [--slug "..."]
-  thane workspace use <slug>
-  thane workspace leave
-  thane workspace art show [--json]
-  thane workspace art set [--file <path>|--stdin|<text>]
-  thane workspace art reset
-  thane workspace create-from-slack <export.zip> [--slug "..."] [--name "..."] [--apply] [--json]
+Teams:
+  thane teams [--json]
+  thane team current [--json]
+  thane team create <name> [--slug "..."]
+  thane team use <slug>
+  thane team leave
+  thane team art show [--json]
+  thane team art set [--file <path>|--stdin|<text>]
+  thane team art reset
+  thane team create-from-slack <export.zip> [--slug "..."] [--name "..."] [--apply] [--json]
 
 Messages:
-  thane inbox [--all-workspaces] [--json]
+  thane inbox [--all-teams] [--json]
   thane send <channel> <message>
   thane send <channel> --stdin
   thane recent [channel] [--limit 20] [--since today] [--json]
@@ -525,7 +525,7 @@ Environment:
   THANE_STORE_PATH=/path/to/store.json
   thane --store /path/to/store.json recent --json
 
-The store is a hosted Thane Chat cache. All channels, messages, mentions, unread state, and search results are scoped to the active workspace.`;
+The store is a hosted Thane Chat cache. All channels, messages, mentions, unread state, and search results are scoped to the active team.`;
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -573,7 +573,7 @@ function renderDoctorText(input: Record<string, unknown>): string {
     `store: ${input.resolvedStorePath}`,
     `store exists: ${input.storeExists}`,
     input.account ? `account: ${input.account}` : undefined,
-    input.activeWorkspace ? `workspace: ${input.activeWorkspace}` : undefined,
+    input.activeWorkspace ? `team: ${input.activeWorkspace}` : undefined,
     typeof input.messageCount === "number" ? `messages: ${input.messageCount}` : undefined,
     typeof input.unreadCount === "number" ? `unread: ${input.unreadCount}` : undefined,
     `hint: ${input.hint}`
@@ -584,7 +584,7 @@ function agentInstructions(): string {
   return `# Thane Chat agent instructions
 
 - Read from the user store by default: \`thane see-recent --json\`.
-- Check store/account/workspace first: \`thane doctor --json\`.
+- Check store/account/team first: \`thane doctor --json\`.
 - Get compact context: \`thane agent context --json\`.
 - List channels: \`thane channels --json\`.
 - Read recent messages from the server-backed cache: \`thane see-recent --json\`.
@@ -598,9 +598,9 @@ function agentInstructions(): string {
 function webhookDocs(): string {
   return `# Thane Chat webhooks
 
-Use webhooks to build external Thane Chat apps. Admins create an app identity for a workspace, your app receives signed events, and the app token can post messages back as that app.
+Use webhooks to build external Thane Chat apps. Admins create an app identity for a team, your app receives signed events, and the app token can post messages back as that app.
 
-Create a workspace webhook:
+Create a team webhook:
 
 thane webhooks create my-app https://example.com/thane/events --json
 
@@ -662,7 +662,7 @@ Security notes:
 - App tokens are shown once and are stored hashed by Thane.
 - Verify signatures using the raw request body and reject stale timestamps.
 - Private-channel events are delivered only when the app identity can access that channel.
-- Webhook messages are rate-limited per app identity and workspace.
+- Webhook messages are rate-limited per app identity and team.
 
 Webhook tokens are shown once. Use \`thane webhooks list --json\` for IDs and status.
 `;
@@ -976,7 +976,7 @@ async function main(): Promise<void> {
     wantsJson(args)
       ? printJson({ account, user, workspace: store.activeWorkspace, member })
       : process.stdout.write(
-          `${account?.email ?? "not signed in"} as ${user.displayName || `@${user.handle}`} (@${user.handle}, ${member?.role ?? "member"}) in ${store.activeWorkspace.slug}\n`
+          `${account?.email ?? "not signed in"} as ${user.displayName || `@${user.handle}`} (@${user.handle}, ${member?.role ?? "member"}) in team ${store.activeWorkspace.slug}\n`
         );
     return;
   }
@@ -997,7 +997,7 @@ async function main(): Promise<void> {
     await syncHostedStore(store);
     wantsJson(args)
       ? printJson({ account: response.account, workspaceDisplayName, workspace: store.activeWorkspace })
-      : process.stdout.write(`workspace display name: ${workspaceDisplayName}\n`);
+      : process.stdout.write(`team display name: ${workspaceDisplayName}\n`);
     return;
   }
 
@@ -1009,7 +1009,7 @@ async function main(): Promise<void> {
     const workspaceHandle = await setHostedWorkspaceHandle(store, handle);
     wantsJson(args)
       ? printJson({ handle: workspaceHandle, workspace: store.activeWorkspace })
-      : process.stdout.write(`workspace handle: @${workspaceHandle}\n`);
+      : process.stdout.write(`team handle: @${workspaceHandle}\n`);
     return;
   }
 
@@ -1102,8 +1102,8 @@ async function main(): Promise<void> {
       ? printJson({ integration })
       : process.stdout.write(
           integration?.enabled
-            ? `Ask Thane enabled for ${store.activeWorkspace.slug} as ${integration.linkedAccountEmail}\n`
-            : `Ask Thane disabled for ${store.activeWorkspace.slug}\n`
+            ? `Ask Thane enabled for team ${store.activeWorkspace.slug} as ${integration.linkedAccountEmail}\n`
+            : `Ask Thane disabled for team ${store.activeWorkspace.slug}\n`
         );
     return;
   }
@@ -1120,7 +1120,7 @@ async function main(): Promise<void> {
     const integration = response.integration;
     wantsJson(args)
       ? printJson({ integration })
-      : process.stdout.write(`Ask Thane enabled. Mention @thane in any joined/readable conversation.\n`);
+      : process.stdout.write("Ask Thane enabled. Mention @thane in any joined/readable conversation.\n");
     return;
   }
 
@@ -1260,7 +1260,10 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (command === "workspaces") {
+  const isTeamsCommand = command === "teams" || command === "workspaces";
+  const isTeamCommand = command === "team" || command === "workspace";
+
+  if (isTeamsCommand) {
     const workspaces = store.listWorkspaces();
     wantsJson(args)
       ? printJson({ activeWorkspace: store.activeWorkspace, workspaces })
@@ -1268,20 +1271,20 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (command === "workspace" && second === "current") {
+  if (isTeamCommand && second === "current") {
     wantsJson(args)
       ? printJson({ activeWorkspace: store.activeWorkspace })
       : process.stdout.write(`${store.activeWorkspace.slug} - ${store.activeWorkspace.name}\n`);
     return;
   }
 
-  if (command === "workspace" && second === "create") {
+  if (isTeamCommand && second === "create") {
     const nameInput = args.positionals.slice(2).join(" ").trim() || undefined;
     const flagName = flagString(args, "name");
     const explicitSlug = flagString(args, "slug") ?? (flagName && nameInput ? nameInput : undefined);
     const workspaceName = flagName ?? nameInput ?? explicitSlug;
     if (!workspaceName) {
-      throw new Error("Usage: thane workspace create <name> [--slug <slug>]");
+      throw new Error("Usage: thane team create <name> [--slug <slug>]");
     }
     requireHostedAuthToken(store);
     await createHostedWorkspace(store, {
@@ -1291,36 +1294,36 @@ async function main(): Promise<void> {
     });
     store = await ThaneStore.open();
     const workspace = store.activeWorkspace;
-    wantsJson(args) ? printJson({ workspace }) : process.stdout.write(`created workspace ${workspace.slug}\n`);
+    wantsJson(args) ? printJson({ workspace }) : process.stdout.write(`created team ${workspace.slug}\n`);
     return;
   }
 
-  if (command === "workspace" && second === "use") {
+  if (isTeamCommand && second === "use") {
     const slug = args.positionals[2];
     if (!slug) {
-      throw new Error("Usage: thane workspace use <slug>");
+      throw new Error("Usage: thane team use <slug>");
     }
     const workspace = await store.useWorkspace(slug);
     await syncHosted({ workspaceId: workspace.id, silent: true });
-    wantsJson(args) ? printJson({ activeWorkspace: workspace }) : process.stdout.write(`using workspace ${workspace.slug}\n`);
+    wantsJson(args) ? printJson({ activeWorkspace: workspace }) : process.stdout.write(`using team ${workspace.slug}\n`);
     return;
   }
 
-  if (command === "workspace" && second === "leave") {
+  if (isTeamCommand && second === "leave") {
     requireHostedAuthToken(store);
     const leaving = store.activeWorkspace.slug;
     await leaveHostedWorkspace(store);
-    wantsJson(args) ? printJson({ ok: true, workspace: leaving }) : process.stdout.write(`left workspace ${leaving}\n`);
+    wantsJson(args) ? printJson({ ok: true, workspace: leaving }) : process.stdout.write(`left team ${leaving}\n`);
     return;
   }
 
-  if (command === "workspace" && second === "art") {
+  if (isTeamCommand && second === "art") {
     const action = args.positionals[2] ?? "show";
     if (action === "show") {
       const art = store.activeWorkspace.asciiArt ?? null;
       wantsJson(args)
         ? printJson({ workspace: store.activeWorkspace, art, source: art ? "custom" : "generated" })
-        : process.stdout.write(art ? `${art}\n` : "Using generated workspace art.\n");
+        : process.stdout.write(art ? `${art}\n` : "Using generated team art.\n");
       return;
     }
     if (action === "set") {
@@ -1331,7 +1334,7 @@ async function main(): Promise<void> {
       }
       wantsJson(args)
         ? printJson({ workspace, art: workspace.asciiArt, source: "custom" })
-        : process.stdout.write(`updated workspace art for ${workspace.slug}\n`);
+        : process.stdout.write(`updated team art for ${workspace.slug}\n`);
       return;
     }
     if (action === "reset" || action === "clear") {
@@ -1341,16 +1344,16 @@ async function main(): Promise<void> {
       }
       wantsJson(args)
         ? printJson({ workspace, art: null, source: "generated" })
-        : process.stdout.write(`reset workspace art for ${workspace.slug}\n`);
+        : process.stdout.write(`reset team art for ${workspace.slug}\n`);
       return;
     }
-    throw new Error("Usage: thane workspace art <show|set|reset>");
+    throw new Error("Usage: thane team art <show|set|reset>");
   }
 
-  if (command === "workspace" && second === "create-from-slack") {
+  if (isTeamCommand && second === "create-from-slack") {
     const zipPath = args.positionals[2];
     if (!zipPath) {
-      throw new Error("Usage: thane workspace create-from-slack <export.zip> [--slug <slug>] [--name \"...\"] [--apply]");
+      throw new Error("Usage: thane team create-from-slack <export.zip> [--slug <slug>] [--name \"...\"] [--apply]");
     }
     const exportData = await parseSlackExportZip(zipPath);
     const slug = flagString(args, "slug") ?? slugFromSlackExportPath(zipPath);
@@ -1361,7 +1364,7 @@ async function main(): Promise<void> {
       wantsJson(args)
         ? printJson(response)
         : process.stdout.write(
-            `Proposed workspace: ${slug} - ${name}\n${renderSlackImportSummary(preview, "preview")}`
+            `Proposed team: ${slug} - ${name}\n${renderSlackImportSummary(preview, "preview")}`
           );
       return;
     }
@@ -1394,7 +1397,7 @@ async function main(): Promise<void> {
     }
     requireHostedAuthToken(store);
     await removeHostedWorkspaceMember(store, { target });
-    wantsJson(args) ? printJson({ ok: true, target }) : process.stdout.write(`removed ${target} from ${store.activeWorkspace.slug}\n`);
+    wantsJson(args) ? printJson({ ok: true, target }) : process.stdout.write(`removed ${target} from team ${store.activeWorkspace.slug}\n`);
     return;
   }
 
@@ -1406,7 +1409,7 @@ async function main(): Promise<void> {
     requireHostedAuthToken(store);
     const reason = flagString(args, "reason");
     await banHostedWorkspaceMember(store, { target, ...(reason ? { reason } : {}) });
-    wantsJson(args) ? printJson({ ok: true, target, banned: true }) : process.stdout.write(`banned ${target} from ${store.activeWorkspace.slug}\n`);
+    wantsJson(args) ? printJson({ ok: true, target, banned: true }) : process.stdout.write(`banned ${target} from team ${store.activeWorkspace.slug}\n`);
     return;
   }
 
@@ -1417,7 +1420,7 @@ async function main(): Promise<void> {
     }
     requireHostedAuthToken(store);
     await unbanHostedWorkspaceMember(store, { email });
-    wantsJson(args) ? printJson({ ok: true, email, unbanned: true }) : process.stdout.write(`unbanned ${email} in ${store.activeWorkspace.slug}\n`);
+    wantsJson(args) ? printJson({ ok: true, email, unbanned: true }) : process.stdout.write(`unbanned ${email} in team ${store.activeWorkspace.slug}\n`);
     return;
   }
 
@@ -1453,7 +1456,7 @@ async function main(): Promise<void> {
     wantsJson(args)
       ? printJson(response)
       : process.stdout.write(
-          `sent invite to ${email} for ${response.invite.workspace.slug}\n` +
+          `sent invite to ${email} for team ${response.invite.workspace.slug}\n` +
             `web link: ${response.invite.webUrl ?? response.invite.url}\n` +
             `cli link: ${response.invite.url}\n` +
             `role: ${response.invite.role}\n` +
@@ -1494,7 +1497,7 @@ async function main(): Promise<void> {
     wantsJson(args)
       ? printJson(response)
       : process.stdout.write(
-          `invite link for ${response.invite.workspace.slug}\n` +
+          `invite link for team ${response.invite.workspace.slug}\n` +
             `web link: ${response.invite.webUrl ?? response.invite.url}\n` +
             `cli link: ${response.invite.url}\n` +
             `role: ${response.invite.role}\n` +
@@ -1556,7 +1559,7 @@ async function main(): Promise<void> {
 
   if (command === "inbox") {
     const conversations = store.inbox({
-      allWorkspaces: args.flags.has("all-workspaces"),
+      allWorkspaces: args.flags.has("all-teams") || args.flags.has("all-workspaces"),
       onlyUnread: !args.flags.has("include-quiet"),
       includeQuiet: args.flags.has("include-quiet")
     });

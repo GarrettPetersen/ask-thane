@@ -352,12 +352,13 @@ function completionCandidates(store: ThaneStore, inputText: string): CompletionC
       .filter((channel) => channel.name.startsWith(prefix))
       .map((channel) => ({ label: `#${channel.name}`, value: `/join ${channel.name}` }));
   }
-  if (inputText.startsWith("/workspace ")) {
-    const prefix = inputText.slice("/workspace ".length).toLowerCase();
+  if (inputText.startsWith("/team ") || inputText.startsWith("/workspace ")) {
+    const commandPrefix = inputText.startsWith("/team ") ? "/team " : "/workspace ";
+    const prefix = inputText.slice(commandPrefix.length).toLowerCase();
     return store
       .listWorkspaces()
       .filter((workspace) => workspace.slug.startsWith(prefix))
-      .map((workspace) => ({ label: workspace.slug, value: `/workspace ${workspace.slug}` }));
+      .map((workspace) => ({ label: workspace.slug, value: `${commandPrefix}${workspace.slug}` }));
   }
   if (inputText.startsWith("/dm ")) {
     const prefix = inputText.slice("/dm ".length).replace(/^@/, "").toLowerCase();
@@ -421,7 +422,7 @@ function renderMenuLines(commands: SlashCommand[], selectedIndex: number, availa
 function renderWorkspacePickerLines(store: ThaneStore, selectedIndex: number): string[] {
   const workspaces = store.listWorkspaces();
   return [
-    `${BOLD}Workspaces${RESET}`,
+    `${BOLD}Teams${RESET}`,
     `${DIM}Use arrows, Return to switch, Esc to close.${RESET}`,
     "",
     ...workspaces.map((workspace, index) => {
@@ -550,7 +551,7 @@ async function updateDisplayName(store: ThaneStore, displayName: string): Promis
   const workspaceDisplayName = response.workspaceDisplayName ?? response.displayName;
   await store.setWorkspaceDisplayName(workspaceDisplayName);
   await syncHostedStore(store);
-  return `Workspace name: ${workspaceDisplayName}`;
+  return `Team name: ${workspaceDisplayName}`;
 }
 
 async function updateHandle(store: ThaneStore, handle: string): Promise<string> {
@@ -567,7 +568,7 @@ async function updateHandle(store: ThaneStore, handle: string): Promise<string> 
   const workspaceHandle = response.workspaceHandle ?? response.handle;
   await store.setWorkspaceHandle(workspaceHandle);
   await syncHostedStore(store);
-  return `Workspace handle: @${workspaceHandle}`;
+  return `Team handle: @${workspaceHandle}`;
 }
 
 async function updateAccountDisplayName(store: ThaneStore, displayName: string): Promise<string> {
@@ -672,7 +673,7 @@ function renderScreen(inputText: string, state: {
     : state.showHelp
     ? [
         `${BOLD}Commands${RESET}`,
-        "/join <channel>   /dm <handle>   /workspace <slug>",
+        "/join <channel>   /dm <handle>   /team <slug>",
         "/commands         /help          /quit",
         "",
         ...renderSlashCommands({ isAdmin: canAdminWorkspace(state.store) }).split("\n").slice(0, Math.max(0, contentRows - 5))
@@ -1041,16 +1042,16 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = await disableMfa(store, code);
       return;
     }
-    if (trimmed === "/workspace-art") {
+    if (trimmed === "/team-art" || trimmed === "/workspace-art") {
       const current = store.activeWorkspace.asciiArt?.trim();
       status = current
-        ? "Custom workspace art is set. Use `thane workspace art show|set|reset` to manage it."
-        : "Using generated workspace art. Admins can set custom art with `thane workspace art set --file art.txt` or `--stdin`.";
+        ? "Custom team art is set. Use `thane team art show|set|reset` to manage it."
+        : "Using generated team art. Admins can set custom art with `thane team art set --file art.txt` or `--stdin`.";
       return;
     }
-    if (trimmed === "/workspace-art reset") {
+    if (trimmed === "/team-art reset" || trimmed === "/workspace-art reset") {
       await store.clearWorkspaceAsciiArt();
-      status = "Reset workspace art to generated default.";
+      status = "Reset team art to generated default.";
       return;
     }
     if (trimmed.startsWith("/name ")) {
@@ -1129,7 +1130,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = showHelp ? "Command help" : "";
       return;
     }
-    if (trimmed === "/workspaces") {
+    if (trimmed === "/teams" || trimmed === "/workspaces") {
       const workspaces = store.listWorkspaces();
       workspacePickerIndex = Math.max(0, workspaces.findIndex((workspace) => workspace.id === store.activeWorkspace.id));
       sidePanelLines = renderWorkspacePickerLines(store, workspacePickerIndex);
@@ -1137,7 +1138,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       showHelp = false;
       showMenu = false;
       showReactionPicker = false;
-      status = `Active workspace: ${store.activeWorkspace.slug}`;
+      status = `Active team: ${store.activeWorkspace.slug}`;
       return;
     }
     if (trimmed === "/channels") {
@@ -1146,7 +1147,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       showHelp = false;
       showMenu = false;
       showReactionPicker = false;
-      status = "Channels in this workspace.";
+      status = "Channels in this team.";
       return;
     }
     if (trimmed === "/members" || trimmed === "/channel-members") {
@@ -1159,19 +1160,19 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = `Members in ${channelLabel(activeChannel)}.`;
       return;
     }
-    if (trimmed === "/workspace-members") {
-      sidePanelLines = [`${BOLD}Workspace Members: ${store.activeWorkspace.slug}${RESET}`, "", ...renderMembers(store.listMembers()).split("\n")];
+    if (trimmed === "/team-members" || trimmed === "/workspace-members") {
+      sidePanelLines = [`${BOLD}Team Members: ${store.activeWorkspace.slug}${RESET}`, "", ...renderMembers(store.listMembers()).split("\n")];
       workspacePickerOpen = false;
       showHelp = false;
       showMenu = false;
       showReactionPicker = false;
-      status = `Members in workspace ${store.activeWorkspace.slug}.`;
+      status = `Members in team ${store.activeWorkspace.slug}.`;
       return;
     }
     if (trimmed === "/inbox" || trimmed === "/inbox all") {
       const allWorkspaces = trimmed.endsWith(" all");
       sidePanelLines = [
-        `${BOLD}${allWorkspaces ? "Inbox: All Workspaces" : "Inbox"}${RESET}`,
+        `${BOLD}${allWorkspaces ? "Inbox: All Teams" : "Inbox"}${RESET}`,
         "",
         ...renderInbox(store.inbox({ allWorkspaces })).split("\n")
       ];
@@ -1179,7 +1180,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       showHelp = false;
       showMenu = false;
       showReactionPicker = false;
-      status = allWorkspaces ? "Unread conversations across workspaces." : "Unread conversations in this workspace.";
+      status = allWorkspaces ? "Unread conversations across teams." : "Unread conversations in this team.";
       return;
     }
     if (trimmed === "/recent") {
@@ -1326,13 +1327,13 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = `Removed ${target} from ${channelLabel(activeChannel)}`;
       return;
     }
-    if (trimmed === "/workspace-leave") {
+    if (trimmed === "/team-leave" || trimmed === "/workspace-leave") {
       const leaving = store.activeWorkspace.slug;
       requireHostedAuthToken(store);
       await leaveHostedWorkspace(store);
       store = await ThaneStore.open();
       activeChannel = await selectConversation(store, "general");
-      status = `Left workspace ${leaving}`;
+      status = `Left team ${leaving}`;
       return;
     }
     if (trimmed.startsWith("/member-remove ")) {
@@ -1396,15 +1397,16 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       messageIndex = Math.max(0, threadedMessages(store.recent(activeChannel.id, 200)).length - 1);
       return;
     }
-    if (trimmed.startsWith("/workspace ")) {
-      const workspace = await store.useWorkspace(trimmed.slice("/workspace ".length).trim());
+    if (trimmed.startsWith("/team ") || trimmed.startsWith("/workspace ")) {
+      const commandPrefix = trimmed.startsWith("/team ") ? "/team " : "/workspace ";
+      const workspace = await store.useWorkspace(trimmed.slice(commandPrefix.length).trim());
       if (hasHostedChat(store)) {
         await syncHostedStore(store, { workspaceId: workspace.id });
         store = await ThaneStore.open();
       }
       restartEventWatcher();
       activeChannel = await selectConversation(store, "general");
-      status = `Switched to workspace ${workspace.slug}`;
+      status = `Switched to team ${workspace.slug}`;
       showHelp = false;
       showMenu = false;
       sidePanelLines = undefined;
@@ -1412,10 +1414,11 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       showReactionPicker = false;
       return;
     }
-    if (trimmed.startsWith("/workspace-create ")) {
-      const workspaceInput = parseWorkspaceCreateInput(trimmed.slice("/workspace-create ".length));
+    if (trimmed.startsWith("/team-create ") || trimmed.startsWith("/workspace-create ")) {
+      const commandPrefix = trimmed.startsWith("/team-create ") ? "/team-create " : "/workspace-create ";
+      const workspaceInput = parseWorkspaceCreateInput(trimmed.slice(commandPrefix.length));
       if (!workspaceInput.name) {
-        status = "Usage: /workspace-create <name> [--slug <slug>]";
+        status = "Usage: /team-create <name> [--slug <slug>]";
         return;
       }
       requireHostedAuthToken(store);
@@ -1427,7 +1430,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       store = await ThaneStore.open();
       const workspace = store.activeWorkspace;
       activeChannel = await selectConversation(store, "general");
-      status = `Created workspace ${workspace.slug}`;
+      status = `Created team ${workspace.slug}`;
       showHelp = false;
       showMenu = false;
       sidePanelLines = undefined;
@@ -1591,7 +1594,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
               activeChannel = await selectConversation(store, "general");
               workspacePickerOpen = false;
               sidePanelLines = undefined;
-              status = `Switched to workspace ${workspace.slug}`;
+              status = `Switched to team ${workspace.slug}`;
             }
           } else if (key.sequence && key.sequence >= " " && !key.ctrl) {
             workspacePickerOpen = false;

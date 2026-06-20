@@ -45,7 +45,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Accounts",
     command: "thane whoami [--json]",
-    description: "Show the current account, user, workspace, and role.",
+    description: "Show the current account, user, team, and role.",
     examples: ["thane whoami --json"]
   },
   {
@@ -69,19 +69,19 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Accounts",
     command: "thane profile name <display-name> [--json]",
-    description: "Change your display name in the active workspace.",
+    description: "Change your display name in the active team.",
     examples: ["thane profile name \"Garrett Petersen\"", "thane profile name GP --json"]
   },
   {
     category: "Accounts",
     command: "thane profile handle <handle> [--json]",
-    description: "Change your @handle in the active workspace.",
+    description: "Change your @handle in the active team.",
     examples: ["thane profile handle garrett", "thane profile handle dr-dad --json"]
   },
   {
     category: "Accounts",
     command: "thane profile account-name <display-name> [--json]",
-    description: "Change your default display name for newly joined workspaces.",
+    description: "Change your default display name for newly joined teams.",
     examples: ["thane profile account-name \"Garrett Petersen\"", "thane profile account-name GP --json"]
   },
   {
@@ -91,58 +91,58 @@ export const cliCommands: CliCommand[] = [
     examples: ["thane logout"]
   },
   {
-    category: "Workspaces",
-    command: "thane workspaces [--json]",
-    description: "List workspaces and mark the active one.",
-    examples: ["thane workspaces"]
+    category: "Teams",
+    command: "thane teams [--json]",
+    description: "List teams and mark the active one.",
+    examples: ["thane teams"]
   },
   {
-    category: "Workspaces",
-    command: "thane workspace current [--json]",
-    description: "Show the active workspace.",
-    examples: ["thane workspace current --json"]
+    category: "Teams",
+    command: "thane team current [--json]",
+    description: "Show the active team.",
+    examples: ["thane team current --json"]
   },
   {
-    category: "Workspaces",
-    command: "thane workspace create <name> [--slug \"...\"]",
-    description: "Create a workspace. The slug is generated from the name unless --slug is set.",
-    examples: ["thane workspace create \"Acme Team\"", "thane workspace create \"Acme Team\" --slug acme-team"]
+    category: "Teams",
+    command: "thane team create <name> [--slug \"...\"]",
+    description: "Create a team. The slug is generated from the name unless --slug is set.",
+    examples: ["thane team create \"Acme Team\"", "thane team create \"Acme Team\" --slug acme-team"]
   },
   {
-    category: "Workspaces",
-    command: "thane workspace use <slug>",
-    description: "Switch the active workspace.",
-    examples: ["thane workspace use acme"]
+    category: "Teams",
+    command: "thane team use <slug>",
+    description: "Switch the active team.",
+    examples: ["thane team use acme"]
   },
   {
-    category: "Workspaces",
-    command: "thane workspace leave",
-    description: "Leave the active hosted workspace.",
-    examples: ["thane workspace leave"]
+    category: "Teams",
+    command: "thane team leave",
+    description: "Leave the active hosted team.",
+    examples: ["thane team leave"]
   },
   {
-    category: "Workspaces",
-    command: "thane workspace art show [--json]",
-    description: "Show the active workspace ASCII art.",
-    examples: ["thane workspace art show"]
+    category: "Teams",
+    command: "thane team art show [--json]",
+    description: "Show the active team ASCII art.",
+    examples: ["thane team art show"]
   },
   {
-    category: "Workspaces",
-    command: "thane workspace art set [--file <path>|--stdin|<text>]",
-    description: "Set custom ASCII art for the active workspace.",
-    examples: ["thane workspace art set --file ./art.txt", "printf 'ACME\\n====' | thane workspace art set --stdin"]
+    category: "Teams",
+    command: "thane team art set [--file <path>|--stdin|<text>]",
+    description: "Set custom ASCII art for the active team.",
+    examples: ["thane team art set --file ./art.txt", "printf 'ACME\\n====' | thane team art set --stdin"]
   },
   {
-    category: "Workspaces",
-    command: "thane workspace art reset",
-    description: "Reset the active workspace to generated ASCII art.",
-    examples: ["thane workspace art reset"]
+    category: "Teams",
+    command: "thane team art reset",
+    description: "Reset the active team to generated ASCII art.",
+    examples: ["thane team art reset"]
   },
   {
-    category: "Workspaces",
-    command: "thane workspace create-from-slack <export.zip> [--slug \"...\"] [--name \"...\"] [--apply] [--json]",
-    description: "Preview Slack export workspace creation. Hosted import apply is not available yet.",
-    examples: ["thane workspace create-from-slack ./slack-export.zip --slug acme --apply"]
+    category: "Teams",
+    command: "thane team create-from-slack <export.zip> [--slug \"...\"] [--name \"...\"] [--apply] [--json]",
+    description: "Preview Slack export team creation. Hosted import apply is not available yet.",
+    examples: ["thane team create-from-slack ./slack-export.zip --slug acme --apply"]
   },
   {
     category: "Imports",
@@ -153,7 +153,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Channels",
     command: "thane channels [--json]",
-    description: "List readable channels in the active workspace.",
+    description: "List readable channels in the active team.",
     examples: ["thane channels --json"]
   },
   {
@@ -177,7 +177,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Channels",
     command: "thane channel invite <channel> <handle-or-email>",
-    description: "Add a workspace member to a channel.",
+    description: "Add a team member to a channel.",
     examples: ["thane channel invite leadership alex"]
   },
   {
@@ -195,19 +195,19 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Members",
     command: "thane members [--json]",
-    description: "List workspace members.",
+    description: "List team members.",
     examples: ["thane members --json"]
   },
   {
     category: "Members",
     command: "thane member remove <handle-or-email>",
-    description: "Admin: remove a member from the active workspace.",
+    description: "Admin: remove a member from the active team.",
     examples: ["thane member remove alex"]
   },
   {
     category: "Members",
     command: "thane member ban <handle-or-email> [--reason \"...\"]",
-    description: "Admin: ban and remove a member from the active workspace.",
+    description: "Admin: ban and remove a member from the active team.",
     examples: ["thane member ban alex@example.com --reason spam"]
   },
   {
@@ -219,19 +219,19 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Members",
     command: "thane invite <email> [--role admin|member] [--expires 7d] [--handle \"...\"]",
-    description: "Email a hosted workspace invite.",
+    description: "Email a hosted team invite.",
     examples: ["thane invite alex@example.com", "thane invite alex@example.com --role admin --expires 24h"]
   },
   {
     category: "Members",
     command: "thane invite-link create [--role admin|member] [--expires 7d] [--max-uses 10] [--json]",
-    description: "Create an expiring workspace invite link.",
+    description: "Create an expiring team invite link.",
     examples: ["thane invite-link create --expires 7d", "thane invite-link create --role admin --max-uses 1"]
   },
   {
     category: "Members",
     command: "thane invite-link accept <link-or-token> [--json]",
-    description: "Accept a workspace invite link and switch to that workspace.",
+    description: "Accept a team invite link and switch to that team.",
     examples: ["thane invite-link accept https://api.askthane.com/invite/abc123", "thane invite-link accept https://chat.askthane.com/invite/abc123"]
   },
   {
@@ -243,7 +243,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Users and DMs",
     command: "thane users [--json]",
-    description: "List workspace users.",
+    description: "List team users.",
     examples: ["thane users --json"]
   },
   {
@@ -272,9 +272,9 @@ export const cliCommands: CliCommand[] = [
   },
   {
     category: "Messages",
-    command: "thane inbox [--all-workspaces] [--json]",
+    command: "thane inbox [--all-teams] [--json]",
     description: "Show unread conversation summaries.",
-    examples: ["thane inbox --json", "thane inbox --all-workspaces --json"]
+    examples: ["thane inbox --json", "thane inbox --all-teams --json"]
   },
   {
     category: "Messages",
@@ -309,7 +309,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Messages",
     command: "thane search <query> [--json]",
-    description: "Search active-workspace messages.",
+    description: "Search active-team messages.",
     examples: ["thane search \"billing\" --json"]
   },
   {
@@ -339,25 +339,25 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Ask Thane",
     command: "thane ask-thane status [--json]",
-    description: "Show whether Ask Thane is enabled in this workspace.",
+    description: "Show whether Ask Thane is enabled in this team.",
     examples: ["thane ask-thane status --json"]
   },
   {
     category: "Ask Thane",
     command: "thane ask-thane enable [--json]",
-    description: "Enable Ask Thane for the active hosted workspace.",
+    description: "Enable Ask Thane for the active hosted team.",
     examples: ["thane ask-thane enable"]
   },
   {
     category: "Ask Thane",
     command: "thane ask-thane disable",
-    description: "Disable Ask Thane for the active hosted workspace.",
+    description: "Disable Ask Thane for the active hosted team.",
     examples: ["thane ask-thane disable"]
   },
   {
     category: "Integrations",
     command: "thane webhooks list [--json]",
-    description: "List workspace webhooks. Admin only.",
+    description: "List team webhooks. Admin only.",
     examples: ["thane webhooks list --json"]
   },
   {
@@ -369,7 +369,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Integrations",
     command: "thane webhooks disable <id-or-name> [--json]",
-    description: "Disable a workspace webhook and remove its app identity from the workspace.",
+    description: "Disable a team webhook and remove its app identity from the team.",
     examples: ["thane webhooks disable ask-thane"]
   },
   {
@@ -387,7 +387,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Billing",
     command: "thane billing status [--json]",
-    description: "Show the active workspace plan and free-tier usage.",
+    description: "Show the active team plan and free-tier usage.",
     examples: ["thane billing status --json"]
   },
   {
@@ -399,7 +399,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Billing",
     command: "thane billing portal",
-    description: "Create a signed Stripe billing portal URL for the active workspace.",
+    description: "Create a signed Stripe billing portal URL for the active team.",
     examples: ["thane billing portal"]
   },
   {
@@ -417,13 +417,13 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Help",
     command: "thane doctor [--json]",
-    description: "Show version, cache path, active workspace, and hosted-cache stats.",
+    description: "Show version, cache path, active team, and hosted-cache stats.",
     examples: ["thane doctor", "thane doctor --json"]
   },
   {
     category: "Agent",
     command: "thane agent context [--json]",
-    description: "Show compact agent-readable context for the active account and workspace.",
+    description: "Show compact agent-readable context for the active account and team.",
     examples: ["thane agent context --json"]
   },
   {
