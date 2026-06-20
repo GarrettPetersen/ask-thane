@@ -3300,7 +3300,7 @@ async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<
     return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
   }
   const source = payload?.source === "terminal" ? "terminal" : "chat";
-  const mentionsAskThane = source === "chat" && /@thane\b/i.test(text);
+  const mentionsAskThane = /@thane\b/i.test(text);
   const messageRateLimited = await enforceWorkspaceActionRateLimits(env, {
     action: "message_create",
     workspaceId,
@@ -3430,7 +3430,7 @@ async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<
       ? nativeRuntimeReply
       : usedSharedNativeRuntime && !mentionsAskThane
         ? { reason: "handled_by_shared_runtime" }
-        : source === "chat"
+        : mentionsAskThane
       ? await maybeRespondWithNativeAskThane(env, {
           workspaceId,
           workspaceName: workspace?.workspace_name || workspace?.workspace_slug || workspaceId,

@@ -1810,7 +1810,7 @@ describe("@ask-thane/api-worker", () => {
     expect(prepare).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO thane_cli_ask_thane_integrations"));
   });
 
-  it("posts a native Ask Thane reply when mentioned in Thane Chat", async () => {
+  it.each(["chat", "terminal"] as const)("posts a native Ask Thane reply when mentioned from %s", async (source) => {
     const insertedMessages: Array<{ args: unknown[] }> = [];
     vi.stubGlobal(
       "fetch",
@@ -1916,7 +1916,7 @@ describe("@ask-thane/api-worker", () => {
       new Request("https://api.local/v1/thane-cli/messages", {
         method: "POST",
         headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
-        body: JSON.stringify({ workspaceId: "wsp_1", channelId: "tcc_1", text: "hello @thane", source: "chat" })
+        body: JSON.stringify({ workspaceId: "wsp_1", channelId: "tcc_1", text: "hello @thane", source })
       }),
       authEnv
     );
