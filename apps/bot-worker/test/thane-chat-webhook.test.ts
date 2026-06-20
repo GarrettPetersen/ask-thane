@@ -1,13 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import worker from "../src/index";
 
 const agentMocks = vi.hoisted(() => ({
   runConversationalAgentForThaneChatMessage: vi.fn()
 }));
 
+vi.mock("../src/routes/slack-events", () => ({
+  handleSlackEvents: vi.fn()
+}));
+
+vi.mock("../src/services/eval-harness", () => ({
+  runEvalReplay: vi.fn()
+}));
+
 vi.mock("../src/services/agent-runtime", () => ({
   runConversationalAgentForThaneChatMessage: agentMocks.runConversationalAgentForThaneChatMessage
 }));
+
+const { default: worker } = await import("../src/index");
 
 function hex(bytes: ArrayBuffer): string {
   return Array.from(new Uint8Array(bytes))
