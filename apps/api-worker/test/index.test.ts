@@ -2189,7 +2189,7 @@ describe("@ask-thane/api-worker", () => {
     expect(calls.some((call) => call.sql.includes("llm_usage_events"))).toBe(false);
   });
 
-  it("backfills the Ask Thane webhook subscription for previously enabled teams", async () => {
+  it("backfills the Ask Thane webhook subscription for teams enabled before webhook delivery", async () => {
     const calls: Array<{ sql: string; args: unknown[] }> = [];
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })));
     const first = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {

@@ -9,7 +9,7 @@
     "build": "wrangler deploy --dry-run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "echo 'No lint task yet for @ask-thane/bot-worker'",
-    "test": "vitest run"
+    "test": "vitest run --no-file-parallelism --maxWorkers 1"
   },
   "dependencies": {
     "@ask-thane/ai": "workspace:*",
