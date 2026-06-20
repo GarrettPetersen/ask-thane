@@ -342,6 +342,10 @@
         pointer-events: auto;
       }
       .message-action {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
         min-height: 24px;
         min-width: 28px;
         padding: 0 7px;
@@ -350,6 +354,11 @@
         background: #070a08;
         line-height: 1;
         touch-action: manipulation;
+      }
+      .action-label {
+        display: none;
+        color: inherit;
+        font-size: 11px;
       }
       .reaction-menu {
         display: inline-flex;
@@ -652,6 +661,9 @@
           min-height: 30px;
           min-width: 32px;
         }
+        .action-label {
+          display: inline;
+        }
       }
     </style>
   </head>
@@ -836,6 +848,9 @@
       function jsString(value) {
         return JSON.stringify(String(value ?? "")).replace(/</g, "\\u003c");
       }
+      function jsAttr(value) {
+        return esc(jsString(value));
+      }
       function time(value) {
         const date = new Date(value);
         return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -920,7 +935,7 @@
         const users = mentionCandidates();
         if (!users.length) return "";
         if (state.mentionIndex >= users.length) state.mentionIndex = 0;
-        return users.map((user, index) => `<button type="button" class="${index === state.mentionIndex ? "active" : ""}" onclick="insertMention(${jsString(user.handle)})">@${esc(user.handle)} <span class="mention-name">${esc(user.displayName || "")}</span></button>`).join("");
+        return users.map((user, index) => `<button type="button" class="${index === state.mentionIndex ? "active" : ""}" onclick="insertMention(${jsAttr(user.handle)})">@${esc(user.handle)} <span class="mention-name">${esc(user.displayName || "")}</span></button>`).join("");
       }
 
       function renderMentionSuggestions() {
@@ -964,7 +979,7 @@
           const canDm = activeUser && user.id !== activeUser.id;
           const inChannel = channelMemberIds.has(user.id);
           const emailText = isAdmin && user.email ? ` - ${esc(user.email)}` : "";
-          return `<div class="item member-row"><span class="member-label">${esc(user.displayName || user.handle)} @${esc(user.handle)} (${esc(memberRole)})${emailText}</span>${canDm ? ` <button title="Send DM" onclick="event.stopPropagation(); openDmComposer(${jsString(target)})">DM</button>` : ""}${canManage ? ` <button onclick="setWorkspaceMemberRole(${jsString(target)}, ${jsString(memberRole === "admin" ? "member" : "admin")})">${memberRole === "admin" ? "make member" : "make admin"}</button>${includeChannelControls && inChannel ? ` <button onclick="removeChannelMember(${jsString(target)})">channel remove</button>` : ""} <button onclick="removeWorkspaceMember(${jsString(target)}, false)">kick</button> <button onclick="removeWorkspaceMember(${jsString(target)}, true)">ban</button>` : ""}</div>`;
+          return `<div class="item member-row"><span class="member-label">${esc(user.displayName || user.handle)} @${esc(user.handle)} (${esc(memberRole)})${emailText}</span>${canDm ? ` <button title="Send DM" onclick="event.stopPropagation(); openDmComposer(${jsAttr(target)})">DM</button>` : ""}${canManage ? ` <button onclick="setWorkspaceMemberRole(${jsAttr(target)}, ${jsAttr(memberRole === "admin" ? "member" : "admin")})">${memberRole === "admin" ? "make member" : "make admin"}</button>${includeChannelControls && inChannel ? ` <button onclick="removeChannelMember(${jsAttr(target)})">channel remove</button>` : ""} <button onclick="removeWorkspaceMember(${jsAttr(target)}, false)">kick</button> <button onclick="removeWorkspaceMember(${jsAttr(target)}, true)">ban</button>` : ""}</div>`;
         }).join("") || `<div class="muted small">No members</div>`;
       }
 
@@ -2153,9 +2168,9 @@
                   ${inviteCommand ? `<code>${esc(inviteCommand)}</code>` : ""}
                 </div>
                 <div class="modal-actions">
-                  <button onclick="copyText(${jsString(allCommands)}, 'Install commands')">Copy commands</button>
-                  <button onclick="copyText(${jsString(installCommand)}, 'Install command')">Copy install</button>
-                  ${inviteCommand ? `<button onclick="copyText(${jsString(inviteCommand)}, 'Invite command')">Copy invite command</button>` : ""}
+                  <button onclick="copyText(${jsAttr(allCommands)}, 'Install commands')">Copy commands</button>
+                  <button onclick="copyText(${jsAttr(installCommand)}, 'Install command')">Copy install</button>
+                  ${inviteCommand ? `<button onclick="copyText(${jsAttr(inviteCommand)}, 'Invite command')">Copy invite command</button>` : ""}
                 </div>
                 <p class="muted small">After installing, run <span class="ok">thane chat general</span> to open the terminal client.</p>
               </div>
@@ -2299,8 +2314,8 @@
                     </form>
                     ${inviteResult ? `<div class="kv">
                       <div class="cmdline">${esc(inviteResult.webUrl || inviteResult.url)}</div>
-                      <button onclick="copyText(${jsString(inviteResult.webUrl || inviteResult.url)}, 'Web link')">Copy web link</button>
-                      <button onclick="copyText(${jsString(inviteResult.url)}, 'CLI link')">Copy CLI link</button>
+                      <button onclick="copyText(${jsAttr(inviteResult.webUrl || inviteResult.url)}, 'Web link')">Copy web link</button>
+                      <button onclick="copyText(${jsAttr(inviteResult.url)}, 'CLI link')">Copy CLI link</button>
                     </div>` : ""}
                     <form class="list" onsubmit="invite(event)">
                       <input name="email" type="email" placeholder="friend@example.com" />
@@ -2430,10 +2445,17 @@
         const canActOnMessage = !message.pending && !message.failed;
         const canDmAuthor = canActOnMessage && user && user.id !== currentUser()?.id;
         const actionTapGuard = `ontouchstart="event.stopPropagation()" oncontextmenu="event.stopPropagation()"`;
-        return `<article class="message ${isReply ? "reply" : ""} ${message.pending ? "pending" : ""} ${message.failed ? "failed" : ""} ${menuOpen ? "show-reactions" : ""}" ontouchstart="${canActOnMessage ? `startLongPress(event, ${jsString(message.id)})` : ""}" ontouchmove="markTouchMoved()" ontouchend="cancelLongPress()" ontouchcancel="cancelLongPress()" oncontextmenu="${canActOnMessage ? `openReactionMenu(event, ${jsString(message.id)})` : "event.preventDefault()"}">
+        const mobileAction = (action) => `${actionTapGuard} ontouchend="event.preventDefault(); event.stopPropagation(); ${action}"`;
+        const reactAction = `openReactionMenu(event, ${jsAttr(message.id)})`;
+        const replyAction = `replyTo(${jsAttr(message.id)})`;
+        const dmAction = user ? `openDmComposer(${jsAttr(userDmTarget(user))})` : "";
+        return `<article class="message ${isReply ? "reply" : ""} ${message.pending ? "pending" : ""} ${message.failed ? "failed" : ""} ${menuOpen ? "show-reactions" : ""}" ontouchstart="${canActOnMessage ? `startLongPress(event, ${jsAttr(message.id)})` : ""}" ontouchmove="markTouchMoved()" ontouchend="cancelLongPress()" ontouchcancel="cancelLongPress()" oncontextmenu="${canActOnMessage ? `openReactionMenu(event, ${jsAttr(message.id)})` : "event.preventDefault()"}">
           <span class="message-meta">${branch}<span class="msg-marker">  ${esc(stamp)}</span> <span class="message-author">${esc(author)}${sourceMarker}</span>${deliveryText}: </span><span class="message-text">${esc(message.text)}</span>${replies.length && !isReply ? `<span class="thread-count"> (${replies.length} repl${replies.length === 1 ? "y" : "ies"})</span>` : ""}${reactionHtml ? `<span class="message-reactions">${reactionHtml}</span>` : ""}
-          ${canActOnMessage ? `<span class="message-actions"><button type="button" class="message-action" title="React" ${actionTapGuard} onclick="openReactionMenu(event, ${jsString(message.id)})">+</button>${!isReply ? `<button type="button" class="message-action" title="Reply" ${actionTapGuard} onclick="event.stopPropagation(); replyTo(${jsString(message.id)})">↵</button>` : ""}${canDmAuthor ? `<button type="button" class="message-action" title="DM ${esc(author)}" ${actionTapGuard} onclick="event.stopPropagation(); openDmComposer(${jsString(userDmTarget(user))})">@</button>` : ""}</span>` : ""}
-          ${menuOpen && canActOnMessage ? `<span class="reaction-menu" ${actionTapGuard}>${quickReactions.map((emoji) => `<button type="button" ${actionTapGuard} onclick="event.stopPropagation(); reactTo(${jsString(message.id)}, ${jsString(emoji)})">${esc(emoji)}</button>`).join("")}<form class="reaction-custom" onsubmit="customReaction(event, ${jsString(message.id)})"><input name="emoji" maxlength="12" placeholder="+"/><button>ok</button></form><button type="button" title="Close" ${actionTapGuard} onclick="closeReactionMenu()">x</button></span>` : ""}
+          ${canActOnMessage ? `<span class="message-actions"><button type="button" class="message-action" title="React" ${mobileAction(reactAction)} onclick="${reactAction}"><span aria-hidden="true">+</span><span class="action-label">react</span></button>${!isReply ? `<button type="button" class="message-action" title="Reply" ${mobileAction(replyAction)} onclick="event.stopPropagation(); ${replyAction}"><span aria-hidden="true">↵</span><span class="action-label">reply</span></button>` : ""}${canDmAuthor ? `<button type="button" class="message-action" title="DM ${esc(author)}" ${mobileAction(dmAction)} onclick="event.stopPropagation(); ${dmAction}"><span aria-hidden="true">@</span><span class="action-label">DM</span></button>` : ""}</span>` : ""}
+          ${menuOpen && canActOnMessage ? `<span class="reaction-menu" ${actionTapGuard}>${quickReactions.map((emoji) => {
+            const emojiAction = `reactTo(${jsAttr(message.id)}, ${jsAttr(emoji)})`;
+            return `<button type="button" ${mobileAction(emojiAction)} onclick="event.stopPropagation(); ${emojiAction}">${esc(emoji)}</button>`;
+          }).join("")}<form class="reaction-custom" onsubmit="customReaction(event, ${jsAttr(message.id)})"><input name="emoji" maxlength="12" placeholder="+"/><button>ok</button></form><button type="button" title="Close" ${mobileAction("closeReactionMenu()")} onclick="closeReactionMenu()">x</button></span>` : ""}
           ${!isReply && replies.length ? replies.map((reply) => renderMessage(reply, users, repliesByRoot, true)).join("") : ""}
         </article>`;
       }
@@ -2549,7 +2571,7 @@
                   ${searchQuery ? `<div class="kv">${searchResults.length ? searchResults.map((message) => {
                     const resultChannel = snap.channels.find((item) => item.id === message.channelId);
                     const prefix = resultChannel?.kind === "dm" ? "@" : "#";
-                    return `<button type="button" class="item" onclick="openSearchResult(${jsString(message.channelId)})">${prefix}${esc(resultChannel?.name || "channel")} ${esc(userDisplayLabel(users.get(message.authorId)) + ": " + message.text.slice(0, 80))}</button>`;
+                    return `<button type="button" class="item" onclick="openSearchResult(${jsAttr(message.channelId)})">${prefix}${esc(resultChannel?.name || "channel")} ${esc(userDisplayLabel(users.get(message.authorId)) + ": " + message.text.slice(0, 80))}</button>`;
                   }).join("") : `<div class="muted small">No results</div>`}</div>` : ""}
                 </form>
               </section>
