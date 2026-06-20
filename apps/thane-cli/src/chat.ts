@@ -22,7 +22,7 @@ import {
 import { renderChannels, renderInbox, renderMembers, renderMessages, renderUsers } from "./render.js";
 import { completeSlashCommand, renderSlashCommands, slashCommandsForRole } from "./slash-commands.js";
 import { ThaneStore } from "./store.js";
-import type { ConversationSummary, MessageView, ThaneChannel, ThaneWorkspace } from "./model.js";
+import type { ConversationSummary, MessageView, NotificationPreference, PingLocation, ThaneChannel, ThaneWorkspace } from "./model.js";
 import type { SlashCommand } from "./slash-commands.js";
 import { checkForUpdate, renderUpdateStatus, type UpdateStatus } from "./update.js";
 
@@ -72,6 +72,10 @@ type ChatFocus = "composer" | "sidebar" | "messages";
 type ComposerMode = "message" | "reply" | "react";
 
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉", "👀", "✅", "🙏", "🚀"];
+
+function parsePingLocation(value: string): PingLocation | null {
+  return value === "origin" || value === "thane_cli" || value === "slack" || value === "both" ? value : null;
+}
 
 function size(): { columns: number; rows: number } {
   return {
@@ -622,6 +626,34 @@ async function disableMfa(store: ThaneStore, code: string): Promise<string> {
   return "MFA disabled";
 }
 
+async function readPingLocation(store: ThaneStore): Promise<string> {
+  if (hasHostedChat(store)) {
+    const token = requireHostedAuthToken(store);
+    const response = await getThaneApiWithAuth<{ preference: NotificationPreference }>(
+      `/v1/thane-cli/notify/location?workspaceId=${encodeURIComponent(store.activeWorkspace.id)}`,
+      token
+    );
+    await store.applyNotificationPreference(response.preference);
+    return `Ping location: ${response.preference.preferredPingLocation}`;
+  }
+  const preference = store.notificationPreference();
+  return `Ping location: ${preference.preferredPingLocation}`;
+}
+
+async function updatePingLocation(store: ThaneStore, location: PingLocation): Promise<string> {
+  if (hasHostedChat(store)) {
+    const token = requireHostedAuthToken(store);
+    const response = await postThaneApiWithAuth<{ preference: NotificationPreference }>("/v1/thane-cli/notify/location", token, {
+      workspaceId: store.activeWorkspace.id,
+      preferredPingLocation: location
+    });
+    await store.applyNotificationPreference(response.preference);
+    return `Ping location set to ${response.preference.preferredPingLocation}`;
+  }
+  const preference = await store.setPingLocation(location);
+  return `Ping location set to ${preference.preferredPingLocation}`;
+}
+
 function renderScreen(inputText: string, state: {
   store: ThaneStore;
   activeChannelId: string;
@@ -1040,6 +1072,25 @@ export async function runChat(initialChannel = "general"): Promise<void> {
         return;
       }
       status = await disableMfa(store, code);
+      return;
+    }
+    if (trimmed === "/notify") {
+      status = await readPingLocation(store);
+      sidePanelLines = undefined;
+      workspacePickerOpen = false;
+      showReactionPicker = false;
+      return;
+    }
+    if (trimmed.startsWith("/notify ")) {
+      const location = parsePingLocation(trimmed.slice("/notify ".length).trim());
+      if (!location) {
+        status = "Usage: /notify [origin|thane_cli|slack|both]";
+        return;
+      }
+      status = await updatePingLocation(store, location);
+      sidePanelLines = undefined;
+      workspacePickerOpen = false;
+      showReactionPicker = false;
       return;
     }
     if (trimmed === "/team-art" || trimmed === "/workspace-art") {

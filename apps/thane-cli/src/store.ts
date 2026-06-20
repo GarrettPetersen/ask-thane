@@ -473,6 +473,7 @@ export class ThaneStore {
     channels: ThaneChannel[];
     messages: ThaneMessage[];
     askThaneIntegrations?: AskThaneIntegration[];
+    notificationPreferences?: NotificationPreference[];
     billingPlans?: WorkspaceBillingPlan[];
   }): Promise<void> {
     if (snapshot.account) {
@@ -523,6 +524,13 @@ export class ThaneStore {
         this.data.billingPlans = this.data.billingPlans
           .filter((plan) => !snapshot.billingPlans?.some((snapshotPlan) => snapshotPlan.workspaceId === plan.workspaceId))
           .concat(snapshot.billingPlans);
+      }
+      if (snapshot.notificationPreferences) {
+        this.data.notificationPreferences = this.data.notificationPreferences
+          .filter((preference) =>
+            !snapshot.notificationPreferences?.some((snapshotPreference) => snapshotPreference.accountId === preference.accountId)
+          )
+          .concat(snapshot.notificationPreferences);
       }
 
       const currentAccountId = this.data.currentAccountId;
@@ -1086,6 +1094,22 @@ export class ThaneStore {
     }
     await saveData(this.data);
     return preference;
+  }
+
+  async applyNotificationPreference(preference: NotificationPreference): Promise<void> {
+    const existing = this.data.notificationPreferences.find((candidate) => candidate.accountId === preference.accountId);
+    if (existing) {
+      existing.preferredPingLocation = preference.preferredPingLocation;
+      existing.updatedAt = preference.updatedAt;
+      if (preference.updatedBy) {
+        existing.updatedBy = preference.updatedBy;
+      } else {
+        delete existing.updatedBy;
+      }
+    } else {
+      this.data.notificationPreferences.push(preference);
+    }
+    await saveData(this.data);
   }
 
   async signup(email: string, displayName?: string): Promise<{ account: ThaneAccount; code: string }> {

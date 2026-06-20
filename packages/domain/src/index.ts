@@ -14,6 +14,7 @@ export type TaskActionType =
 export type NoteScopeType = "organization" | "workspace" | "conversation" | "person" | "user" | "task";
 export type NoteVisibility = "private" | "organization" | "conversation_acl";
 export type PermissionWaiverStatus = "pending" | "granted" | "denied" | "revoked" | "expired";
+export type PingLocation = "origin" | "thane_cli" | "slack" | "both";
 
 export interface UserRef {
   platform: "slack" | "teams" | "email" | "thane_cli" | "system";
@@ -154,4 +155,15 @@ export interface DigestDeliveryRecord {
   taskCount: number;
   sentAt: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface PersonNotificationPreferenceRecord {
+  id: string;
+  organizationId: string;
+  personId: string;
+  preferredPingLocation: PingLocation;
+  updatedByPlatform?: UserRef["platform"];
+  updatedByExternalUserId?: string;
+  createdAt: string;
+  updatedAt: string;
 }

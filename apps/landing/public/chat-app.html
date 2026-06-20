@@ -916,6 +916,15 @@
         return (currentSnapshot().askThaneIntegrations || []).find((integration) => integration.workspaceId === workspaceId) || null;
       }
 
+      function currentNotificationPreference() {
+        const accountId = state.session?.id || "";
+        return (currentSnapshot().notificationPreferences || []).find((preference) => preference.accountId === accountId) || {
+          accountId,
+          preferredPingLocation: "origin",
+          updatedAt: new Date().toISOString()
+        };
+      }
+
       function privateChannelCount() {
         return (currentSnapshot().channels || []).filter((channel) => channel.kind === "channel" && channel.visibility === "private").length;
       }
@@ -1731,6 +1740,30 @@
         }
       }
 
+      async function setPingLocation(value) {
+        const workspace = state.snapshot?.workspaces?.find((item) => item.id === state.activeWorkspaceId);
+        if (!workspace) return;
+        try {
+          const body = await api("/v1/thane-cli/notify/location", {
+            method: "POST",
+            body: JSON.stringify({ workspaceId: workspace.id, preferredPingLocation: value })
+          });
+          const preference = body.preference;
+          if (preference) {
+            const existing = state.snapshot.notificationPreferences || [];
+            state.snapshot.notificationPreferences = existing
+              .filter((item) => item.accountId !== preference.accountId)
+              .concat([preference]);
+          }
+          state.status = `Ping location: ${preference?.preferredPingLocation || value}`;
+          state.error = "";
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          render();
+        }
+      }
+
       async function updateWorkspaceDisplayName(event) {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
@@ -1993,6 +2026,7 @@
         } = input;
         const canStartMfaSetup = !state.mfaStatusLoading && state.mfaStatus !== "enabled" && !state.mfaSetup;
         const canDisableMfa = !state.mfaStatusLoading && state.mfaStatus === "enabled";
+        const pingPreference = currentNotificationPreference();
         return `
           <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="settings-menu-title" onclick="if(event.target===this) closeSettingsMenu()">
             <section class="modal" data-settings-modal onscroll="state.settingsMenuScrollTop=this.scrollTop">
@@ -2101,6 +2135,11 @@
                   <div class="kv">
                     <div>status: ${askThane?.enabled ? "enabled" : "disabled"}</div>
                     <div>mention: @thane</div>
+                    <label>ping location
+                      <select onchange="setPingLocation(this.value)">
+                        ${["origin", "thane_cli", "slack", "both"].map((value) => `<option value="${esc(value)}" ${pingPreference.preferredPingLocation === value ? "selected" : ""}>${esc(value)}</option>`).join("")}
+                      </select>
+                    </label>
                     ${isAdmin ? `
                       <button onclick="setAskThaneEnabled(${askThane?.enabled ? "false" : "true"})">${askThane?.enabled ? "Disable" : "Enable"} Ask Thane</button>
                     ` : `<div class="muted small">admin required</div>`}

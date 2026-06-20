@@ -38,20 +38,22 @@ async function signWebhookBody(secret: string, timestamp: string, body: string):
 describe("Thane Chat webhook receiver", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it("runs Ask Thane from a signed team webhook and reacts when a task is created", async () => {
+  it("runs Ask Thane from a signed team webhook and reacts to task and agent events", async () => {
     agentMocks.runConversationalAgentForThaneChatMessage.mockResolvedValue({
       usedTools: true,
       createdTaskIds: ["task_1"],
       updatedTaskIds: [],
       taskActionTypes: ["create"],
-      eventTypes: [],
+      eventTypes: ["note_written", "ping_location_updated"],
       finalSummary: "created one task"
     });
 
     const calls: Array<{ sql: string; args: unknown[] }> = [];
-    const insertedReactions: Array<{ args: unknown[] }> = [];
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
     const first = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
       const sql = this.sql ?? "";
       if (sql.includes("FROM thane_cli_webhooks")) {
@@ -111,12 +113,7 @@ describe("Thane Chat webhook receiver", () => {
       }
       return { results: [] };
     });
-    const run = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
-      if ((this.sql ?? "").includes("INSERT OR IGNORE INTO thane_cli_message_reactions")) {
-        insertedReactions.push({ args: this.args ?? [] });
-      }
-      return { meta: { changes: 1 } };
-    });
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
     const prepare = vi.fn((sql: string) => ({
       bind: vi.fn((...args: unknown[]) => {
         calls.push({ sql, args });
@@ -164,7 +161,7 @@ describe("Thane Chat webhook receiver", () => {
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
       createdTaskIds: ["task_1"],
-      reactions: ["📝"]
+      reactions: ["📝", "🗒️", "📍"]
     });
     expect(agentMocks.runConversationalAgentForThaneChatMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -177,10 +174,17 @@ describe("Thane Chat webhook receiver", () => {
         interactionMode: "passive_ingest"
       })
     );
-    expect(insertedReactions).toHaveLength(1);
-    expect(insertedReactions[0]?.args[1]).toBe("tmsg_1");
-    expect(insertedReactions[0]?.args[2]).toBe("tcm_thane");
-    expect(insertedReactions[0]?.args[3]).toBe("📝");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      "https://api.askthane.com/v1/thane-cli/webhooks/reactions",
+      "https://api.askthane.com/v1/thane-cli/webhooks/reactions",
+      "https://api.askthane.com/v1/thane-cli/webhooks/reactions"
+    ]);
+    expect(fetchMock.mock.calls.map((call) => JSON.parse(String((call[1] as RequestInit).body)))).toEqual([
+      { messageId: "tmsg_1", emoji: "📝" },
+      { messageId: "tmsg_1", emoji: "🗒️" },
+      { messageId: "tmsg_1", emoji: "📍" }
+    ]);
     expect(calls.some((call) => call.sql.includes("UPDATE thane_cli_ask_thane_integrations SET last_event_at"))).toBe(true);
   });
 });

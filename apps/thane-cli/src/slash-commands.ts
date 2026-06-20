@@ -14,6 +14,7 @@ export const slashCommands: SlashCommand[] = [
   { name: "/mfa-setup", usage: "/mfa-setup", description: "Start MFA (2FA) authenticator app setup.", needsArgument: false },
   { name: "/mfa-verify", usage: "/mfa-verify <factor-id> <code>", description: "Finish MFA (2FA) setup.", needsArgument: true },
   { name: "/mfa-disable", usage: "/mfa-disable <code>", description: "Disable MFA (2FA).", needsArgument: true },
+  { name: "/notify", usage: "/notify [origin|thane_cli|slack|both]", description: "Read or update where Ask Thane pings you.", needsArgument: false },
   { name: "/inbox", usage: "/inbox", description: "Show unread summaries in this team.", needsArgument: false },
   { name: "/inbox all", usage: "/inbox all", description: "Show unread summaries across all teams.", needsArgument: false },
   { name: "/teams", usage: "/teams", description: "List teams.", needsArgument: false },

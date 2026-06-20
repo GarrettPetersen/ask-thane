@@ -138,19 +138,20 @@ describe("reminder digests", () => {
 
   it("dispatches native Thane Chat digests into DMs", async () => {
     const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true, message: { id: "tmsg_digest", channelId: "tcc_dm_thane_garrett" } }), { status: 200 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
     const first = vi.fn(async function (this: { sql?: string }) {
       const sql = this.sql ?? "";
       if (sql.includes("FROM thane_cli_ask_thane_integrations")) {
         return { enabled: 1 };
       }
-      if (sql.includes("email = 'thane@askthane.com'")) {
-        return { id: "tcm_thane" };
+      if (sql.includes("FROM thane_cli_webhooks")) {
+        return { id: "twh_ask" };
       }
-      if (sql.includes("FROM thane_cli_workspace_members WHERE workspace_id = ? AND handle = ?")) {
-        return { id: "tcm_garrett", handle: "garrett" };
-      }
-      if (sql.includes("FROM thane_cli_channels")) {
-        return null;
+      if (sql.includes("FROM thane_cli_workspace_members")) {
+        return { id: "tcm_garrett", email: "garrett@example.com", handle: "garrett" };
       }
       return null;
     });
@@ -197,9 +198,22 @@ describe("reminder digests", () => {
     });
 
     expect(outcome).toBe("sent");
-    expect(calls.some((call) => call.sql.includes("INSERT INTO thane_cli_channels"))).toBe(true);
-    expect(calls.some((call) => call.sql.includes("INSERT INTO thane_cli_chat_messages"))).toBe(true);
-    expect(repo.recordDigestDelivery).toHaveBeenCalledWith(expect.objectContaining({ taskCount: 1, deliveryChannelId: expect.any(String) }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.askthane.com/v1/thane-cli/webhooks/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining('"dmTarget":"garrett@example.com"')
+      })
+    );
+    expect(calls.some((call) => call.sql.includes("INSERT INTO thane_cli_channels"))).toBe(false);
+    expect(calls.some((call) => call.sql.includes("INSERT INTO thane_cli_chat_messages"))).toBe(false);
+    expect(repo.recordDigestDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskCount: 1,
+        deliveryChannelId: "tcc_dm_thane_garrett",
+        sourceMessageId: "tmsg_digest"
+      })
+    );
   });
 
   it("skips native Thane Chat digests when Ask Thane is not enabled", async () => {

@@ -79,3 +79,29 @@ export function mapAgentEventTypesToSlackReactions(eventTypes: string[]): string
 
   return reactions;
 }
+
+const EVENT_TO_THANE_CHAT_REACTION: Record<string, string> = {
+  feedback_recorded: "🔎",
+  note_written: "🗒️",
+  permission_waiver_requested: "🔒",
+  notification_cadence_updated: "⏰",
+  ping_location_updated: "📍",
+  follow_up_scheduled: "🗓️",
+  free_tier_ai_spend_limit_reached: "💳"
+};
+
+export function mapAgentEventTypesToThaneChatReactions(eventTypes: string[]): string[] {
+  const reactions: string[] = [];
+  const seen = new Set<string>();
+
+  for (const eventType of eventTypes) {
+    const reaction = EVENT_TO_THANE_CHAT_REACTION[eventType];
+    if (!reaction || seen.has(reaction)) {
+      continue;
+    }
+    seen.add(reaction);
+    reactions.push(reaction);
+  }
+
+  return reactions;
+}

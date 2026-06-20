@@ -128,6 +128,8 @@ function makeRepoStub(overrides: Record<string, unknown> = {}) {
     requestPermissionWaiver: vi.fn(async () => {}),
     getUserNotificationCadence: vi.fn(async () => null),
     upsertUserNotificationCadence: vi.fn(async () => {}),
+    getPersonNotificationPreference: vi.fn(async () => null),
+    upsertPersonNotificationPreference: vi.fn(async () => {}),
     enqueueFollowUpJob: vi.fn(async () => {}),
     ...overrides
   };
@@ -295,6 +297,8 @@ describe("agent runtime tool definitions", () => {
       "request_permission_waiver",
       "record_feedback",
       "get_notification_cadence",
+      "get_ping_location",
+      "set_ping_location",
       "set_notification_cadence",
       "schedule_follow_up",
       "finalize_user_reply"
@@ -647,6 +651,31 @@ describe("agent runtime tool execution", () => {
     expect(run.result).toMatchObject({ ok: true });
     expect(run.repo.upsertUserNotificationCadence).toHaveBeenCalledTimes(1);
     expect((run.ctx.eventTypes as Set<string>).has("notification_cadence_updated")).toBe(true);
+  });
+
+  it("get_ping_location works for default state", async () => {
+    const run = await runTool("get_ping_location", {});
+    expect(run.result).toMatchObject({
+      ok: true,
+      preference: {
+        preferred_ping_location: "origin",
+        is_configured: false
+      }
+    });
+  });
+
+  it("set_ping_location works", async () => {
+    const run = await runTool("set_ping_location", {
+      preferred_ping_location: "both"
+    });
+    expect(run.result).toMatchObject({
+      ok: true,
+      preference: {
+        preferred_ping_location: "both"
+      }
+    });
+    expect(run.repo.upsertPersonNotificationPreference).toHaveBeenCalledTimes(1);
+    expect((run.ctx.eventTypes as Set<string>).has("ping_location_updated")).toBe(true);
   });
 
   it("schedule_follow_up works", async () => {

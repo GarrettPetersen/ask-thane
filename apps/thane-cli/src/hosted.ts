@@ -1,6 +1,7 @@
 import { ThaneStore } from "./store.js";
 import type {
   AskThaneIntegration,
+  NotificationPreference,
   ThaneAccount,
   ThaneChannel,
   ThaneMessage,
@@ -20,6 +21,7 @@ export interface HostedSyncSnapshot {
   channels: ThaneChannel[];
   messages: ThaneMessage[];
   askThaneIntegrations?: AskThaneIntegration[];
+  notificationPreferences?: NotificationPreference[];
   billingPlans?: WorkspaceBillingPlan[];
 }
 

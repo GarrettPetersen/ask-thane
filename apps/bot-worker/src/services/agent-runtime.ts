@@ -2,6 +2,7 @@ import { D1TaskRepository, type AclTaskSearchInput } from "@ask-thane/data";
 import type {
   NoteScopeType,
   NoteVisibility,
+  PingLocation,
   TaskActionType,
   TaskDifficulty,
   TaskRecord,
@@ -27,6 +28,7 @@ import {
   postSlackMessage
 } from "./slack-api";
 import { SlackInstallStore } from "./slack-install-store";
+import { fetchThaneChatWebhookMessages, postThaneChatWebhookMessage } from "./thane-chat-app-client";
 import type { BotEnv } from "./task-inference";
 
 interface ConversationalAgentInput {
@@ -156,6 +158,10 @@ function clampNonNegative(limit: unknown, fallback: number, max: number): number
   return Math.min(Math.max(Math.floor(limit), 0), max);
 }
 
+function parsePingLocation(value: unknown): PingLocation | null {
+  return value === "origin" || value === "thane_cli" || value === "slack" || value === "both" ? value : null;
+}
+
 function fromSlackHistoryMessages(
   messages: Array<{
     user?: string;
@@ -281,63 +287,29 @@ async function ensureNativeRuntimeUser(input: {
   };
 }
 
-async function ensureNativeAskThaneMemberForRuntime(env: BotEnv, workspaceId: string): Promise<string> {
-  const existing = await env.DB
-    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' AND left_at IS NULL LIMIT 1")
-    .bind(workspaceId)
-    .first<{ id?: string }>();
-  if (existing?.id) {
-    return existing.id;
-  }
-  const nowIso = new Date().toISOString();
-  const id = crypto.randomUUID();
-  await env.DB
-    .prepare(
-      `INSERT INTO thane_cli_workspace_members (
-         id, workspace_id, account_id, email, display_name, handle, role, joined_at, updated_at
-       ) VALUES (?, ?, 'acct_thane', 'thane@askthane.com', 'Ask Thane', 'thane', 'member', ?, ?)
-       ON CONFLICT(workspace_id, email) DO UPDATE SET
-         display_name = excluded.display_name,
-         handle = excluded.handle,
-         left_at = NULL,
-         updated_at = excluded.updated_at`
-    )
-    .bind(id, workspaceId, nowIso, nowIso)
-    .run();
-  const row = await env.DB
-    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' AND left_at IS NULL LIMIT 1")
-    .bind(workspaceId)
-    .first<{ id?: string }>();
-  return row?.id ?? id;
-}
-
 function createNativeThaneChatAdapter(input: {
   env: BotEnv;
   workspaceId: string;
 }): AgentRuntimeAdapter {
   async function readMessages(providerConversationId: string, limit: number, threadId?: string): Promise<AgentHistoryMessage[]> {
     const cappedLimit = Math.min(Math.max(limit, 1), 200);
-    const rows = await input.env.DB
-      .prepare(
-        `SELECT msg.id, msg.thread_root_id, msg.text, msg.created_at, member.handle
-         FROM thane_cli_chat_messages msg
-         JOIN thane_cli_workspace_members member ON member.id = msg.author_member_id
-         WHERE msg.workspace_id = ?
-           AND msg.channel_id = ?
-           AND (? IS NULL OR msg.id = ? OR msg.thread_root_id = ?)
-         ORDER BY msg.created_at DESC
-         LIMIT ?`
-      )
-      .bind(input.workspaceId, providerConversationId, threadId ?? null, threadId ?? null, threadId ?? null, cappedLimit)
-      .all<{ id: string; thread_root_id: string | null; text: string; created_at: string; handle: string }>();
-    return (rows.results ?? [])
-      .reverse()
-      .map((row) => ({
-        user: row.handle,
-        messageId: row.id,
-        ...(row.thread_root_id ? { threadRootId: row.thread_root_id } : {}),
-        text: row.text
-      }));
+    const messages = await fetchThaneChatWebhookMessages({
+      env: input.env,
+      workspaceId: input.workspaceId,
+      channelId: providerConversationId,
+      limit: cappedLimit,
+      ...(threadId ? { threadRootId: threadId } : {})
+    });
+    return messages.map((message) => ({
+      messageId: message.id,
+      ...(message.authorHandle ? { user: message.authorHandle } : {}),
+      ...(message.threadRootId ? { threadRootId: message.threadRootId } : {}),
+      text: message.text ?? "",
+      reactions: (message.reactions ?? []).map((reaction) => ({
+        name: reaction.emoji,
+        users: [reaction.by]
+      }))
+    }));
   }
 
   return {
@@ -345,18 +317,14 @@ function createNativeThaneChatAdapter(input: {
     botExternalUserId: "thane",
     fetchConversationHistory: ({ providerConversationId, limit, maxPages }) => readMessages(providerConversationId, limit * maxPages),
     fetchThreadReplies: ({ providerConversationId, threadId, limit, maxPages }) => readMessages(providerConversationId, limit * maxPages, threadId),
-    sendBillingNotice: async ({ channelId, text, threadId }) => {
-      const botMemberId = await ensureNativeAskThaneMemberForRuntime(input.env, input.workspaceId);
-      const nowIso = new Date().toISOString();
-      await input.env.DB
-        .prepare(
-          `INSERT INTO thane_cli_chat_messages (
-             id, workspace_id, channel_id, author_member_id, text, source, origin, thread_root_id, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, 'terminal', 'webhook', ?, ?, ?)`
-        )
-        .bind(crypto.randomUUID(), input.workspaceId, channelId, botMemberId, text, threadId ?? null, nowIso, nowIso)
-        .run();
-    }
+    sendBillingNotice: ({ channelId, text, threadId }) =>
+      postThaneChatWebhookMessage({
+        env: input.env,
+        workspaceId: input.workspaceId,
+        channelId,
+        text,
+        threadRootId: threadId ?? null
+      }).then(() => undefined)
   };
 }
 
@@ -739,6 +707,37 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
     {
       type: "function",
       function: {
+        name: "get_ping_location",
+        description: "Read where the actor person wants Ask Thane proactive pings delivered across Slack and Thane Chat.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {}
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "set_ping_location",
+        description:
+          "Set where Ask Thane should deliver proactive pings when the actor asks for Slack, Thane Chat, both, here, or the original place.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          required: ["preferred_ping_location"],
+          properties: {
+            preferred_ping_location: {
+              type: "string",
+              enum: ["origin", "thane_cli", "slack", "both"]
+            }
+          }
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
         name: "set_notification_cadence",
         description:
           "Set or update the actor user's reminder cadence and timezone when they ask for a different schedule.",
@@ -804,6 +803,7 @@ function toolDefinitions(mode: "passive_ingest" | "dm_reply" | "proactive_follow
         tool.function.name !== "write_note" &&
         tool.function.name !== "request_permission_waiver" &&
         tool.function.name !== "set_notification_cadence" &&
+        tool.function.name !== "set_ping_location" &&
         tool.function.name !== "schedule_follow_up"
     );
   }
@@ -970,6 +970,7 @@ function systemPrompt(mode: "passive_ingest" | "dm_reply" | "proactive_followup"
     "When writing notes, prefer short durable facts (skills, ownership patterns, constraints).",
     "Avoid duplicate tasks for same intent/source message.",
     "Use notification cadence tools when the user asks to change reminder frequency or timing.",
+    "Use ping-location tools when the user asks where Ask Thane should ping, notify, message, remind, or follow up across Slack and Thane Chat.",
     mode === "proactive_followup"
       ? "In proactive_followup mode, do not request permission waivers or mutate tasks; focus on clarity and next actions."
       : "",
@@ -1502,6 +1503,7 @@ async function executeTool(
     "add_task_details",
     "request_permission_waiver",
     "set_notification_cadence",
+    "set_ping_location",
     "schedule_follow_up"
   ]);
   if (ctx.readOnlyTools && writeTools.has(toolCall.function.name)) {
@@ -2458,6 +2460,57 @@ async function executeTool(
       };
     }
 
+    case "get_ping_location": {
+      if (!ctx.actorPersonId) {
+        return { ok: false, error: "actor_person_not_resolved" };
+      }
+      const preference = await ctx.repo.getPersonNotificationPreference({
+        organizationId: ctx.organizationId,
+        personId: ctx.actorPersonId
+      });
+      return {
+        ok: true,
+        preference: {
+          preferred_ping_location: preference?.preferredPingLocation ?? "origin",
+          is_configured: Boolean(preference),
+          updated_at: preference?.updatedAt ?? null
+        }
+      };
+    }
+
+    case "set_ping_location": {
+      if (!ctx.actorPersonId) {
+        return { ok: false, error: "actor_person_not_resolved" };
+      }
+      const preferredPingLocation = parsePingLocation(args.preferred_ping_location);
+      if (!preferredPingLocation) {
+        return { ok: false, error: "invalid_ping_location" };
+      }
+      const nowIso = new Date().toISOString();
+      const existing = await ctx.repo.getPersonNotificationPreference({
+        organizationId: ctx.organizationId,
+        personId: ctx.actorPersonId
+      });
+      await ctx.repo.upsertPersonNotificationPreference({
+        id: existing?.id ?? crypto.randomUUID(),
+        organizationId: ctx.organizationId,
+        personId: ctx.actorPersonId,
+        preferredPingLocation,
+        updatedByPlatform: ctx.platform,
+        updatedByExternalUserId: ctx.actorExternalUserId,
+        createdAt: existing?.createdAt ?? nowIso,
+        updatedAt: nowIso
+      });
+      ctx.eventTypes.add("ping_location_updated");
+      return {
+        ok: true,
+        preference: {
+          preferred_ping_location: preferredPingLocation,
+          updated_at: nowIso
+        }
+      };
+    }
+
     case "set_notification_cadence": {
       const nowIso = new Date().toISOString();
       const existing = await ctx.repo.getUserNotificationCadence({
@@ -3253,6 +3306,36 @@ export async function runProactiveFollowUpForSlackUser(input: {
         platformUserId: input.externalUserId
       }
     }
+  });
+}
+
+export async function runProactiveFollowUpForThaneChatUser(input: {
+  env: BotEnv;
+  organizationId: string;
+  workspaceId: string;
+  conversationSourceId: string;
+  channelId: string;
+  externalUserId: string;
+  authorEmail?: string;
+  authorDisplayName?: string;
+  prompt: string;
+  context?: Record<string, unknown>;
+}): Promise<AgentRunResult> {
+  const promptContext = input.context ? `\n\nContext JSON:\n${JSON.stringify(input.context)}` : "";
+  return runConversationalAgentForThaneChatMessage({
+    env: input.env,
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    conversationSourceId: input.conversationSourceId,
+    channelId: input.channelId,
+    authorExternalUserId: input.externalUserId,
+    ...(input.authorEmail ? { authorEmail: input.authorEmail } : {}),
+    ...(input.authorDisplayName ? { authorDisplayName: input.authorDisplayName } : {}),
+    messageId: `followup:${crypto.randomUUID()}`,
+    text: `Proactive follow-up instruction: ${input.prompt}${promptContext}`,
+    occurredAt: new Date().toISOString(),
+    interactionMode: "proactive_followup",
+    readOnlyTools: true
   });
 }
 

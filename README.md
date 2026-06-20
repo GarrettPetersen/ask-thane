@@ -315,7 +315,7 @@ pnpm thane webhooks list --json
 pnpm thane webhooks disable build-bot
 ```
 
-Webhook receivers get signed `message.created` events with `x-thane-signature`, `x-thane-timestamp`, and a JSON body containing team, channel, and message data. The app token returned at creation can post back through `POST /v1/thane-cli/webhooks/messages` with `Authorization: Bearer <token>`. Tokens are shown once. Message `source` values are:
+Webhook receivers get signed `message.created` events with `x-thane-signature`, `x-thane-timestamp`, and a JSON body containing team, channel, and message data. The app token returned at creation can read app-accessible history through `GET /v1/thane-cli/webhooks/messages`, post messages through `POST /v1/thane-cli/webhooks/messages`, and react through `POST /v1/thane-cli/webhooks/reactions` with `Authorization: Bearer <token>`. Tokens are shown once. Message `source` values are:
 
 - `chat`: sent from the web or terminal chat UI.
 - `terminal`: sent through a command/script acting as a signed-in user.
@@ -324,11 +324,14 @@ Webhook receivers get signed `message.created` events with `x-thane-signature`, 
 Webhook app development contract:
 
 - Admins create/list/disable webhooks from the CLI; creation returns the one-time app token, signing secret, webhook id, and post-message endpoint.
+- Apps can read app-accessible recent channel messages with `channelId`, optional `threadRootId`, and `limit`; reads are side-effect-free.
+- Apps can post to `channelId`, `channelName`, or `dmTarget`; the hosted API creates/reuses app DMs and enforces channel access.
+- Apps can react with `{ "messageId": "...", "emoji": "..." }` through the reaction endpoint.
 - Receiver URLs must be HTTPS, except localhost for local development.
 - Receivers should verify `x-thane-signature` over `<x-thane-timestamp>.<raw body>` and reject stale timestamps.
-- App tokens are stored hashed and are accepted only as bearer tokens on the webhook post-message endpoint.
+- App tokens are stored hashed and are accepted only as bearer tokens on webhook API endpoints.
 - Private-channel events are delivered only when the app identity can access that channel.
-- Webhook messages are rate-limited per app identity and team.
+- Webhook reads, messages, and reactions are permission-checked and rate-limited per app identity and team.
 
 Manage users, mentions, and DMs:
 ```bash

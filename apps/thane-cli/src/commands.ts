@@ -375,7 +375,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Integrations",
     command: "thane webhooks docs",
-    description: "Print webhook payload, signature, and post-message examples.",
+    description: "Print webhook payload, signature, history, message, DM, and reaction examples.",
     examples: ["thane webhooks docs"]
   },
   {

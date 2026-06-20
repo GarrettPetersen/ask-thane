@@ -34,7 +34,7 @@ import { checkForUpdate, renderUpdateStatus } from "./update.js";
 import { CLI_PACKAGE_NAME, CLI_VERSION } from "./version.js";
 import type { SlackImportPreview } from "./slack-import.js";
 import type { SlackImportResult } from "./store.js";
-import type { PingLocation, ThaneAccount, WorkspaceRole } from "./model.js";
+import type { NotificationPreference, PingLocation, ThaneAccount, WorkspaceRole } from "./model.js";
 
 interface ParsedArgs {
   positionals: string[];
@@ -598,7 +598,7 @@ function agentInstructions(): string {
 function webhookDocs(): string {
   return `# Thane Chat webhooks
 
-Use webhooks to build external Thane Chat apps. Admins create an app identity for a team, your app receives signed events, and the app token can post messages back as that app.
+Use webhooks to build external Thane Chat apps. Admins create an app identity for a team, your app receives signed events, and the app token can post messages or reactions back as that app.
 
 Create a team webhook:
 
@@ -610,7 +610,8 @@ The create response includes:
   "webhook": { "id": "twh_...", "name": "my-app", "status": "active" },
   "token": "twk_...",
   "signingSecret": "whsec_...",
-  "postMessageEndpoint": "https://api.askthane.com/v1/thane-cli/webhooks/messages"
+  "postMessageEndpoint": "https://api.askthane.com/v1/thane-cli/webhooks/messages",
+  "postReactionEndpoint": "https://api.askthane.com/v1/thane-cli/webhooks/reactions"
 }
 
 Outbound event:
@@ -655,6 +656,30 @@ curl -X POST https://api.askthane.com/v1/thane-cli/webhooks/messages \\
   -H "Content-Type: application/json" \\
   -d '{"channelName":"general","text":"Message from my app"}'
 
+Send a DM as the app:
+
+curl -X POST https://api.askthane.com/v1/thane-cli/webhooks/messages \\
+  -H "Authorization: Bearer <token>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"dmTarget":"garrett@example.com","text":"Private message from my app"}'
+
+Read recent app-accessible messages:
+
+curl "https://api.askthane.com/v1/thane-cli/webhooks/messages?channelId=tcc_...&limit=50" \\
+  -H "Authorization: Bearer <token>"
+
+Read a thread:
+
+curl "https://api.askthane.com/v1/thane-cli/webhooks/messages?channelId=tcc_...&threadRootId=tmsg_...&limit=50" \\
+  -H "Authorization: Bearer <token>"
+
+React as the app:
+
+curl -X POST https://api.askthane.com/v1/thane-cli/webhooks/reactions \\
+  -H "Authorization: Bearer <token>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"messageId":"tmsg_...","emoji":"📝"}'
+
 Security notes:
 
 - Webhook create/list/disable is admin-only.
@@ -662,7 +687,7 @@ Security notes:
 - App tokens are shown once and are stored hashed by Thane.
 - Verify signatures using the raw request body and reject stale timestamps.
 - Private-channel events are delivered only when the app identity can access that channel.
-- Webhook messages are rate-limited per app identity and team.
+- Webhook reads, messages, and reactions are permission-checked and rate-limited per app identity and team.
 
 Webhook tokens are shown once. Use \`thane webhooks list --json\` for IDs and status.
 `;
@@ -1162,6 +1187,7 @@ async function main(): Promise<void> {
         token: string;
         signingSecret: string;
         postMessageEndpoint: string;
+        postReactionEndpoint?: string;
       }>("/v1/thane-cli/webhooks", token, {
         workspaceId,
         name,
@@ -1176,6 +1202,7 @@ async function main(): Promise<void> {
             `token: ${response.token}\n` +
             `signing secret: ${response.signingSecret}\n` +
             `post messages: ${response.postMessageEndpoint}\n` +
+            (response.postReactionEndpoint ? `post reactions: ${response.postReactionEndpoint}\n` : "") +
             "These credentials are shown once. Store them in the external app.\n"
         );
       }
@@ -1198,6 +1225,31 @@ async function main(): Promise<void> {
 
   if (command === "notify" && second === "location") {
     const location = args.positionals[2];
+    if (hasHostedChat(store)) {
+      const token = requireHostedAuthToken(store);
+      await syncHostedStore(store).catch(() => false);
+      const workspaceId = store.activeWorkspace.id;
+      if (!location) {
+        const response = await getThaneApi<{ preference: NotificationPreference }>(
+          `/v1/thane-cli/notify/location?workspaceId=${encodeURIComponent(workspaceId)}`,
+          token
+        );
+        await store.applyNotificationPreference(response.preference);
+        wantsJson(args)
+          ? printJson({ preference: response.preference })
+          : process.stdout.write(`ping location: ${response.preference.preferredPingLocation}\n`);
+        return;
+      }
+      const response = await postThaneApiWithAuth<{ preference: NotificationPreference }>("/v1/thane-cli/notify/location", token, {
+        workspaceId,
+        preferredPingLocation: parsePingLocation(location)
+      });
+      await store.applyNotificationPreference(response.preference);
+      wantsJson(args)
+        ? printJson({ preference: response.preference })
+        : process.stdout.write(`ping location set to ${response.preference.preferredPingLocation}\n`);
+      return;
+    }
     if (!location) {
       const preference = store.notificationPreference();
       wantsJson(args)

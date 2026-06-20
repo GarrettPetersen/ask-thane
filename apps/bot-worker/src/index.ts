@@ -22,8 +22,9 @@ import { getOpsSummary, getWorkspaceOpsSummary } from "./services/ops-dashboard"
 import { runScheduledReminderDigests, runWorkspaceReminderDigestsNow } from "./services/reminder-digests";
 import { pollSlackWorkspacesForTasks } from "./services/slack-poller";
 import { SlackInstallStore } from "./services/slack-install-store";
-import { mapTaskActionTypesToThaneChatReactions } from "./services/slack-task-reactions";
+import { mapAgentEventTypesToThaneChatReactions, mapTaskActionTypesToThaneChatReactions } from "./services/slack-task-reactions";
 import type { BotEnv } from "./services/task-inference";
+import { postThaneChatWebhookMessage, postThaneChatWebhookReaction } from "./services/thane-chat-app-client";
 
 function getBuildInfo(env: BotEnv) {
   return {
@@ -477,22 +478,6 @@ function shouldRespondToThaneChatWebhookMessage(input: {
   return /(^|[^a-z0-9._-])@thane([^a-z0-9._-]|$)/i.test(input.text);
 }
 
-async function addNativeThaneChatReaction(input: {
-  env: BotEnv;
-  messageId: string;
-  memberId: string;
-  emoji: string;
-  createdAt?: string;
-}): Promise<void> {
-  await input.env.DB
-    .prepare(
-      `INSERT OR IGNORE INTO thane_cli_message_reactions (id, message_id, member_id, emoji, created_at)
-       VALUES (?, ?, ?, ?, ?)`
-    )
-    .bind(crypto.randomUUID(), input.messageId, input.memberId, input.emoji, input.createdAt ?? new Date().toISOString())
-    .run();
-}
-
 async function handleThaneChatWebhookEvent(request: Request, env: BotEnv): Promise<Response> {
   const webhookId = request.headers.get("x-thane-webhook-id")?.trim() ?? "";
   if (!webhookId) {
@@ -574,25 +559,27 @@ async function handleThaneChatWebhookEvent(request: Request, env: BotEnv): Promi
     occurredAt: message.createdAt ?? new Date().toISOString(),
     interactionMode: shouldRespond ? "dm_reply" : "passive_ingest"
   });
-  const reactionEmojis = mapTaskActionTypesToThaneChatReactions(agentRun.taskActionTypes);
+  const taskEventReactions = mapTaskActionTypesToThaneChatReactions(agentRun.taskActionTypes);
+  const nonTaskEventReactions = mapAgentEventTypesToThaneChatReactions(agentRun.eventTypes);
+  const reactionEmojis = Array.from(new Set([...taskEventReactions, ...nonTaskEventReactions]));
   for (const emoji of reactionEmojis) {
-    await addNativeThaneChatReaction({
+    await postThaneChatWebhookReaction({
       env,
+      webhookId: webhook.id,
       messageId: message.id,
-      memberId: webhook.bot_member_id,
-      emoji,
-      createdAt: new Date().toISOString()
+      emoji
     });
   }
   let replyMessageId: string | undefined;
   if (shouldRespond && agentRun.replyText?.trim()) {
-    replyMessageId = await postNativeAskThaneReply({
+    const reply = await postThaneChatWebhookMessage({
       env,
-      workspaceId: bridge.workspaceId,
+      webhookId: webhook.id,
       channelId: bridge.channelId,
       text: agentRun.replyText.trim(),
       threadRootId: message.threadRootId ?? message.id
     });
+    replyMessageId = reply.messageId;
   }
   const processedAt = new Date().toISOString();
   await env.DB
@@ -618,57 +605,6 @@ async function nativeAskThaneIntegrationEnabled(env: BotEnv, workspaceId: string
     .bind(workspaceId)
     .first<{ enabled?: number | string | null }>();
   return Number(row?.enabled ?? 0) === 1;
-}
-
-async function ensureNativeAskThaneMember(env: BotEnv, workspaceId: string): Promise<string> {
-  const existing = await env.DB
-    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' AND left_at IS NULL LIMIT 1")
-    .bind(workspaceId)
-    .first<{ id?: string }>();
-  if (existing?.id) {
-    return existing.id;
-  }
-  const nowIso = new Date().toISOString();
-  const id = crypto.randomUUID();
-  await env.DB
-    .prepare(
-      `INSERT INTO thane_cli_workspace_members (
-         id, workspace_id, account_id, email, display_name, handle, role, joined_at, updated_at
-       ) VALUES (?, ?, 'acct_thane', 'thane@askthane.com', 'Ask Thane', 'thane', 'member', ?, ?)
-       ON CONFLICT(workspace_id, email) DO UPDATE SET
-         display_name = excluded.display_name,
-         handle = excluded.handle,
-         left_at = NULL,
-         updated_at = excluded.updated_at`
-    )
-    .bind(id, workspaceId, nowIso, nowIso)
-    .run();
-  const row = await env.DB
-    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' AND left_at IS NULL LIMIT 1")
-    .bind(workspaceId)
-    .first<{ id?: string }>();
-  return row?.id ?? id;
-}
-
-async function postNativeAskThaneReply(input: {
-  env: BotEnv;
-  workspaceId: string;
-  channelId: string;
-  text: string;
-  threadRootId?: string | null;
-}): Promise<string> {
-  const botMemberId = await ensureNativeAskThaneMember(input.env, input.workspaceId);
-  const nowIso = new Date().toISOString();
-  const messageId = crypto.randomUUID();
-  await input.env.DB
-    .prepare(
-      `INSERT INTO thane_cli_chat_messages (
-         id, workspace_id, channel_id, author_member_id, text, source, origin, thread_root_id, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, 'terminal', 'webhook', ?, ?, ?)`
-    )
-    .bind(messageId, input.workspaceId, input.channelId, botMemberId, input.text, input.threadRootId ?? null, nowIso, nowIso)
-    .run();
-  return messageId;
 }
 
 async function getPollStatus(env: BotEnv): Promise<Record<string, unknown>> {
@@ -847,16 +783,7 @@ export default {
         ...(payload.occurredAt ? { occurredAt: payload.occurredAt } : {}),
         interactionMode: payload.shouldRespond ? "dm_reply" : "passive_ingest"
       });
-      let replyMessageId: string | undefined;
-      if (payload.shouldRespond && agentRun.replyText?.trim()) {
-        replyMessageId = await postNativeAskThaneReply({
-          env,
-          workspaceId: payload.workspaceId,
-          channelId: payload.channelId,
-          text: agentRun.replyText.trim(),
-          threadRootId: payload.threadRootId ?? payload.messageId
-        });
-      }
+      const replyText = payload.shouldRespond ? agentRun.replyText?.trim() : "";
       return Response.json({
         ok: true,
         usedTools: agentRun.usedTools,
@@ -865,7 +792,7 @@ export default {
         taskActionTypes: agentRun.taskActionTypes,
         eventTypes: agentRun.eventTypes,
         ...(agentRun.finalSummary ? { finalSummary: agentRun.finalSummary } : {}),
-        ...(replyMessageId ? { reply: { messageId: replyMessageId, text: agentRun.replyText } } : {})
+        ...(replyText ? { reply: { text: replyText } } : {})
       });
     }
 

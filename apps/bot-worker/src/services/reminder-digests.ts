@@ -12,6 +12,7 @@ import {
   type SlackHistoryMessage
 } from "./slack-api";
 import { SlackInstallStore } from "./slack-install-store";
+import { postThaneChatWebhookMessage } from "./thane-chat-app-client";
 import type { BotEnv } from "./task-inference";
 
 interface ChatCompletionResponse {
@@ -381,35 +382,6 @@ async function ensureDefaultCadence(input: {
   return created;
 }
 
-async function ensureNativeAskThaneMember(env: BotEnv, workspaceId: string, nowIso: string): Promise<string> {
-  const existing = await env.DB
-    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' AND left_at IS NULL LIMIT 1")
-    .bind(workspaceId)
-    .first<{ id?: string }>();
-  if (existing?.id) {
-    return existing.id;
-  }
-  const id = crypto.randomUUID();
-  await env.DB
-    .prepare(
-      `INSERT INTO thane_cli_workspace_members (
-         id, workspace_id, account_id, email, display_name, handle, role, joined_at, updated_at
-       ) VALUES (?, ?, ?, 'thane@askthane.com', 'Ask Thane', 'thane', 'member', ?, ?)
-       ON CONFLICT(workspace_id, email) DO UPDATE SET
-         display_name = excluded.display_name,
-         handle = excluded.handle,
-         left_at = NULL,
-         updated_at = excluded.updated_at`
-    )
-    .bind(id, workspaceId, "acct_thane", nowIso, nowIso)
-    .run();
-  const row = await env.DB
-    .prepare("SELECT id FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = 'thane@askthane.com' AND left_at IS NULL LIMIT 1")
-    .bind(workspaceId)
-    .first<{ id?: string }>();
-  return row?.id ?? id;
-}
-
 async function nativeAskThaneIntegrationEnabled(env: BotEnv, workspaceId: string): Promise<boolean> {
   const row = await env.DB
     .prepare("SELECT enabled FROM thane_cli_ask_thane_integrations WHERE workspace_id = ? LIMIT 1")
@@ -437,54 +409,33 @@ async function dispatchNativeCadenceDigest(input: {
     return "skipped_no_tasks";
   }
   const recipient = await input.env.DB
-    .prepare("SELECT id, handle FROM thane_cli_workspace_members WHERE workspace_id = ? AND handle = ? AND left_at IS NULL LIMIT 1")
-    .bind(input.cadence.workspaceId, input.cadence.externalUserId)
-    .first<{ id?: string; handle?: string }>();
+    .prepare(
+      `SELECT id, email, handle
+       FROM thane_cli_workspace_members
+       WHERE workspace_id = ?
+         AND left_at IS NULL
+         AND (handle = ? OR email = ? OR id = ?)
+       LIMIT 1`
+    )
+    .bind(input.cadence.workspaceId, input.cadence.externalUserId, input.cadence.externalUserId, input.cadence.externalUserId)
+    .first<{ id?: string; email?: string | null; handle?: string }>();
   if (!recipient?.id || recipient.handle === "thane") {
     return "skipped_unremindable_assignee";
-  }
-  const botMemberId = await ensureNativeAskThaneMember(input.env, input.cadence.workspaceId, input.nowIso);
-  const dmName = `dm-thane-${recipient.handle}`;
-  let channel = await input.env.DB
-    .prepare("SELECT id FROM thane_cli_channels WHERE workspace_id = ? AND name = ? LIMIT 1")
-    .bind(input.cadence.workspaceId, dmName)
-    .first<{ id?: string }>();
-  if (!channel?.id) {
-    const channelId = crypto.randomUUID();
-    await input.env.DB
-      .prepare(
-        `INSERT INTO thane_cli_channels (
-           id, workspace_id, name, kind, visibility, topic, created_at, updated_at
-         ) VALUES (?, ?, ?, 'dm', 'private', 'Ask Thane reminders', ?, ?)`
-      )
-      .bind(channelId, input.cadence.workspaceId, dmName, input.nowIso, input.nowIso)
-      .run();
-    channel = { id: channelId };
-  }
-  if (!channel.id) {
-    throw new Error("native_dm_channel_missing");
-  }
-  const channelId = channel.id;
-  for (const memberId of [recipient.id, botMemberId]) {
-    await input.env.DB
-      .prepare("INSERT OR IGNORE INTO thane_cli_channel_members (id, channel_id, member_id, joined_at) VALUES (?, ?, ?, ?)")
-      .bind(crypto.randomUUID(), channelId, memberId, input.nowIso)
-      .run();
   }
   const digestText = buildDigestMessage({
     taskCount: openTasks.length,
     tasks: openTasks,
     cadence: input.cadence
   });
-  const messageId = crypto.randomUUID();
-  await input.env.DB
-    .prepare(
-      `INSERT INTO thane_cli_chat_messages (
-         id, workspace_id, channel_id, author_member_id, text, source, origin, thread_root_id, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, 'terminal', 'webhook', NULL, ?, ?)`
-    )
-    .bind(messageId, input.cadence.workspaceId, channelId, botMemberId, digestText, input.nowIso, input.nowIso)
-    .run();
+  const posted = await postThaneChatWebhookMessage({
+    env: input.env,
+    workspaceId: input.cadence.workspaceId,
+    dmTarget: recipient.email ?? recipient.handle ?? input.cadence.externalUserId,
+    text: digestText
+  });
+  if (!posted.messageId || !posted.channelId) {
+    throw new Error("native_digest_webhook_message_missing");
+  }
   const nextDigestAt = computeNextDigestAt({
     cadenceJson: normalizeCadenceSpec(input.cadence.cadenceJson) as unknown as Record<string, unknown>,
     timezone: normalizeTimezone(input.cadence.timezone),
@@ -497,8 +448,8 @@ async function dispatchNativeCadenceDigest(input: {
     workspaceId: input.cadence.workspaceId,
     userId: input.cadence.userId,
     externalUserId: input.cadence.externalUserId,
-    deliveryChannelId: channelId,
-    sourceMessageId: messageId,
+    deliveryChannelId: posted.channelId,
+    sourceMessageId: posted.messageId,
     taskCount: openTasks.length,
     sentAt: input.nowIso,
     metadata: {

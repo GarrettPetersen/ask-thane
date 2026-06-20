@@ -8,6 +8,8 @@ import type {
   PermissionWaiverRecord,
   PermissionWaiverStatus,
   PersonRecord,
+  PersonNotificationPreferenceRecord,
+  PingLocation,
   TaskActionType,
   TaskDifficulty,
   TaskRecord,
@@ -206,6 +208,17 @@ export interface DigestDeliveryRecord {
   taskCount: number;
   sentAt: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface PersonNotificationPreferenceUpsertInput {
+  id: string;
+  organizationId: string;
+  personId: string;
+  preferredPingLocation: PingLocation;
+  updatedByPlatform?: UserRef["platform"];
+  updatedByExternalUserId?: string;
+  createdAt?: string;
+  updatedAt: string;
 }
 
 export interface FollowUpJobInput {
@@ -869,6 +882,31 @@ export class D1TaskRepository implements TaskRepository {
       return toPersonRecord(existing);
     }
 
+    const normalizedEmail = input.email?.trim().toLowerCase() || null;
+    if (normalizedEmail) {
+      const emailMatched = await this.db
+        .prepare(
+          `SELECT p.id, p.organization_id, p.canonical_name, p.created_at, p.updated_at
+           FROM identity_accounts ia
+           JOIN people p ON p.id = ia.person_id
+           WHERE ia.organization_id = ?
+             AND LOWER(ia.email) = ?
+             AND ia.is_verified = 1
+           ORDER BY ia.confidence DESC, ia.updated_at DESC
+           LIMIT 1`
+        )
+        .bind(input.organizationId, normalizedEmail)
+        .first<Record<string, unknown>>();
+      if (emailMatched?.id) {
+        await this.upsertIdentityAccount({
+          ...input,
+          personId: String(emailMatched.id),
+          nowIso
+        });
+        return toPersonRecord(emailMatched);
+      }
+    }
+
     const personId = crypto.randomUUID();
     await this.db
       .prepare(
@@ -945,6 +983,51 @@ export class D1TaskRepository implements TaskRepository {
       .all<Record<string, unknown>>();
 
     return (result.results ?? []).map((row) => toIdentityAccountLink(row));
+  }
+
+  async getPersonNotificationPreference(input: {
+    organizationId: string;
+    personId: string;
+  }): Promise<PersonNotificationPreferenceRecord | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT *
+         FROM person_notification_preferences
+         WHERE organization_id = ?
+           AND person_id = ?
+         LIMIT 1`
+      )
+      .bind(input.organizationId, input.personId)
+      .first<Record<string, unknown>>();
+
+    return row ? toPersonNotificationPreferenceRecord(row) : null;
+  }
+
+  async upsertPersonNotificationPreference(input: PersonNotificationPreferenceUpsertInput): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO person_notification_preferences (
+           id, organization_id, person_id, preferred_ping_location,
+           updated_by_platform, updated_by_external_user_id, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(organization_id, person_id)
+         DO UPDATE SET
+           preferred_ping_location = excluded.preferred_ping_location,
+           updated_by_platform = excluded.updated_by_platform,
+           updated_by_external_user_id = excluded.updated_by_external_user_id,
+           updated_at = excluded.updated_at`
+      )
+      .bind(
+        input.id,
+        input.organizationId,
+        input.personId,
+        input.preferredPingLocation,
+        input.updatedByPlatform ?? null,
+        input.updatedByExternalUserId ?? null,
+        input.createdAt ?? input.updatedAt,
+        input.updatedAt
+      )
+      .run();
   }
 
   async getPersonByUserId(organizationId: string, userId: string): Promise<PersonRecord | null> {
@@ -1686,6 +1769,24 @@ function toIdentityAccountLink(row: Record<string, unknown>): IdentityAccountLin
   }
 
   return link;
+}
+
+function toPersonNotificationPreferenceRecord(row: Record<string, unknown>): PersonNotificationPreferenceRecord {
+  const preference: PersonNotificationPreferenceRecord = {
+    id: String(row.id),
+    organizationId: String(row.organization_id),
+    personId: String(row.person_id),
+    preferredPingLocation: String(row.preferred_ping_location) as PingLocation,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+  if (row.updated_by_platform) {
+    preference.updatedByPlatform = String(row.updated_by_platform) as UserRef["platform"];
+  }
+  if (row.updated_by_external_user_id) {
+    preference.updatedByExternalUserId = String(row.updated_by_external_user_id);
+  }
+  return preference;
 }
 
 function toAgentNoteRecord(row: Record<string, unknown>): AgentNoteRecord {
