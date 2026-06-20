@@ -582,6 +582,7 @@
         email: inviteEmail,
         mfaChallengeToken: "",
         mfaStatus: null,
+        mfaStatusLoading: false,
         mfaSetup: null,
         inviteToken: inviteMatch ? decodeURIComponent(inviteMatch[1]) : "",
         invitePreview: null,
@@ -1536,14 +1537,30 @@
         }
       }
 
+      function mfaStatusLabel() {
+        if (state.mfaStatusLoading) return "checking";
+        if (state.mfaSetup) return "setup in progress";
+        if (state.mfaStatus === "enabled") return "set up";
+        if (state.mfaStatus === "disabled") return "not set up";
+        if (state.mfaStatus === "unavailable") return "unavailable";
+        return "unknown";
+      }
+
       async function refreshMfaStatus() {
+        state.mfaStatusLoading = true;
+        if (!state.mfaStatus || state.mfaStatus === "unknown") {
+          state.mfaStatus = "checking";
+        }
+        render();
         try {
           const body = await api("/v1/thane-cli/mfa/status", { method: "GET" });
           state.mfaStatus = body.enabled ? "enabled" : "disabled";
           state.error = "";
         } catch (error) {
+          state.mfaStatus = "unavailable";
           state.error = error.message;
         } finally {
+          state.mfaStatusLoading = false;
           render();
         }
       }
@@ -1639,6 +1656,7 @@
         state.settingsMenuOpen = true;
         state.settingsMenuScrollTop = 0;
         render();
+        void refreshMfaStatus();
       }
 
       function closeSettingsMenu() {
@@ -1703,6 +1721,8 @@
           inviteResult,
           currentUser
         } = input;
+        const canStartMfaSetup = !state.mfaStatusLoading && state.mfaStatus !== "enabled" && !state.mfaSetup;
+        const canDisableMfa = !state.mfaStatusLoading && state.mfaStatus === "enabled";
         return `
           <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="settings-menu-title" onclick="if(event.target===this) closeSettingsMenu()">
             <section class="modal" data-settings-modal onscroll="state.settingsMenuScrollTop=this.scrollTop">
@@ -1729,9 +1749,8 @@
                     <button>Update account default</button>
                   </form>
                   <div class="kv">
-                    <div>MFA (2FA): ${esc(state.mfaStatus || "unknown")}</div>
-                    <button onclick="refreshMfaStatus()">Check MFA</button>
-                    <button onclick="startMfaSetup()">Start MFA (2FA) setup</button>
+                    <div>MFA: ${esc(mfaStatusLabel())}</div>
+                    ${canStartMfaSetup ? `<button onclick="startMfaSetup()">Set up MFA</button>` : ""}
                     ${state.mfaSetup ? `<div class="note-grid">
                         <div>Scan this QR code with your authenticator app.</div>
                         <div>Examples: 1Password, Google Authenticator, Authy, Microsoft Authenticator, Apple Passwords.</div>
@@ -1742,10 +1761,10 @@
                         <input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" />
                         <button>Verify MFA</button>
                       </form>` : ""}
-                    <form class="list" onsubmit="disableMfa(event)">
+                    ${canDisableMfa ? `<form class="list" onsubmit="disableMfa(event)">
                       <input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="disable code" />
                       <button>Disable MFA</button>
-                    </form>
+                    </form>` : ""}
                   </div>
                 </section>
                 <section class="settings-group">
@@ -1828,13 +1847,6 @@
                     ${isAdmin ? `
                       ${isTeamPlan ? `<button onclick="openBilling('portal')" ${state.billingBusy ? "disabled" : ""}>Manage billing</button>` : `<button onclick="openBilling('checkout')" ${state.billingBusy ? "disabled" : ""}>Upgrade workspace</button>`}
                     ` : `<div class="muted small">admin required</div>`}
-                  </div>
-                </section>
-                <section class="settings-group">
-                  <h3>Terminal app</h3>
-                  <div class="kv">
-                    <div>Use Thane Chat from your shell and local coding agents.</div>
-                    <button onclick="openCliInstall()">Install CLI</button>
                   </div>
                 </section>
               </div>
