@@ -553,8 +553,31 @@
       const root = document.querySelector("#root");
       const inviteMatch = location.pathname.match(/^\/invite\/([^/?#]+)/);
       const inviteEmail = new URLSearchParams(location.search).get("email") || "";
+      const initialSession = JSON.parse(localStorage.getItem(storageKey) || "null");
+
+      function memoryScope(session) {
+        return encodeURIComponent(session?.id || session?.email || "anonymous");
+      }
+
+      function accountMemoryKey(name, session = state.session) {
+        return `thane.web.${memoryScope(session)}.${name}`;
+      }
+
+      function workspaceMemoryKey(workspaceId, name, session = state.session) {
+        return `thane.web.${memoryScope(session)}.workspace.${workspaceId}.${name}`;
+      }
+
+      function recall(key) {
+        try {
+          return localStorage.getItem(key) || "";
+        } catch (_error) {
+          return "";
+        }
+      }
+
+      const initialWorkspaceId = recall(accountMemoryKey("activeWorkspaceId", initialSession));
       const state = {
-        session: JSON.parse(localStorage.getItem(storageKey) || "null"),
+        session: initialSession,
         authStep: "email",
         email: inviteEmail,
         mfaChallengeToken: "",
@@ -565,8 +588,8 @@
         inviteAccepted: false,
         autoLoginStarted: false,
         snapshot: null,
-        activeWorkspaceId: "",
-        activeChannelId: "",
+        activeWorkspaceId: initialWorkspaceId,
+        activeChannelId: initialWorkspaceId ? recall(workspaceMemoryKey(initialWorkspaceId, "activeChannelId", initialSession)) : "",
         replyToId: "",
         reactionMenuMessageId: "",
         longPressTimer: null,
@@ -608,6 +631,21 @@
         } catch (_error) {
           // Keep controls responsive even when storage is unavailable.
         }
+      }
+
+      function rememberAccountSelection() {
+        if (!state.session?.authToken || !state.activeWorkspaceId) return;
+        remember(accountMemoryKey("activeWorkspaceId"), state.activeWorkspaceId);
+      }
+
+      function rememberChannelSelection() {
+        if (!state.session?.authToken || !state.activeWorkspaceId || !state.activeChannelId) return;
+        remember(workspaceMemoryKey(state.activeWorkspaceId, "activeChannelId"), state.activeChannelId);
+      }
+
+      function rememberNavigationSelection() {
+        rememberAccountSelection();
+        rememberChannelSelection();
       }
 
       async function api(path, options = {}) {
@@ -908,10 +946,26 @@
         const workspaceId = state.activeWorkspaceId ? `?workspaceId=${encodeURIComponent(state.activeWorkspaceId)}` : "";
         const snapshot = await api(`/v1/thane-cli/sync${workspaceId}`);
         state.snapshot = snapshot;
-        state.activeWorkspaceId = snapshot.activeWorkspaceId || snapshot.workspaces?.[0]?.id || "";
-        if (!state.activeChannelId || !snapshot.channels?.some((channel) => channel.id === state.activeChannelId)) {
-          state.activeChannelId = snapshot.channels?.find((channel) => channel.name === "general")?.id || snapshot.channels?.[0]?.id || "";
+        const workspaces = snapshot.workspaces || [];
+        const channels = snapshot.channels || [];
+        const requestedWorkspaceId = state.activeWorkspaceId;
+        const requestedWorkspaceExists = workspaces.some((workspace) => workspace.id === requestedWorkspaceId);
+        state.activeWorkspaceId = requestedWorkspaceExists ? requestedWorkspaceId : snapshot.activeWorkspaceId || workspaces[0]?.id || "";
+
+        const rememberedChannelId = state.activeWorkspaceId
+          ? recall(workspaceMemoryKey(state.activeWorkspaceId, "activeChannelId"))
+          : "";
+        const requestedChannelId = state.activeChannelId;
+        const requestedChannelExists = channels.some((channel) => channel.id === requestedChannelId);
+        const rememberedChannelExists = channels.some((channel) => channel.id === rememberedChannelId);
+        if (requestedChannelExists) {
+          state.activeChannelId = requestedChannelId;
+        } else if (rememberedChannelExists) {
+          state.activeChannelId = rememberedChannelId;
+        } else {
+          state.activeChannelId = channels.find((channel) => channel.name === "general")?.id || channels[0]?.id || "";
         }
+        rememberNavigationSelection();
         connectRealtime();
       }
 
@@ -998,6 +1052,7 @@
         state.activeChannelId = "";
         state.replyToId = "";
         state.inviteLinkResult = null;
+        rememberAccountSelection();
         await sync();
         render();
       }
@@ -1005,6 +1060,7 @@
       function chooseChannel(id) {
         state.activeChannelId = id;
         state.replyToId = "";
+        rememberChannelSelection();
         render();
       }
 
@@ -1051,6 +1107,14 @@
         event.preventDefault();
         const form = new FormData(event.currentTarget);
         state.searchQuery = String(form.get("search") || "").trim();
+        render();
+      }
+
+      function openSearchResult(channelId) {
+        state.activeChannelId = channelId;
+        state.searchQuery = "";
+        state.replyToId = "";
+        rememberChannelSelection();
         render();
       }
 
@@ -1118,6 +1182,7 @@
         });
         await sync();
         state.activeChannelId = state.snapshot.channels.find((channel) => channel.name === name.replace(/^#/, "").toLowerCase())?.id || state.activeChannelId;
+        rememberChannelSelection();
         render();
       }
 
@@ -1142,6 +1207,7 @@
         state.activeChannelId = "";
         state.replyToId = "";
         state.inviteLinkResult = null;
+        rememberAccountSelection();
         state.status = `Created workspace ${body.workspace?.slug || workspaceSlug}`;
         await sync();
         render();
@@ -1928,7 +1994,7 @@
                 <form class="list" onsubmit="submitSearch(event)">
                   <input name="search" value="${esc(state.searchQuery)}" oninput="updateSearch(this.value)" placeholder="Search messages" />
                   <button>Search messages</button>
-                  ${searchQuery ? `<div class="kv">${searchResults.length ? searchResults.map((message) => `<button type="button" class="item" onclick="state.activeChannelId=${jsString(message.channelId)}; state.searchQuery=''; render()">#${esc(snap.channels.find((item) => item.id === message.channelId)?.name || "channel")} ${esc(userDisplayLabel(users.get(message.authorId)) + ": " + message.text.slice(0, 80))}</button>`).join("") : `<div class="muted small">No results</div>`}</div>` : ""}
+                  ${searchQuery ? `<div class="kv">${searchResults.length ? searchResults.map((message) => `<button type="button" class="item" onclick="openSearchResult(${jsString(message.channelId)})">#${esc(snap.channels.find((item) => item.id === message.channelId)?.name || "channel")} ${esc(userDisplayLabel(users.get(message.authorId)) + ": " + message.text.slice(0, 80))}</button>`).join("") : `<div class="muted small">No results</div>`}</div>` : ""}
                 </form>
               </section>
               <section class="section">
@@ -1962,6 +2028,7 @@
       window.updateDraft = updateDraft;
       window.updateSearch = updateSearch;
       window.submitSearch = submitSearch;
+      window.openSearchResult = openSearchResult;
       window.toggleSidebar = toggleSidebar;
       window.toggleMenu = toggleMenu;
       window.chooseChannel = chooseChannel;
