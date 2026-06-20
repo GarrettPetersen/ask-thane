@@ -120,6 +120,16 @@ describe("chat profile action parity", () => {
     expect(terminalChatSource).toContain("isWorkspaceJoinMessage");
   });
 
+  it("surfaces optimistic send states across web and terminal chat", () => {
+    expect(chatAppHtml).toContain("optimisticMessages");
+    expect(chatAppHtml).toContain("Message failed:");
+    expect(chatAppHtml).toContain(" sending");
+
+    expect(terminalChatSource).toContain("addOptimisticMessage");
+    expect(terminalChatSource).toContain("Send failed:");
+    expect(terminalChatSource).toContain("(sending)");
+  });
+
   it("keeps admin-only slash commands out of non-admin terminal menus", () => {
     const adminCommands = slashCommandsForRole({ isAdmin: true }).map((command) => command.name);
     const memberCommands = slashCommandsForRole({ isAdmin: false }).map((command) => command.name);

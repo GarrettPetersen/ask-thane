@@ -352,15 +352,16 @@ export async function createHostedBillingLink(store: ThaneStore, input: { return
 export async function sendHostedMessage(
   store: ThaneStore,
   input: { channelId: string; text: string; source?: "chat" | "terminal"; threadRootId?: string }
-): Promise<void> {
-  await postHosted(store, "/v1/thane-cli/messages", {
+): Promise<ThaneMessage> {
+  const response = await postHosted<{ ok: true; message: ThaneMessage }>(store, "/v1/thane-cli/messages", {
     workspaceId: store.activeWorkspace.id,
     channelId: input.channelId,
     text: input.text,
     source: input.source ?? "terminal",
     ...(input.threadRootId ? { threadRootId: input.threadRootId } : {})
   });
-  await syncHostedStore(store);
+  await syncHostedStore(store).catch(() => false);
+  return response.message;
 }
 
 export async function reactHostedMessage(store: ThaneStore, input: { messageId: string; emoji: string }): Promise<void> {

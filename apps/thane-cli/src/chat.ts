@@ -282,6 +282,10 @@ function isWorkspaceJoinMessage(message: MessageView): boolean {
   return message.id.startsWith("evt_join_") || message.id.startsWith("tjoin_");
 }
 
+function isPendingMessage(message: MessageView): boolean {
+  return message.id.startsWith("pending_");
+}
+
 function renderMessage(message: MessageView, width: number, selected = false): string[] {
   const date = new Date(message.createdAt);
   const time = Number.isNaN(date.getTime())
@@ -303,9 +307,10 @@ function renderMessage(message: MessageView, width: number, selected = false): s
     : "";
   const branch = isReply ? `${DIM}└─${RESET} ` : "";
   const sourceMarker = message.source === "terminal" ? " 🤖" : "";
-  const prefix = `${indent}${marker}${branch}${DIM}${time}${RESET} ${BOLD}${message.author}${sourceMarker}${RESET}: `;
+  const pendingMarker = isPendingMessage(message) ? ` ${DIM}(sending)${RESET}` : "";
+  const prefix = `${indent}${marker}${branch}${DIM}${time}${RESET} ${BOLD}${message.author}${sourceMarker}${RESET}${pendingMarker}: `;
   const bodyWidth = Math.max(10, width - visibleLength(prefix));
-  const actionHint = selected ? ` ${DIM}r reply · e react${RESET}` : "";
+  const actionHint = selected && !isPendingMessage(message) ? ` ${DIM}r reply · e react${RESET}` : "";
   const lines = wrap(`${message.text}${thread}${reactions}${actionHint}`, bodyWidth);
   return lines.map((line, index) => (index === 0 ? `${prefix}${line}` : `${" ".repeat(visibleLength(prefix))}${line}`));
 }
@@ -750,9 +755,9 @@ export async function runChat(initialChannel = "general"): Promise<void> {
   let lastHostedSyncMs = 0;
   let realtimeStatus: "connecting" | "live" | "closed" | "unavailable" = "unavailable";
 
-  const refresh = async (options: { forceHostedSync?: boolean } = {}): Promise<void> => {
+  const refresh = async (options: { forceHostedSync?: boolean; skipHostedSync?: boolean } = {}): Promise<void> => {
     store = await ThaneStore.open();
-    if (hasHostedChat(store) && (options.forceHostedSync || Date.now() - lastHostedSyncMs > 2500)) {
+    if (!options.skipHostedSync && hasHostedChat(store) && (options.forceHostedSync || Date.now() - lastHostedSyncMs > 2500)) {
       try {
         await syncHostedStore(store, { workspaceId: store.activeWorkspace.id });
         lastHostedSyncMs = Date.now();
@@ -797,6 +802,43 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       updateStatus,
       ...(targetMessageId ? { targetMessageId } : {})
     });
+  };
+
+  const sendChatMessage = async (text: string, threadRootId?: string): Promise<boolean> => {
+    requireHostedAuthToken(store);
+    const pending = await store.addOptimisticMessage({
+      channelId: activeChannel.id,
+      text,
+      source: "chat",
+      ...(threadRootId ? { threadRootId } : {})
+    });
+    status = "Sending...";
+    await refresh({ skipHostedSync: true });
+    try {
+      const sent = await sendHostedMessage(store, {
+        channelId: activeChannel.id,
+        text,
+        source: "chat",
+        ...(threadRootId ? { threadRootId } : {})
+      });
+      store = await ThaneStore.open();
+      await store.replaceLocalMessage(pending.id, sent);
+      store = await ThaneStore.open();
+      const messages = threadedMessages(store.recent(activeChannel.id, 200));
+      const sentIndex = messages.findIndex((message) => message.id === sent.id);
+      messageIndex = Math.max(0, sentIndex >= 0 ? sentIndex : messages.length - 1);
+      status = "";
+      await store.markReadConversation(activeChannel.id);
+      return true;
+    } catch (error) {
+      store = await ThaneStore.open();
+      await store.removeLocalMessage(pending.id);
+      store = await ThaneStore.open();
+      inputText = text;
+      status = `Send failed: ${(error as Error).message}`;
+      await refresh({ skipHostedSync: true });
+      return false;
+    }
   };
 
   const startEventWatcher = (): { close: () => void } =>
@@ -939,15 +981,13 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       }
       const root = selectedMessage();
       const threadRootId = root?.threadRootId ?? root?.id ?? targetMessageId;
-      requireHostedAuthToken(store);
-      await sendHostedMessage(store, { channelId: activeChannel.id, text: trimmed, source: "chat", threadRootId });
-      store = await ThaneStore.open();
-      const sent = threadedMessages(store.recent(activeChannel.id, 200)).at(-1);
+      const sent = await sendChatMessage(trimmed, threadRootId);
+      if (!sent) {
+        return;
+      }
       composerMode = "message";
       targetMessageId = undefined;
-      messageIndex = Math.max(0, threadedMessages(store.recent(activeChannel.id, 200)).findIndex((message) => message.id === sent?.id));
       status = "";
-      await store.markReadConversation(activeChannel.id);
       return;
     }
     if (composerMode === "react") {
@@ -1382,18 +1422,14 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       status = "Unknown command. Type /help.";
       return;
     }
-    requireHostedAuthToken(store);
-    await sendHostedMessage(store, { channelId: activeChannel.id, text: trimmed, source: "chat" });
-    store = await ThaneStore.open();
-    const sent = threadedMessages(store.recent(activeChannel.id, 200)).at(-1);
-    const messages = threadedMessages(store.recent(activeChannel.id, 200));
-    status = sent && messages.some((message) => message.id === sent.id) ? "" : "";
-    messageIndex = Math.max(0, sent ? messages.findIndex((message) => message.id === sent.id) : messages.length - 1);
+    const sent = await sendChatMessage(trimmed);
+    if (!sent) {
+      return;
+    }
     showHelp = false;
     showMenu = false;
     sidePanelLines = undefined;
     workspacePickerOpen = false;
-    await store.markReadConversation(activeChannel.id);
   };
 
   const completeInput = (): boolean => {

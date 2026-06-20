@@ -259,6 +259,14 @@
       .message.system-event .message-meta {
         color: var(--quiet);
       }
+      .message.pending .message-meta,
+      .message.pending .message-text {
+        color: var(--muted);
+      }
+      .message.failed .message-meta,
+      .message.failed .message-text {
+        color: #ffb4a9;
+      }
       .message-meta {
         display: inline;
         color: var(--muted);
@@ -621,6 +629,7 @@
         realtimeBackoffMs: 1000,
         realtimeStatus: "polling",
         realtimeSyncing: false,
+        optimisticMessages: [],
         status: "",
         error: "",
         busy: false
@@ -725,7 +734,16 @@
         return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       }
       function currentSnapshot() {
-        return state.snapshot || { workspaces: [], channels: [], messages: [], users: [] };
+        const snapshot = state.snapshot || { workspaces: [], channels: [], messages: [], users: [] };
+        if (!state.optimisticMessages.length) return snapshot;
+        const existingIds = new Set((snapshot.messages || []).map((message) => message.id));
+        return {
+          ...snapshot,
+          messages: [
+            ...(snapshot.messages || []),
+            ...state.optimisticMessages.filter((message) => !existingIds.has(message.id))
+          ]
+        };
       }
 
       function currentChannel() {
@@ -802,6 +820,51 @@
 
       function messageById(id) {
         return (currentSnapshot().messages || []).find((message) => message.id === id);
+      }
+
+      function optimisticMessageId() {
+        return `pending_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+      }
+
+      function messageMentions(text) {
+        return [...String(text || "").matchAll(/@([a-zA-Z0-9._-]+)/g)].map((match) => String(match[1] || "").toLowerCase()).filter(Boolean);
+      }
+
+      function addOptimisticMessage({ text, threadRootId }) {
+        const user = currentUser();
+        const message = {
+          id: optimisticMessageId(),
+          workspaceId: state.activeWorkspaceId,
+          channelId: state.activeChannelId,
+          authorId: user?.id || "pending-user",
+          text,
+          source: "chat",
+          ...(threadRootId ? { threadRootId } : {}),
+          createdAt: new Date().toISOString(),
+          reactions: [],
+          mentions: messageMentions(text),
+          pending: true
+        };
+        state.optimisticMessages = [...state.optimisticMessages, message];
+        return message;
+      }
+
+      function removeOptimisticMessage(id) {
+        state.optimisticMessages = state.optimisticMessages.filter((message) => message.id !== id);
+      }
+
+      function replaceOptimisticMessage(id, serverMessage) {
+        const replacement = serverMessage
+          ? { ...serverMessage, pending: false }
+          : { ...(state.optimisticMessages.find((message) => message.id === id) || {}), pending: false };
+        state.optimisticMessages = state.optimisticMessages.map((message) => message.id === id ? replacement : message);
+        return replacement.id || id;
+      }
+
+      function failOptimisticMessage(id, error) {
+        state.optimisticMessages = state.optimisticMessages.map((message) =>
+          message.id === id ? { ...message, pending: false, failed: true, error: String(error || "failed") } : message
+        );
       }
 
       function reactionGroups(message) {
@@ -1080,19 +1143,35 @@
         state.draftText = "";
         const replyTarget = messageById(state.replyToId);
         const threadRootId = replyTarget ? (replyTarget.threadRootId || replyTarget.id) : "";
-        await api("/v1/thane-cli/messages", {
-          method: "POST",
-          body: JSON.stringify({
-            workspaceId: state.activeWorkspaceId,
-            channelId: state.activeChannelId,
-            text,
-            source: "chat",
-            ...(threadRootId ? { threadRootId } : {})
-          })
-        });
         state.replyToId = "";
-        await sync();
+        state.error = "";
+        const optimistic = addOptimisticMessage({ text, threadRootId });
         render();
+        requestAnimationFrame(() => document.querySelector(".composer textarea")?.focus());
+        try {
+          const body = await api("/v1/thane-cli/messages", {
+            method: "POST",
+            body: JSON.stringify({
+              workspaceId: state.activeWorkspaceId,
+              channelId: state.activeChannelId,
+              text,
+              source: "chat",
+              ...(threadRootId ? { threadRootId } : {})
+            })
+          });
+          const sentMessageId = replaceOptimisticMessage(optimistic.id, body.message);
+          try {
+            await sync();
+            removeOptimisticMessage(sentMessageId);
+          } catch (syncError) {
+            state.status = `Message sent; sync failed: ${syncError.message}`;
+          }
+        } catch (error) {
+          failOptimisticMessage(optimistic.id, error.message);
+          state.error = `Message failed: ${error.message}`;
+        }
+        render();
+        requestAnimationFrame(() => document.querySelector(".composer textarea")?.focus());
       }
 
       function replyTo(id) {
@@ -1903,10 +1982,12 @@
         const reactionText = (message.reactions || []).map((reaction) => reaction.emoji).join(" ");
         const menuOpen = state.reactionMenuMessageId === message.id;
         const quickReactions = ["👍", "❤️", "😂", "🎉", "👀"];
-        return `<article class="message ${isReply ? "reply" : ""} ${menuOpen ? "show-reactions" : ""}" ontouchstart="startLongPress(event, ${jsString(message.id)})" ontouchmove="markTouchMoved()" ontouchend="cancelLongPress()" ontouchcancel="cancelLongPress()" oncontextmenu="openReactionMenu(event, ${jsString(message.id)})">
-          <span class="message-meta">${branch}<span class="msg-marker">  ${esc(stamp)}</span> <span class="message-author">${esc(author)}${sourceMarker}</span>: </span><span class="message-text">${esc(message.text)}</span>${replies.length && !isReply ? `<span class="thread-count"> (${replies.length} repl${replies.length === 1 ? "y" : "ies"})</span>` : ""}${reactionText ? `<span class="thread-count"> ${esc(reactionText)}</span>` : ""}
-          <span class="message-actions"><button class="message-action" title="React" onclick="openReactionMenu(event, ${jsString(message.id)})">+</button>${!isReply ? `<button class="message-action" title="Reply" onclick="event.stopPropagation(); replyTo(${jsString(message.id)})">↵</button>` : ""}</span>
-          ${menuOpen ? `<span class="reaction-menu">${quickReactions.map((emoji) => `<button onclick="reactTo(${jsString(message.id)}, ${jsString(emoji)})">${esc(emoji)}</button>`).join("")}<form class="reaction-custom" onsubmit="customReaction(event, ${jsString(message.id)})"><input name="emoji" maxlength="12" placeholder="+"/><button>ok</button></form><button title="Close" onclick="closeReactionMenu()">x</button></span>` : ""}
+        const deliveryText = message.failed ? " failed" : message.pending ? " sending" : "";
+        const canActOnMessage = !message.pending && !message.failed;
+        return `<article class="message ${isReply ? "reply" : ""} ${message.pending ? "pending" : ""} ${message.failed ? "failed" : ""} ${menuOpen ? "show-reactions" : ""}" ontouchstart="${canActOnMessage ? `startLongPress(event, ${jsString(message.id)})` : ""}" ontouchmove="markTouchMoved()" ontouchend="cancelLongPress()" ontouchcancel="cancelLongPress()" oncontextmenu="${canActOnMessage ? `openReactionMenu(event, ${jsString(message.id)})` : "event.preventDefault()"}">
+          <span class="message-meta">${branch}<span class="msg-marker">  ${esc(stamp)}</span> <span class="message-author">${esc(author)}${sourceMarker}</span>${deliveryText}: </span><span class="message-text">${esc(message.text)}</span>${replies.length && !isReply ? `<span class="thread-count"> (${replies.length} repl${replies.length === 1 ? "y" : "ies"})</span>` : ""}${reactionText ? `<span class="thread-count"> ${esc(reactionText)}</span>` : ""}
+          ${canActOnMessage ? `<span class="message-actions"><button class="message-action" title="React" onclick="openReactionMenu(event, ${jsString(message.id)})">+</button>${!isReply ? `<button class="message-action" title="Reply" onclick="event.stopPropagation(); replyTo(${jsString(message.id)})">↵</button>` : ""}</span>` : ""}
+          ${menuOpen && canActOnMessage ? `<span class="reaction-menu">${quickReactions.map((emoji) => `<button onclick="reactTo(${jsString(message.id)}, ${jsString(emoji)})">${esc(emoji)}</button>`).join("")}<form class="reaction-custom" onsubmit="customReaction(event, ${jsString(message.id)})"><input name="emoji" maxlength="12" placeholder="+"/><button>ok</button></form><button title="Close" onclick="closeReactionMenu()">x</button></span>` : ""}
           ${!isReply && replies.length ? replies.map((reply) => renderMessage(reply, users, repliesByRoot, true)).join("") : ""}
         </article>`;
       }

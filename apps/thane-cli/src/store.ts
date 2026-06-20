@@ -1530,6 +1530,56 @@ export class ThaneStore {
     return channel;
   }
 
+  async addOptimisticMessage(input: {
+    channelId: string;
+    text: string;
+    threadRootId?: string;
+    source?: "chat" | "terminal";
+  }): Promise<ThaneMessage> {
+    const channel = this.data.channels.find((candidate) => candidate.workspaceId === this.activeWorkspace.id && candidate.id === input.channelId);
+    if (!channel) {
+      throw new Error(`Channel ${input.channelId} was not found.`);
+    }
+    const message: ThaneMessage = {
+      id: id("pending"),
+      workspaceId: this.activeWorkspace.id,
+      channelId: channel.id,
+      authorId: this.currentUser.id,
+      text: input.text,
+      createdAt: nowIso(),
+      source: input.source ?? "chat",
+      ...(input.threadRootId ? { threadRootId: input.threadRootId } : {}),
+      reactions: [],
+      mentions: extractMentions(input.text)
+    };
+    this.data.messages.push(message);
+    await saveData(this.data);
+    return message;
+  }
+
+  async removeLocalMessage(messageId: string): Promise<void> {
+    const before = this.data.messages.length;
+    this.data.messages = this.data.messages.filter((message) => message.id !== messageId);
+    if (this.data.messages.length !== before) {
+      await saveData(this.data);
+    }
+  }
+
+  async replaceLocalMessage(localMessageId: string, replacement: ThaneMessage): Promise<void> {
+    if (this.data.messages.some((message) => message.id === replacement.id)) {
+      this.data.messages = this.data.messages.filter((message) => message.id !== localMessageId);
+      await saveData(this.data);
+      return;
+    }
+    const localIndex = this.data.messages.findIndex((message) => message.id === localMessageId);
+    if (localIndex >= 0) {
+      this.data.messages[localIndex] = replacement;
+    } else {
+      this.data.messages.push(replacement);
+    }
+    await saveData(this.data);
+  }
+
   async sendMessage(channelName: string, text: string, threadRootId?: string, source: "chat" | "terminal" = "terminal"): Promise<ThaneMessage> {
     const channel = this.findChannel(channelName) ?? (await this.createChannel(channelName));
     if (!this.canReadChannel(channel)) {
