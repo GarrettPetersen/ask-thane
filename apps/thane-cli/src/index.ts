@@ -21,6 +21,7 @@ import {
   reactHostedMessage,
   removeHostedChannelMember,
   removeHostedWorkspaceMember,
+  sendHostedDm,
   sendHostedMessage,
   setHostedWorkspaceMemberRole,
   syncHostedStore,
@@ -1719,7 +1720,13 @@ async function main(): Promise<void> {
     if (!handle || !text) {
       throw new Error("Usage: thane dm-send <handle> <message>");
     }
-    throw new Error("DM sending from the CLI requires hosted DM support and is not available yet.");
+    requireHostedAuthToken(store);
+    const sent = await sendHostedDm(store, { target: handle, text, source: "terminal" });
+    store = await ThaneStore.open();
+    const outputMessage = store.recent(sent.channelId, 1).find((message) => message.id === sent.id) ?? store.recent(sent.channelId, 1).at(-1);
+    wantsJson(args)
+      ? printJson({ message: outputMessage ?? sent })
+      : process.stdout.write(`sent ${sent.id} to @${handle.replace(/^@/, "")}\n`);
     return;
   }
 

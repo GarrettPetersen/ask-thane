@@ -267,7 +267,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Users and DMs",
     command: "thane dm-send <handle> <message>",
-    description: "Reserved for hosted DM support.",
+    description: "Send a hosted DM.",
     examples: ["thane dm-send alex \"Can you review this?\""]
   },
   {

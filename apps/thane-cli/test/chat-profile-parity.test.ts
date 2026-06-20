@@ -86,7 +86,8 @@ describe("chat profile action parity", () => {
 
     expect(rendered).toContain("Danika @danika (member) - danika@example.com");
     expect(chatAppHtml).toContain("const emailText = isAdmin && user.email");
-    expect(chatAppHtml).toContain("${emailText}${canManage");
+    expect(chatAppHtml).toContain("(${esc(memberRole)})${emailText}</span>");
+    expect(chatAppHtml).toContain("openDmComposer");
   });
 
   it("exposes MFA setup guidance across web, terminal, and CLI", () => {

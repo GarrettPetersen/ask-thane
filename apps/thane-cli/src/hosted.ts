@@ -366,6 +366,20 @@ export async function sendHostedMessage(
   return response.message;
 }
 
+export async function sendHostedDm(
+  store: ThaneStore,
+  input: { target: string; text: string; source?: "chat" | "terminal" }
+): Promise<ThaneMessage> {
+  const response = await postHosted<{ ok: true; message: ThaneMessage }>(store, "/v1/thane-cli/messages", {
+    workspaceId: store.activeWorkspace.id,
+    dmTarget: input.target,
+    text: input.text,
+    source: input.source ?? "terminal"
+  });
+  await syncHostedStore(store).catch(() => false);
+  return response.message;
+}
+
 export async function reactHostedMessage(store: ThaneStore, input: { messageId: string; emoji: string }): Promise<void> {
   await postHosted(store, "/v1/thane-cli/reactions", {
     workspaceId: store.activeWorkspace.id,

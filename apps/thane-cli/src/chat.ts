@@ -14,6 +14,7 @@ import {
   removeHostedChannelMember,
   removeHostedWorkspaceMember,
   sendHostedMessage,
+  sendHostedDm,
   setHostedWorkspaceMemberRole,
   syncHostedStore,
   unbanHostedWorkspaceMember,
@@ -1436,9 +1437,23 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       return;
     }
     if (trimmed.startsWith("/dm ")) {
-      activeChannel = await selectConversation(store, `@${trimmed.slice("/dm ".length).trim()}`);
+      const [target = "", ...messageParts] = trimmed.slice("/dm ".length).trim().split(/\s+/);
+      const messageText = messageParts.join(" ").trim();
+      if (!target) {
+        status = "Usage: /dm <handle> [message]";
+        return;
+      }
+      if (messageText) {
+        requireHostedAuthToken(store);
+        const sent = await sendHostedDm(store, { target, text: messageText, source: "chat" });
+        store = await ThaneStore.open();
+        activeChannel = store.findChannel(sent.channelId) ?? activeChannel;
+        status = `Sent DM to @${target.replace(/^@/, "")}`;
+      } else {
+        activeChannel = await selectConversation(store, `@${target}`);
+        status = `Opened ${channelLabel(activeChannel)}`;
+      }
       await store.markReadConversation(activeChannel.id);
-      status = `Opened ${channelLabel(activeChannel)}`;
       showHelp = false;
       showMenu = false;
       sidePanelLines = undefined;

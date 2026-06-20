@@ -106,6 +106,7 @@ interface ThaneCliMessageCreatePayload {
   workspaceId?: unknown;
   channelId?: unknown;
   channelName?: unknown;
+  dmTarget?: unknown;
   text?: unknown;
   source?: unknown;
   threadRootId?: unknown;
@@ -1726,6 +1727,68 @@ async function ensureThaneCliAppDmChannel(env: Env, input: {
   return { id: row.id, name: row.name, kind: "dm", visibility: "private" };
 }
 
+async function ensureThaneCliUserDmChannel(env: Env, input: {
+  workspaceId: string;
+  member: { id: string; account_id?: string | null; email?: string | null; handle?: string | null };
+  targetMember: { id: string; account_id?: string | null; email?: string | null; handle?: string | null };
+}): Promise<{ id: string; name: string; kind: "dm"; visibility: "private" }> {
+  const existing = await env.DB
+    .prepare(
+      `SELECT c.id, c.name, c.kind, c.visibility
+       FROM thane_cli_channels c
+       JOIN thane_cli_channel_members current_member ON current_member.channel_id = c.id
+       JOIN thane_cli_channel_members target_member ON target_member.channel_id = c.id
+       WHERE c.workspace_id = ?
+         AND c.kind = 'dm'
+         AND c.visibility = 'private'
+         AND current_member.member_id = ?
+         AND current_member.left_at IS NULL
+         AND target_member.member_id = ?
+         AND target_member.left_at IS NULL
+       LIMIT 1`
+    )
+    .bind(input.workspaceId, input.member.id, input.targetMember.id)
+    .first<{ id?: string; name?: string; kind?: ThaneCliConversationKind; visibility?: ThaneCliConversationVisibility }>();
+  if (existing?.id && existing.name && existing.kind === "dm" && existing.visibility === "private") {
+    return { id: existing.id, name: existing.name, kind: "dm", visibility: "private" };
+  }
+
+  const handles = [publicHandleForMember(input.member), publicHandleForMember(input.targetMember)].sort();
+  const fallbackIds = [input.member.id, input.targetMember.id].sort().map((id) => id.replace(/[^a-z0-9]+/gi, "").slice(0, 16));
+  const name = normalizeChannelName(`dm-${handles.join("-")}`) || normalizeChannelName(`dm-${fallbackIds.join("-")}`) || `dm-${Date.now()}`;
+  const now = nowIso();
+  await env.DB
+    .prepare(
+      `INSERT INTO thane_cli_channels (
+         id, workspace_id, name, kind, visibility, topic, created_at, updated_at
+       ) VALUES (?, ?, ?, 'dm', 'private', 'Direct messages', ?, ?)
+       ON CONFLICT(workspace_id, name) DO UPDATE SET
+         updated_at = excluded.updated_at`
+    )
+    .bind(makeId("tcc"), input.workspaceId, name, now, now)
+    .run();
+  const row = await env.DB
+    .prepare("SELECT id, name, kind, visibility FROM thane_cli_channels WHERE workspace_id = ? AND name = ? LIMIT 1")
+    .bind(input.workspaceId, name)
+    .first<{ id?: string; name?: string; kind?: ThaneCliConversationKind; visibility?: ThaneCliConversationVisibility }>();
+  if (!row?.id || row.kind !== "dm" || row.visibility !== "private" || !row.name) {
+    throw new Error("user_dm_channel_upsert_failed");
+  }
+  for (const memberId of [input.member.id, input.targetMember.id]) {
+    await env.DB
+      .prepare(
+        `INSERT INTO thane_cli_channel_members (id, channel_id, member_id, joined_at, left_at)
+         VALUES (?, ?, ?, ?, NULL)
+         ON CONFLICT(channel_id, member_id) DO UPDATE SET
+           left_at = NULL,
+           joined_at = excluded.joined_at`
+      )
+      .bind(makeId("tccm"), row.id, memberId, now)
+      .run();
+  }
+  return { id: row.id, name: row.name, kind: "dm", visibility: "private" };
+}
+
 async function canThaneCliMemberUseChannel(env: Env, input: {
   channelId: string;
   visibility: ThaneCliConversationVisibility;
@@ -2870,6 +2933,7 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
     .all<{ id: string; account_id: string; email: string; display_name: string | null; handle: string; role: "owner" | "admin" | "member"; joined_at: string }>();
   const members = (memberRows.results ?? []).filter((member) => includeAskThaneMember || member.email !== "thane@askthane.com");
   const memberIds = members.map((member) => member.id);
+  const membersById = new Map(members.map((member) => [member.id, member]));
   const currentMember = members.find((member) => member.email === email);
   const canSeeMemberEmails = isThaneCliWorkspaceAdmin(currentMember?.role);
   const users = members.map((member) => ({
@@ -2925,15 +2989,23 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
     if (currentMember && !channelMemberIds.includes(currentMember.id)) {
       return [];
     }
+    const dmPeers = channel.kind === "dm" && currentMember
+      ? channelMemberIds
+          .filter((memberId) => memberId !== currentMember.id)
+          .flatMap((memberId) => {
+            const member = membersById.get(memberId);
+            return member ? [publicHandleForMember(member)] : [];
+          })
+      : [];
     return [{
-    id: channel.id,
-    workspaceId: channel.workspace_id,
-    name: channel.name,
-    kind: channel.kind,
-    visibility: channel.visibility,
-    memberIds: channelMemberIds,
-    ...(channel.topic ? { topic: channel.topic } : {}),
-    createdAt: channel.created_at
+      id: channel.id,
+      workspaceId: channel.workspace_id,
+      name: channel.kind === "dm" && dmPeers.length ? dmPeers.join(",") : channel.name,
+      kind: channel.kind,
+      visibility: channel.visibility,
+      memberIds: channelMemberIds,
+      ...(channel.topic ? { topic: channel.topic } : {}),
+      createdAt: channel.created_at
     }];
   });
 
@@ -3369,7 +3441,24 @@ async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<
   }
   const channelId = typeof payload?.channelId === "string" && payload.channelId.trim() ? payload.channelId.trim() : null;
   const channelName = normalizeChannelName(payload?.channelName);
-  const channel = channelId
+  const dmTarget = typeof payload?.dmTarget === "string" && payload.dmTarget.trim() ? payload.dmTarget.trim() : null;
+  if (!channelId && !channelName && !dmTarget) {
+    return Response.json({ ok: false, error: "channel_or_dm_target_and_text_required" }, { status: 400 });
+  }
+  const targetMember = dmTarget ? await resolveThaneCliWorkspaceMember(env, { workspaceId, target: dmTarget }) : null;
+  if (dmTarget && !targetMember) {
+    return Response.json({ ok: false, error: "member_not_found" }, { status: 404 });
+  }
+  if (targetMember?.id === member.id) {
+    return Response.json({ ok: false, error: "cannot_dm_self" }, { status: 400 });
+  }
+  const channel = targetMember
+    ? await ensureThaneCliUserDmChannel(env, {
+        workspaceId,
+        member,
+        targetMember
+      })
+    : channelId
     ? await env.DB
         .prepare("SELECT id, name, kind, visibility FROM thane_cli_channels WHERE workspace_id = ? AND id = ? LIMIT 1")
         .bind(workspaceId, channelId)

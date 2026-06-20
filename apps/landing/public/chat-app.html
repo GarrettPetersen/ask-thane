@@ -191,6 +191,24 @@
       .item .cursor {
         color: var(--amber);
       }
+      .member-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+      .member-row .member-label {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .member-row button {
+        min-height: 26px;
+        padding: 0 8px;
+        font-size: 12px;
+      }
 
       .main {
         display: grid;
@@ -285,6 +303,27 @@
         font-size: 12px;
         margin-left: 22px;
       }
+      .message-reactions {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-left: 10px;
+        vertical-align: middle;
+      }
+      .reaction-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        min-height: 20px;
+        padding: 0 6px;
+        border: 1px solid rgba(122, 255, 159, 0.22);
+        background: rgba(122, 255, 159, 0.06);
+        color: var(--ink);
+        font-size: 12px;
+      }
+      .reaction-count {
+        color: var(--muted);
+      }
       .message-actions {
         position: absolute;
         right: 0;
@@ -310,6 +349,7 @@
         color: var(--muted);
         background: #070a08;
         line-height: 1;
+        touch-action: manipulation;
       }
       .reaction-menu {
         display: inline-flex;
@@ -594,6 +634,25 @@
         .setup-grid { grid-template-columns: 1fr; }
         .mention-suggestions { padding-left: 12px; }
       }
+      @media (hover: none), (pointer: coarse) {
+        .message {
+          padding: 4px 0;
+        }
+        .message-actions {
+          position: static;
+          display: inline-flex;
+          opacity: 1;
+          pointer-events: auto;
+          margin-left: 8px;
+          padding-left: 0;
+          background: transparent;
+          vertical-align: middle;
+        }
+        .message-action {
+          min-height: 30px;
+          min-width: 32px;
+        }
+      }
     </style>
   </head>
   <body>
@@ -657,6 +716,8 @@
         setupDraft: { displayName: "", handle: "", workspaceName: "" },
         searchQuery: "",
         draftText: "",
+        dmComposeTarget: null,
+        dmDraftText: "",
         mentionIndex: 0,
         sidebarCollapsed: localStorage.getItem("thane.web.sidebarCollapsed") === "true",
         workspaceMenuOpen: localStorage.getItem("thane.web.workspaceMenuOpen") === "true",
@@ -886,8 +947,11 @@
         });
       }
 
+      function userDmTarget(user) {
+        return user?.handle || user?.email || user?.id || "";
+      }
+
       function renderMemberRows(users, options = {}) {
-        const snap = currentSnapshot();
         const activeUser = currentUser();
         const isAdmin = canAdminWorkspace();
         const channel = currentChannel();
@@ -895,11 +959,12 @@
         const includeChannelControls = options.includeChannelControls !== false;
         return users.map((user) => {
           const memberRole = memberRoleForUser(user);
-          const target = user.email || user.handle;
+          const target = userDmTarget(user);
           const canManage = isAdmin && user.id !== activeUser?.id;
+          const canDm = activeUser && user.id !== activeUser.id;
           const inChannel = channelMemberIds.has(user.id);
           const emailText = isAdmin && user.email ? ` - ${esc(user.email)}` : "";
-          return `<div class="item">${esc(user.displayName || user.handle)} @${esc(user.handle)} (${esc(memberRole)})${emailText}${canManage ? ` <button onclick="setWorkspaceMemberRole(${jsString(target)}, ${jsString(memberRole === "admin" ? "member" : "admin")})">${memberRole === "admin" ? "make member" : "make admin"}</button>${includeChannelControls && inChannel ? ` <button onclick="removeChannelMember(${jsString(target)})">channel remove</button>` : ""} <button onclick="removeWorkspaceMember(${jsString(target)}, false)">kick</button> <button onclick="removeWorkspaceMember(${jsString(target)}, true)">ban</button>` : ""}</div>`;
+          return `<div class="item member-row"><span class="member-label">${esc(user.displayName || user.handle)} @${esc(user.handle)} (${esc(memberRole)})${emailText}</span>${canDm ? ` <button title="Send DM" onclick="event.stopPropagation(); openDmComposer(${jsString(target)})">DM</button>` : ""}${canManage ? ` <button onclick="setWorkspaceMemberRole(${jsString(target)}, ${jsString(memberRole === "admin" ? "member" : "admin")})">${memberRole === "admin" ? "make member" : "make admin"}</button>${includeChannelControls && inChannel ? ` <button onclick="removeChannelMember(${jsString(target)})">channel remove</button>` : ""} <button onclick="removeWorkspaceMember(${jsString(target)}, false)">kick</button> <button onclick="removeWorkspaceMember(${jsString(target)}, true)">ban</button>` : ""}</div>`;
         }).join("") || `<div class="muted small">No members</div>`;
       }
 
@@ -1282,6 +1347,94 @@
         }
         render();
         requestAnimationFrame(() => document.querySelector(".composer textarea")?.focus());
+      }
+
+      function findUserForDmTarget(target) {
+        const normalized = String(target || "").trim().replace(/^@/, "").toLowerCase();
+        if (!normalized) return null;
+        return (currentSnapshot().users || []).find((user) =>
+          user.id === target ||
+          String(user.handle || "").toLowerCase() === normalized ||
+          String(user.email || "").toLowerCase() === normalized
+        ) || null;
+      }
+
+      function dmChannelForUser(user) {
+        const activeUser = currentUser();
+        if (!activeUser || !user) return null;
+        return (currentSnapshot().channels || []).find((channel) =>
+          channel.kind === "dm" &&
+          (channel.memberIds || []).includes(activeUser.id) &&
+          (channel.memberIds || []).includes(user.id)
+        ) || null;
+      }
+
+      function openDmComposer(target) {
+        const user = findUserForDmTarget(target);
+        const activeUser = currentUser();
+        if (!user || !activeUser || user.id === activeUser.id) return;
+        const existing = dmChannelForUser(user);
+        state.reactionMenuMessageId = "";
+        state.replyToId = "";
+        state.error = "";
+        if (existing) {
+          state.activeChannelId = existing.id;
+          state.status = `Opened @${user.handle}`;
+          rememberChannelSelection();
+          render();
+          requestAnimationFrame(() => document.querySelector(".composer textarea")?.focus());
+          return;
+        }
+        state.dmComposeTarget = user;
+        state.dmDraftText = "";
+        render();
+        requestAnimationFrame(() => document.querySelector("[data-dm-composer] textarea")?.focus());
+      }
+
+      function closeDmComposer() {
+        state.dmComposeTarget = null;
+        state.dmDraftText = "";
+        render();
+      }
+
+      function updateDmDraft(value) {
+        state.dmDraftText = value;
+      }
+
+      async function sendDm(event) {
+        event.preventDefault();
+        const target = state.dmComposeTarget;
+        const form = new FormData(event.currentTarget);
+        const text = String(state.dmDraftText || form.get("text") || "").trim();
+        if (!target || !text) return;
+        state.status = `Sending DM to @${target.handle}...`;
+        state.error = "";
+        render();
+        try {
+          const body = await api("/v1/thane-cli/messages", {
+            method: "POST",
+            body: JSON.stringify({
+              workspaceId: state.activeWorkspaceId,
+              dmTarget: userDmTarget(target),
+              text,
+              source: "chat"
+            })
+          });
+          state.activeChannelId = body.message?.channelId || state.activeChannelId;
+          state.dmComposeTarget = null;
+          state.dmDraftText = "";
+          rememberChannelSelection();
+          try {
+            await sync();
+            state.status = `Sent DM to @${target.handle}`;
+          } catch (syncError) {
+            state.status = `DM sent; sync failed: ${syncError.message}`;
+          }
+        } catch (error) {
+          state.error = `DM failed: ${error.message}`;
+          state.dmDraftText = text;
+        }
+        render();
       }
 
       function replyTo(id) {
@@ -2010,6 +2163,31 @@
           </div>`;
       }
 
+      function renderDmComposerModal() {
+        const target = state.dmComposeTarget;
+        if (!target) return "";
+        return `
+          <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="dm-compose-title" onclick="if(event.target===this) closeDmComposer()">
+            <section class="modal" data-dm-composer>
+              <div class="modal-head">
+                <div class="modal-title">
+                  <h2 id="dm-compose-title">DM @${esc(target.handle)}</h2>
+                  <p class="muted small">${esc(target.displayName || target.handle)}</p>
+                </div>
+                <button class="icon-button" onclick="closeDmComposer()" aria-label="Close DM composer">x</button>
+              </div>
+              <form class="modal-body" onsubmit="sendDm(event)">
+                <textarea name="text" oninput="updateDmDraft(this.value)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();this.form.requestSubmit();}" placeholder="Type a direct message">${esc(state.dmDraftText)}</textarea>
+                <div class="modal-actions">
+                  <button>Send DM</button>
+                  <button type="button" onclick="closeDmComposer()">Cancel</button>
+                </div>
+                <p class="${state.error ? "error" : "muted"} small">${esc(state.error || state.status || "")}</p>
+              </form>
+            </section>
+          </div>`;
+      }
+
       function renderSettingsMenuModal(input) {
         if (!state.settingsMenuOpen) return "";
         const {
@@ -2242,15 +2420,20 @@
         const branch = isReply ? `<span class="msg-branch">└─</span> ` : "";
         const author = userDisplayLabel(user);
         const sourceMarker = message.source === "terminal" ? " 🤖" : message.source === "webhook" ? " 🔌" : "";
-        const reactionText = (message.reactions || []).map((reaction) => reaction.emoji).join(" ");
+        const reactionHtml = reactionGroups(message).map((reaction) => {
+          const by = reaction.by.length ? ` by ${reaction.by.map((handle) => `@${handle}`).join(", ")}` : "";
+          return `<span class="reaction-chip" title="${esc(reaction.emoji + by)}">${esc(reaction.emoji)}${reaction.count > 1 ? `<span class="reaction-count">${reaction.count}</span>` : ""}</span>`;
+        }).join("");
         const menuOpen = state.reactionMenuMessageId === message.id;
         const quickReactions = ["👍", "❤️", "😂", "🎉", "👀"];
         const deliveryText = message.failed ? " failed" : message.pending ? " sending" : "";
         const canActOnMessage = !message.pending && !message.failed;
+        const canDmAuthor = canActOnMessage && user && user.id !== currentUser()?.id;
+        const actionTapGuard = `ontouchstart="event.stopPropagation()" oncontextmenu="event.stopPropagation()"`;
         return `<article class="message ${isReply ? "reply" : ""} ${message.pending ? "pending" : ""} ${message.failed ? "failed" : ""} ${menuOpen ? "show-reactions" : ""}" ontouchstart="${canActOnMessage ? `startLongPress(event, ${jsString(message.id)})` : ""}" ontouchmove="markTouchMoved()" ontouchend="cancelLongPress()" ontouchcancel="cancelLongPress()" oncontextmenu="${canActOnMessage ? `openReactionMenu(event, ${jsString(message.id)})` : "event.preventDefault()"}">
-          <span class="message-meta">${branch}<span class="msg-marker">  ${esc(stamp)}</span> <span class="message-author">${esc(author)}${sourceMarker}</span>${deliveryText}: </span><span class="message-text">${esc(message.text)}</span>${replies.length && !isReply ? `<span class="thread-count"> (${replies.length} repl${replies.length === 1 ? "y" : "ies"})</span>` : ""}${reactionText ? `<span class="thread-count"> ${esc(reactionText)}</span>` : ""}
-          ${canActOnMessage ? `<span class="message-actions"><button class="message-action" title="React" onclick="openReactionMenu(event, ${jsString(message.id)})">+</button>${!isReply ? `<button class="message-action" title="Reply" onclick="event.stopPropagation(); replyTo(${jsString(message.id)})">↵</button>` : ""}</span>` : ""}
-          ${menuOpen && canActOnMessage ? `<span class="reaction-menu">${quickReactions.map((emoji) => `<button onclick="reactTo(${jsString(message.id)}, ${jsString(emoji)})">${esc(emoji)}</button>`).join("")}<form class="reaction-custom" onsubmit="customReaction(event, ${jsString(message.id)})"><input name="emoji" maxlength="12" placeholder="+"/><button>ok</button></form><button title="Close" onclick="closeReactionMenu()">x</button></span>` : ""}
+          <span class="message-meta">${branch}<span class="msg-marker">  ${esc(stamp)}</span> <span class="message-author">${esc(author)}${sourceMarker}</span>${deliveryText}: </span><span class="message-text">${esc(message.text)}</span>${replies.length && !isReply ? `<span class="thread-count"> (${replies.length} repl${replies.length === 1 ? "y" : "ies"})</span>` : ""}${reactionHtml ? `<span class="message-reactions">${reactionHtml}</span>` : ""}
+          ${canActOnMessage ? `<span class="message-actions"><button type="button" class="message-action" title="React" ${actionTapGuard} onclick="openReactionMenu(event, ${jsString(message.id)})">+</button>${!isReply ? `<button type="button" class="message-action" title="Reply" ${actionTapGuard} onclick="event.stopPropagation(); replyTo(${jsString(message.id)})">↵</button>` : ""}${canDmAuthor ? `<button type="button" class="message-action" title="DM ${esc(author)}" ${actionTapGuard} onclick="event.stopPropagation(); openDmComposer(${jsString(userDmTarget(user))})">@</button>` : ""}</span>` : ""}
+          ${menuOpen && canActOnMessage ? `<span class="reaction-menu" ${actionTapGuard}>${quickReactions.map((emoji) => `<button type="button" ${actionTapGuard} onclick="event.stopPropagation(); reactTo(${jsString(message.id)}, ${jsString(emoji)})">${esc(emoji)}</button>`).join("")}<form class="reaction-custom" onsubmit="customReaction(event, ${jsString(message.id)})"><input name="emoji" maxlength="12" placeholder="+"/><button>ok</button></form><button type="button" title="Close" ${actionTapGuard} onclick="closeReactionMenu()">x</button></span>` : ""}
           ${!isReply && replies.length ? replies.map((reply) => renderMessage(reply, users, repliesByRoot, true)).join("") : ""}
         </article>`;
       }
@@ -2262,6 +2445,7 @@
         const snap = state.snapshot || { workspaces: [], channels: [], messages: [], users: [] };
         const workspace = snap.workspaces.find((item) => item.id === state.activeWorkspaceId) || snap.workspaces[0];
         const channel = snap.channels.find((item) => item.id === state.activeChannelId) || snap.channels[0];
+        const channelPrefix = channel?.kind === "dm" ? "@" : "#";
         const users = new Map((snap.users || []).map((user) => [user.id, user]));
         const activeUser = currentUser();
         const messages = (snap.messages || []).filter((message) => message.channelId === channel?.id);
@@ -2302,8 +2486,11 @@
                 ${state.workspaceMenuOpen ? `<div class="list">${snap.workspaces.map((item) => `<button class="item ${item.id === state.activeWorkspaceId ? "active" : ""}" data-workspace-id="${esc(item.id)}" type="button"><span class="cursor">${item.id === state.activeWorkspaceId ? ">" : " "}</span> ${esc(item.slug)}</button>`).join("") || `<div class="empty">No teams yet</div>`}</div>` : ""}
               </section>
               <section class="section">
-                <div class="section-head"><button class="section-toggle" data-menu-toggle="channels" type="button"><span class="menu-caret">${state.channelMenuOpen ? "v" : ">"}</span><span>Channels</span><span class="summary">#${esc(channel?.name || "general")}</span></button></div>
-                ${state.channelMenuOpen ? `<div class="list">${snap.channels.map((item) => `<button class="item ${item.id === state.activeChannelId ? "active" : ""}" data-channel-id="${esc(item.id)}" type="button"><span class="cursor">${item.id === state.activeChannelId ? ">" : " "}</span> #${esc(item.name)}</button>`).join("") || `<div class="empty">No channels yet</div>`}</div>` : ""}
+                <div class="section-head"><button class="section-toggle" data-menu-toggle="channels" type="button"><span class="menu-caret">${state.channelMenuOpen ? "v" : ">"}</span><span>Conversations</span><span class="summary">${channelPrefix}${esc(channel?.name || "general")}</span></button></div>
+                ${state.channelMenuOpen ? `<div class="list">${snap.channels.map((item) => {
+                  const prefix = item.kind === "dm" ? "@" : "#";
+                  return `<button class="item ${item.id === state.activeChannelId ? "active" : ""}" data-channel-id="${esc(item.id)}" type="button"><span class="cursor">${item.id === state.activeChannelId ? ">" : " "}</span> ${prefix}${esc(item.name)}</button>`;
+                }).join("") || `<div class="empty">No conversations yet</div>`}</div>` : ""}
               </section>
             </aside>
             <main class="main">
@@ -2324,13 +2511,13 @@
               <section class="messages">
                 ${rootMessages.length ? rootMessages.map((message) => renderMessage(message, users, repliesByRoot)).join("") : `<div class="empty">No messages in this channel yet.</div>`}
               </section>
-              <div class="statusbar"><span><strong>${channel?.kind === "dm" ? "@" : "#"}${esc(channel?.name || "general")}</strong> Up messages. Left channels. Right messages.</span><span>${messages.length} msg${messages.length === 1 ? "" : "s"} · ${state.realtimeStatus === "live" ? "live" : "sync 30s"}</span></div>
+              <div class="statusbar"><span><strong>${channelPrefix}${esc(channel?.name || "general")}</strong> Up messages. Left conversations. Right messages.</span><span>${messages.length} msg${messages.length === 1 ? "" : "s"} · ${state.realtimeStatus === "live" ? "live" : "sync 30s"}</span></div>
               <div class="composer-wrap">
                 ${replyTarget ? `<div class="reply-target"><span>replying to ${esc(userDisplayLabel(users.get(replyTarget.authorId)))}: ${esc(replyTarget.text.slice(0, 80))}</span><button onclick="state.replyToId=''; render()">cancel</button></div>` : ""}
                 <div class="mention-suggestions ${mentionUsersHtml ? "" : "hidden"}" data-mention-suggestions>${mentionUsersHtml}</div>
                 <form class="composer" onsubmit="sendMessage(event)">
                   <span class="prompt-symbol">${replyTarget ? "reply>" : ">"}</span>
-                  <textarea name="text" oninput="updateDraft(this.value)" onkeydown="handleComposerKeydown(event)" placeholder="${replyTarget ? "Type a reply" : `Type a message for #${esc(channel?.name || "general")}`}">${esc(state.draftText)}</textarea>
+                  <textarea name="text" oninput="updateDraft(this.value)" onkeydown="handleComposerKeydown(event)" placeholder="${replyTarget ? "Type a reply" : `Type a message for ${channelPrefix}${esc(channel?.name || "general")}`}">${esc(state.draftText)}</textarea>
                   <button>${replyTarget ? "reply" : "send"}</button>
                 </form>
               </div>
@@ -2359,7 +2546,11 @@
                 <form class="list" onsubmit="submitSearch(event)">
                   <input name="search" value="${esc(state.searchQuery)}" oninput="updateSearch(this.value)" placeholder="Search messages" />
                   <button>Search messages</button>
-                  ${searchQuery ? `<div class="kv">${searchResults.length ? searchResults.map((message) => `<button type="button" class="item" onclick="openSearchResult(${jsString(message.channelId)})">#${esc(snap.channels.find((item) => item.id === message.channelId)?.name || "channel")} ${esc(userDisplayLabel(users.get(message.authorId)) + ": " + message.text.slice(0, 80))}</button>`).join("") : `<div class="muted small">No results</div>`}</div>` : ""}
+                  ${searchQuery ? `<div class="kv">${searchResults.length ? searchResults.map((message) => {
+                    const resultChannel = snap.channels.find((item) => item.id === message.channelId);
+                    const prefix = resultChannel?.kind === "dm" ? "@" : "#";
+                    return `<button type="button" class="item" onclick="openSearchResult(${jsString(message.channelId)})">${prefix}${esc(resultChannel?.name || "channel")} ${esc(userDisplayLabel(users.get(message.authorId)) + ": " + message.text.slice(0, 80))}</button>`;
+                  }).join("") : `<div class="muted small">No results</div>`}</div>` : ""}
                 </form>
               </section>
               <section class="section">
@@ -2371,7 +2562,8 @@
             </aside>
           </div>
           ${renderSettingsMenuModal({ workspace, snap, role, isAdmin, askThane, billingPlan, isTeamPlan, privateChannels, inviteResult, currentUser: activeUser })}
-          ${renderCliInstallModal()}`;
+          ${renderCliInstallModal()}
+          ${renderDmComposerModal()}`;
         requestAnimationFrame(() => {
           const scroller = document.querySelector(".messages");
           if (scroller) scroller.scrollTop = scroller.scrollHeight;
@@ -2401,6 +2593,10 @@
       window.toggleMenu = toggleMenu;
       window.chooseChannel = chooseChannel;
       window.replyTo = replyTo;
+      window.openDmComposer = openDmComposer;
+      window.closeDmComposer = closeDmComposer;
+      window.updateDmDraft = updateDmDraft;
+      window.sendDm = sendDm;
       window.reactTo = reactTo;
       window.customReaction = customReaction;
       window.openReactionMenu = openReactionMenu;
@@ -2455,7 +2651,8 @@
 
       window.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
-          if (state.cliInstallOpen) closeCliInstall();
+          if (state.dmComposeTarget) closeDmComposer();
+          else if (state.cliInstallOpen) closeCliInstall();
           else if (state.settingsMenuOpen) closeSettingsMenu();
         }
       });
