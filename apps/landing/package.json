@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "build": "wrangler deploy --dry-run",
+    "deploy": "wrangler deploy --env production",
+    "build": "wrangler deploy --dry-run --env production",
     "typecheck": "echo 'No TypeScript source in landing app yet'",
     "lint": "echo 'No lint task yet for @ask-thane/landing'",
     "test": "pnpm -w exec vitest run apps/landing/test"

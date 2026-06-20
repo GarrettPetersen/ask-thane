@@ -24,3 +24,46 @@ custom_domain = true
 binding = "DB"
 database_name = "ask-thane"
 database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"
+
+[vars]
+BUILD_ENV = "local"
+BUILD_GIT_SHA = "dev"
+BUILD_DEPLOYED_AT = "local"
+
+[env.staging]
+name = "ask-thane-staging"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "ask-thane-staging"
+database_id = "02db76d8-728f-40a4-84f8-f17779f8e8de"
+
+[env.staging.vars]
+BUILD_ENV = "staging"
+BUILD_GIT_SHA = "unknown"
+BUILD_DEPLOYED_AT = "unknown"
+
+[env.production]
+name = "ask-thane"
+
+[[env.production.routes]]
+pattern = "askthane.com"
+custom_domain = true
+
+[[env.production.routes]]
+pattern = "www.askthane.com"
+custom_domain = true
+
+[[env.production.routes]]
+pattern = "chat.askthane.com"
+custom_domain = true
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "ask-thane"
+database_id = "186fcae1-759c-45df-a63a-2d68e53cac2d"
+
+[env.production.vars]
+BUILD_ENV = "production"
+BUILD_GIT_SHA = "unknown"
+BUILD_DEPLOYED_AT = "unknown"

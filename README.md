@@ -432,8 +432,8 @@ The CLI always scopes channels, messages, threads, unread state, mentions, and s
 ## Deploy Flow
 - Staging and production deploy workflows run a non-destructive migration validator, then apply D1 migrations before bot/api deploys (`wrangler d1 migrations apply ...`), so schema rollout is coupled to release.
 - Staging deploys are test-gated: the workflow runs `pnpm test`, and deploy jobs do not run if tests fail.
-- `master` pushes auto-deploy changed worker apps to staging via `.github/workflows/deploy-workers-staging.yml` (path-filtered by app).
-- Production deploys are manual (`workflow_dispatch`) via `.github/workflows/deploy-workers-production.yml`, including a selectable `git_ref`.
+- `master` pushes auto-deploy changed worker apps to staging via `.github/workflows/deploy-workers-staging.yml` (path-filtered by app). Landing staging uses the `ask-thane-staging` worker instead of production custom domains.
+- Production deploys run via `.github/workflows/deploy-workers-production.yml`: manually with `workflow_dispatch`, or automatically after a successful staging deploy for the same commit. A staging bot deploy promotes bot; a staging API or landing deploy promotes both API and landing.
 - Production deploys are also gated on:
   - passing `pnpm test` in the production workflow, and
   - a successful staging deploy workflow run for the exact commit SHA being promoted.

@@ -1,6 +1,9 @@
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
+  BUILD_ENV?: string;
+  BUILD_GIT_SHA?: string;
+  BUILD_DEPLOYED_AT?: string;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -76,7 +79,8 @@ async function fetchNewAndCumulativeSeries(input: {
     | "slack_workspace_installs"
     | "thane_cli_workspaces"
     | "thane_cli_accounts"
-    | "thane_cli_messages";
+    | "thane_cli_messages"
+    | "thane_cli_chat_messages";
   dateColumn: "created_at" | "installed_at";
   sinceIso: string;
   dates: string[];
@@ -113,7 +117,10 @@ async function fetchNewAndCumulativeSeries(input: {
   return { dailyNew, cumulative };
 }
 
-async function fetchOptionalCount(env: Env, table: "thane_cli_workspaces" | "thane_cli_accounts" | "thane_cli_messages"): Promise<number> {
+async function fetchOptionalCount(
+  env: Env,
+  table: "thane_cli_workspaces" | "thane_cli_accounts" | "thane_cli_messages" | "thane_cli_chat_messages"
+): Promise<number> {
   try {
     const row = await env.DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first<{ count?: number }>();
     return Number(row?.count ?? 0);
@@ -122,9 +129,84 @@ async function fetchOptionalCount(env: Env, table: "thane_cli_workspaces" | "tha
   }
 }
 
+function humanThaneChatEmailClause(column = "email"): string {
+  return `lower(${column}) != 'thane@askthane.com' AND lower(${column}) NOT LIKE 'webhook+%@apps.thane.chat'`;
+}
+
+function thaneChatAccountFirstSeenSql(): string {
+  const profileEmailClause = humanThaneChatEmailClause("email");
+  const memberEmailClause = humanThaneChatEmailClause("email");
+  return `SELECT email, MIN(created_at) AS first_seen_at
+          FROM (
+            SELECT lower(email) AS email, created_at
+            FROM thane_cli_account_profiles
+            WHERE ${profileEmailClause}
+            UNION ALL
+            SELECT lower(email) AS email, joined_at AS created_at
+            FROM thane_cli_workspace_members
+            WHERE left_at IS NULL AND ${memberEmailClause}
+          )
+          GROUP BY email`;
+}
+
+async function fetchThaneChatAccountCount(env: Env): Promise<number> {
+  try {
+    const row = await env.DB
+      .prepare(`SELECT COUNT(*) AS count FROM (${thaneChatAccountFirstSeenSql()})`)
+      .first<{ count?: number }>();
+    return Number(row?.count ?? 0);
+  } catch (_error) {
+    return 0;
+  }
+}
+
+async function fetchThaneChatAccountSeries(input: {
+  env: Env;
+  sinceIso: string;
+  dates: string[];
+}): Promise<{ dailyNew: number[]; cumulative: number[] }> {
+  try {
+    const firstSeenSql = thaneChatAccountFirstSeenSql();
+    const baselineRow = await input.env.DB
+      .prepare(`SELECT COUNT(*) AS count_before FROM (${firstSeenSql}) WHERE first_seen_at < ?`)
+      .bind(input.sinceIso)
+      .first<{ count_before?: number }>();
+    const groupedRows = await input.env.DB
+      .prepare(
+        `SELECT substr(first_seen_at, 1, 10) AS day, COUNT(*) AS new_count
+         FROM (${firstSeenSql})
+         WHERE first_seen_at >= ?
+         GROUP BY substr(first_seen_at, 1, 10)
+         ORDER BY day ASC`
+      )
+      .bind(input.sinceIso)
+      .all<{ day?: string; new_count?: number }>();
+
+    const byDate = new Map<string, number>();
+    for (const row of groupedRows.results ?? []) {
+      if (row.day) {
+        byDate.set(row.day, Number(row.new_count ?? 0));
+      }
+    }
+    const dailyNew = input.dates.map((date) => byDate.get(date) ?? 0);
+    const cumulative: number[] = [];
+    let running = Number(baselineRow?.count_before ?? 0);
+    for (const value of dailyNew) {
+      running += value;
+      cumulative.push(running);
+    }
+    return { dailyNew, cumulative };
+  } catch (_error) {
+    return {
+      dailyNew: input.dates.map(() => 0),
+      cumulative: input.dates.map(() => 0)
+    };
+  }
+}
+
 async function fetchOptionalSeries(input: {
   env: Env;
-  table: "thane_cli_workspaces" | "thane_cli_accounts" | "thane_cli_messages";
+  table: "thane_cli_workspaces" | "thane_cli_accounts" | "thane_cli_messages" | "thane_cli_chat_messages";
   sinceIso: string;
   dates: string[];
 }): Promise<{ dailyNew: number[]; cumulative: number[] }> {
@@ -177,8 +259,8 @@ async function handlePublicMetrics(request: Request, env: Env): Promise<Response
       )
       .first<Record<string, unknown>>(),
     fetchOptionalCount(env, "thane_cli_workspaces"),
-    fetchOptionalCount(env, "thane_cli_accounts"),
-    fetchOptionalCount(env, "thane_cli_messages"),
+    fetchThaneChatAccountCount(env),
+    fetchOptionalCount(env, "thane_cli_chat_messages"),
     fetchNewAndCumulativeSeries({
       env,
       table: "organizations",
@@ -220,15 +302,14 @@ async function handlePublicMetrics(request: Request, env: Env): Promise<Response
       sinceIso,
       dates
     }),
-    fetchOptionalSeries({
+    fetchThaneChatAccountSeries({
       env,
-      table: "thane_cli_accounts",
       sinceIso,
       dates
     }),
     fetchOptionalSeries({
       env,
-      table: "thane_cli_messages",
+      table: "thane_cli_chat_messages",
       sinceIso,
       dates
     })
@@ -326,6 +407,16 @@ export default {
 
     if (url.pathname === "/health") {
       return json({ ok: true, service: "ask-thane-landing" }, 200);
+    }
+
+    if (url.pathname === "/build-info") {
+      return json({
+        ok: true,
+        service: "ask-thane-landing",
+        environment: env.BUILD_ENV ?? "unknown",
+        gitSha: env.BUILD_GIT_SHA ?? "unknown",
+        deployedAt: env.BUILD_DEPLOYED_AT ?? "unknown"
+      });
     }
 
     if (url.pathname === "/api/public-metrics" && request.method === "GET") {

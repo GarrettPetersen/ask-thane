@@ -23,10 +23,10 @@ function makeMetricsDbStub() {
       if (sql.includes("COUNT(*) AS count FROM thane_cli_workspaces")) {
         return { count: 5 };
       }
-      if (sql.includes("COUNT(*) AS count FROM thane_cli_accounts")) {
+      if (sql.includes("COUNT(*) AS count FROM (SELECT email, MIN(created_at) AS first_seen_at")) {
         return { count: 11 };
       }
-      if (sql.includes("COUNT(*) AS count FROM thane_cli_messages")) {
+      if (sql.includes("COUNT(*) AS count FROM thane_cli_chat_messages")) {
         return { count: 42 };
       }
       return { count_before: 0 };
@@ -53,10 +53,10 @@ function makeMetricsDbStub() {
           if (sql.includes("COUNT(*) AS count_before FROM thane_cli_workspaces")) {
             return { count_before: 3 };
           }
-          if (sql.includes("COUNT(*) AS count_before FROM thane_cli_accounts")) {
+          if (sql.includes("COUNT(*) AS count_before FROM (SELECT email, MIN(created_at) AS first_seen_at")) {
             return { count_before: 8 };
           }
-          if (sql.includes("COUNT(*) AS count_before FROM thane_cli_messages")) {
+          if (sql.includes("COUNT(*) AS count_before FROM thane_cli_chat_messages")) {
             return { count_before: 30 };
           }
           return { count_before: 0, args };
@@ -80,10 +80,10 @@ function makeMetricsDbStub() {
           if (sql.includes("FROM thane_cli_workspaces")) {
             return { results: [{ day: "2026-05-14", new_count: 2 }] };
           }
-          if (sql.includes("FROM thane_cli_accounts")) {
+          if (sql.includes("SELECT substr(first_seen_at, 1, 10) AS day")) {
             return { results: [{ day: "2026-05-14", new_count: 3 }] };
           }
-          if (sql.includes("FROM thane_cli_messages")) {
+          if (sql.includes("FROM thane_cli_chat_messages")) {
             return { results: [{ day: "2026-05-14", new_count: 12 }] };
           }
           return { results: [] };
@@ -109,6 +109,25 @@ describe("@ask-thane/landing", () => {
     await expect(res.json()).resolves.toEqual({
       ok: true,
       service: "ask-thane-landing"
+    });
+  });
+
+  it("serves build metadata", async () => {
+    const env = {
+      DB: makeDbStub(),
+      ASSETS: { fetch: vi.fn(async () => new Response("asset")) },
+      BUILD_ENV: "test",
+      BUILD_GIT_SHA: "sha_123",
+      BUILD_DEPLOYED_AT: "2026-06-20T00:00:00Z"
+    };
+    const res = await worker.fetch(new Request("https://site.local/build-info"), env as never);
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      service: "ask-thane-landing",
+      environment: "test",
+      gitSha: "sha_123",
+      deployedAt: "2026-06-20T00:00:00Z"
     });
   });
 
