@@ -204,8 +204,8 @@ Messages sent through scriptable terminal commands render with a bot marker in c
 Create and switch workspaces:
 ```bash
 pnpm thane workspaces
-pnpm thane workspace create acme --name "Acme Inc"
-pnpm thane workspace use acme
+pnpm thane workspace create "Acme Inc"
+pnpm thane workspace use acme-inc
 pnpm thane workspace current --json
 ```
 

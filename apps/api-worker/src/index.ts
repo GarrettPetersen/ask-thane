@@ -304,6 +304,22 @@ function normalizeWorkspaceSlug(value: unknown): string | null {
   return slug ? slug.slice(0, 80) : null;
 }
 
+function normalizeWorkspaceName(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const name = value.trim().replace(/\s+/g, " ");
+  return name ? name.slice(0, 120) : null;
+}
+
+function workspaceSlugFromName(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const slug = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug ? slug.slice(0, 80) : null;
+}
+
 function normalizeChannelName(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -2334,13 +2350,11 @@ async function handleThaneCliWorkspaceEnsure(request: Request, env: Env): Promis
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
   const payload = await parseJsonObject<ThaneCliWorkspaceEnsurePayload>(request);
-  const workspaceSlug = normalizeWorkspaceSlug(payload?.workspaceSlug);
-  const workspaceName =
-    typeof payload?.workspaceName === "string" && payload.workspaceName.trim()
-      ? payload.workspaceName.trim().slice(0, 120)
-      : workspaceSlug;
+  const requestedWorkspaceName = normalizeWorkspaceName(payload?.workspaceName);
+  const workspaceSlug = normalizeWorkspaceSlug(payload?.workspaceSlug) ?? workspaceSlugFromName(requestedWorkspaceName);
+  const workspaceName = requestedWorkspaceName ?? workspaceSlug;
   if (!workspaceSlug || !workspaceName) {
-    return Response.json({ ok: false, error: "workspace_slug_required" }, { status: 400 });
+    return Response.json({ ok: false, error: "workspace_name_required" }, { status: 400 });
   }
   const rateLimited = await enforceAuthenticatedActionRateLimits(request, env, {
     action: "workspace_ensure",

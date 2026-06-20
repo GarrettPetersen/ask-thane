@@ -39,6 +39,21 @@ function hostedWorkspaceId(): string {
   return `wsp_${Date.now().toString(36)}${random}`;
 }
 
+function parseWorkspaceCreateInput(value: string): { name?: string; slug?: string } {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  const slugIndex = parts.indexOf("--slug");
+  let slug: string | undefined;
+  if (slugIndex >= 0) {
+    slug = parts[slugIndex + 1];
+    parts.splice(slugIndex, slug ? 2 : 1);
+  }
+  const name = parts.join(" ").trim() || slug;
+  return {
+    ...(name ? { name } : {}),
+    ...(slug ? { slug } : {})
+  };
+}
+
 interface ChatConversation {
   id: string;
   label: string;
@@ -1341,18 +1356,16 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       return;
     }
     if (trimmed.startsWith("/workspace-create ")) {
-      const parts = trimmed.slice("/workspace-create ".length).trim().split(/\s+/).filter(Boolean);
-      const slug = parts.shift();
-      const name = parts.join(" ");
-      if (!slug) {
-        status = "Usage: /workspace-create <slug> [name]";
+      const workspaceInput = parseWorkspaceCreateInput(trimmed.slice("/workspace-create ".length));
+      if (!workspaceInput.name) {
+        status = "Usage: /workspace-create <name> [--slug <slug>]";
         return;
       }
       requireHostedAuthToken(store);
       await createHostedWorkspace(store, {
         workspaceId: hostedWorkspaceId(),
-        slug,
-        ...(name ? { name } : {})
+        name: workspaceInput.name,
+        ...(workspaceInput.slug ? { slug: workspaceInput.slug } : {})
       });
       store = await ThaneStore.open();
       const workspace = store.activeWorkspace;

@@ -855,6 +855,94 @@ describe("@ask-thane/api-worker", () => {
     });
   });
 
+  it("creates Thane CLI workspaces from a name-only payload and derives a kebab-case slug", async () => {
+    const joinedAt = "2026-06-18T00:00:00.000Z";
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_rate_limits")) {
+        return null;
+      }
+      if (sql.includes("SELECT display_name FROM thane_cli_account_profiles")) {
+        return null;
+      }
+      if (sql.includes("SELECT display_name") && sql.includes("FROM thane_cli_workspace_members")) {
+        return null;
+      }
+      if (sql.includes("SELECT id, workspace_slug, workspace_name, ascii_art")) {
+        return {
+          id: "tcw_1",
+          workspace_slug: "acme-team",
+          workspace_name: "Acme Team",
+          ascii_art: null
+        };
+      }
+      if (sql.includes("SELECT id, joined_at FROM thane_cli_workspace_members")) {
+        return null;
+      }
+      if (sql.includes("SELECT id, account_id, email, display_name, handle, role, joined_at")) {
+        return {
+          id: "tcm_1",
+          account_id: "acct_1",
+          email: "owner@example.com",
+          display_name: "Owner",
+          handle: "owner",
+          role: "owner",
+          joined_at: joinedAt
+        };
+      }
+      if (sql.includes("SELECT id FROM thane_cli_chat_messages")) {
+        return null;
+      }
+      if (sql.includes("FROM thane_cli_channels") && sql.includes("WHERE workspace_id = ? AND name = ?")) {
+        return {
+          id: "tcc_general",
+          workspace_id: "tcw_1",
+          name: "general",
+          kind: "channel",
+          visibility: "public",
+          topic: "Community-wide conversation",
+          created_at: "2026-06-17T00:00:00.000Z"
+        };
+      }
+      return null;
+    });
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        return { run, first: first.bind({ sql }) };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/workspaces", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
+        body: JSON.stringify({ workspaceName: "Acme Team" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      workspace: {
+        id: "tcw_1",
+        slug: "acme-team",
+        name: "Acme Team"
+      }
+    });
+    const workspaceInsert = calls.find((call) => call.sql.includes("INSERT INTO thane_cli_workspaces"));
+    expect(workspaceInsert?.args[1]).toBe("acme-team");
+    expect(workspaceInsert?.args[2]).toBe("Acme Team");
+  });
+
   it("creates Thane CLI workspace invite links", async () => {
     const calls: Array<{ sql: string; args: unknown[] }> = [];
     const sendEmail = vi.fn(async () => ({ messageId: "email_1" }));

@@ -104,9 +104,9 @@ export const cliCommands: CliCommand[] = [
   },
   {
     category: "Workspaces",
-    command: "thane workspace create <slug> [--name \"...\"]",
-    description: "Create a workspace.",
-    examples: ["thane workspace create acme --name \"Acme\""]
+    command: "thane workspace create <name> [--slug \"...\"]",
+    description: "Create a workspace. The slug is generated from the name unless --slug is set.",
+    examples: ["thane workspace create \"Acme Team\"", "thane workspace create \"Acme Team\" --slug acme-team"]
   },
   {
     category: "Workspaces",

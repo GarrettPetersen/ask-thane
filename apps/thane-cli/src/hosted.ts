@@ -232,12 +232,12 @@ export function watchHostedWorkspaceEvents(
 
 export async function createHostedWorkspace(
   store: ThaneStore,
-  input: { workspaceId: string; slug: string; name?: string; asciiArt?: string }
+  input: { workspaceId: string; name: string; slug?: string; asciiArt?: string }
 ): Promise<void> {
   await postHosted(store, "/v1/thane-cli/workspaces", {
     workspaceId: input.workspaceId,
-    workspaceSlug: input.slug,
-    workspaceName: input.name ?? input.slug,
+    workspaceName: input.name,
+    ...(input.slug ? { workspaceSlug: input.slug } : {}),
     ...(input.asciiArt ? { asciiArt: input.asciiArt } : {})
   });
   await syncHostedStore(store, { workspaceId: input.workspaceId });

@@ -463,7 +463,7 @@ Members, users, and DMs:
 Workspaces:
   thane workspaces [--json]
   thane workspace current [--json]
-  thane workspace create <slug> [--name "..."]
+  thane workspace create <name> [--slug "..."]
   thane workspace use <slug>
   thane workspace leave
   thane workspace art show [--json]
@@ -1092,16 +1092,18 @@ async function main(): Promise<void> {
   }
 
   if (command === "workspace" && second === "create") {
-    const slug = args.positionals[2];
-    if (!slug) {
-      throw new Error("Usage: thane workspace create <slug>");
+    const nameInput = args.positionals.slice(2).join(" ").trim() || undefined;
+    const flagName = flagString(args, "name");
+    const explicitSlug = flagString(args, "slug") ?? (flagName && nameInput ? nameInput : undefined);
+    const workspaceName = flagName ?? nameInput ?? explicitSlug;
+    if (!workspaceName) {
+      throw new Error("Usage: thane workspace create <name> [--slug <slug>]");
     }
     requireHostedAuthToken(store);
-    const workspaceName = flagString(args, "name");
     await createHostedWorkspace(store, {
       workspaceId: hostedWorkspaceId(),
-      slug,
-      ...(workspaceName ? { name: workspaceName } : {})
+      name: workspaceName,
+      ...(explicitSlug ? { slug: explicitSlug } : {})
     });
     store = await ThaneStore.open();
     const workspace = store.activeWorkspace;
