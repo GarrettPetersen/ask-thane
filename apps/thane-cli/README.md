@@ -8,6 +8,8 @@ thane init
 thane chat general
 ```
 
+`thane init` signs existing accounts in with email verification and MFA when enabled. New accounts get profile setup prompts after verification.
+
 Check for updates:
 
 ```bash

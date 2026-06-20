@@ -139,6 +139,7 @@ interface TokenPayload {
   email: string;
   exp: number;
   purpose: "auth" | "mfa_challenge";
+  isNewAccount?: boolean;
 }
 
 const THANE_CLI_FREE_LIMITS = {
@@ -976,6 +977,42 @@ async function setAccountProfileDisplayName(env: Env, email: string, displayName
     )
     .bind(email, displayName, now, now)
     .run();
+}
+
+async function thaneCliAccountState(
+  env: Env,
+  email: string,
+  options: { mfaFactor?: { id: string; secret_ciphertext: string } | null } = {}
+): Promise<{
+  isNewAccount: boolean;
+  hasProfile: boolean;
+  workspaceCount: number;
+  verifiedLoginCount: number;
+  mfaEnabled: boolean;
+}> {
+  const profileRow = await env.DB
+    .prepare("SELECT email FROM thane_cli_account_profiles WHERE email = ? LIMIT 1")
+    .bind(email)
+    .first<{ email?: string }>();
+  const workspaceRow = await env.DB
+    .prepare("SELECT COUNT(*) AS count FROM thane_cli_workspace_members WHERE email = ?")
+    .bind(email)
+    .first<{ count?: number }>();
+  const verifiedLoginRow = await env.DB
+    .prepare("SELECT COUNT(*) AS count FROM thane_cli_auth_codes WHERE email = ? AND consumed_at IS NOT NULL")
+    .bind(email)
+    .first<{ count?: number }>();
+  const hasProfile = Boolean(profileRow?.email);
+  const workspaceCount = Number(workspaceRow?.count ?? 0);
+  const verifiedLoginCount = Number(verifiedLoginRow?.count ?? 0);
+  const mfaEnabled = "mfaFactor" in options ? Boolean(options.mfaFactor) : Boolean(await activeMfaFactor(env, email));
+  return {
+    isNewAccount: !hasProfile && workspaceCount === 0 && verifiedLoginCount === 0 && !mfaEnabled,
+    hasProfile,
+    workspaceCount,
+    verifiedLoginCount,
+    mfaEnabled
+  };
 }
 
 async function encryptionKey(env: Env): Promise<CryptoKey> {
@@ -2081,6 +2118,8 @@ async function handleThaneCliAuthVerify(request: Request, env: Env): Promise<Res
     return Response.json({ ok: false, error: "code_expired" }, { status: 401 });
   }
 
+  const mfaFactor = await activeMfaFactor(env, email);
+  const accountState = await thaneCliAccountState(env, email, { mfaFactor });
   const verifiedDisplayName =
     typeof authRow.display_name === "string" && authRow.display_name.trim()
       ? authRow.display_name.trim()
@@ -2093,15 +2132,16 @@ async function handleThaneCliAuthVerify(request: Request, env: Env): Promise<Res
     .bind(nowIso(), authRow.id)
     .run();
 
-  const mfaFactor = await activeMfaFactor(env, email);
   if (mfaFactor) {
     return Response.json({
       ok: true,
       mfaRequired: true,
       email,
+      accountState,
       mfaChallengeToken: await signToken(env, {
         email,
         purpose: "mfa_challenge",
+        isNewAccount: accountState.isNewAccount,
         exp: Math.floor(Date.now() / 1000) + 10 * 60
       })
     });
@@ -2109,6 +2149,7 @@ async function handleThaneCliAuthVerify(request: Request, env: Env): Promise<Res
 
   return Response.json({
     ok: true,
+    accountState,
     account: await buildAccount(env, { email, displayName: verifiedDisplayName })
   });
 }
@@ -2133,8 +2174,10 @@ async function handleThaneCliAuthMfaVerify(request: Request, env: Env): Promise<
   if (!(await verifyTotp(secret, code))) {
     return Response.json({ ok: false, error: "invalid_mfa_code" }, { status: 401 });
   }
+  const accountState = await thaneCliAccountState(env, email, { mfaFactor: factor });
   return Response.json({
     ok: true,
+    accountState: { ...accountState, isNewAccount: Boolean(challenge?.isNewAccount) },
     account: await buildAccount(env, { email })
   });
 }

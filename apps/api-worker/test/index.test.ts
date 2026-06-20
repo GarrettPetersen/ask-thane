@@ -301,6 +301,9 @@ describe("@ask-thane/api-worker", () => {
     }));
     const noMfa = vi.fn(async () => null);
     const noRateLimit = vi.fn(async () => null);
+    const noProfile = vi.fn(async () => null);
+    const noWorkspaceMemberships = vi.fn(async () => ({ count: 0 }));
+    const noVerifiedLogins = vi.fn(async () => ({ count: 0 }));
     const run = vi.fn(async () => ({ meta: { changes: 1 } }));
     const prepare = vi.fn((sql: string) => ({
       bind: vi.fn(() => {
@@ -312,6 +315,21 @@ describe("@ask-thane/api-worker", () => {
         }
         if (sql.includes("FROM thane_cli_mfa_factors")) {
           return { first: noMfa };
+        }
+        if (sql.includes("SELECT email FROM thane_cli_account_profiles")) {
+          return { first: noProfile };
+        }
+        if (sql.includes("COUNT(*) AS count FROM thane_cli_workspace_members WHERE email = ?")) {
+          return { first: noWorkspaceMemberships };
+        }
+        if (sql.includes("COUNT(*) AS count FROM thane_cli_auth_codes")) {
+          return { first: noVerifiedLogins };
+        }
+        if (sql.includes("SELECT display_name FROM thane_cli_account_profiles")) {
+          return { first: noProfile };
+        }
+        if (sql.includes("SELECT display_name") && sql.includes("FROM thane_cli_workspace_members")) {
+          return { first: noProfile };
         }
         return { run };
       })
@@ -337,9 +355,84 @@ describe("@ask-thane/api-worker", () => {
       account: {
         email: "garrett@example.com",
         displayName: "Garrett"
+      },
+      accountState: {
+        isNewAccount: true
       }
     });
     expect(prepare).toHaveBeenCalledWith(expect.stringContaining("UPDATE thane_cli_auth_codes"));
+  });
+
+  it("marks Thane CLI auth verification as existing when the email has prior workspace membership", async () => {
+    const authCode = vi.fn(async () => ({
+      id: "auth_1",
+      display_name: null,
+      expires_at: new Date(Date.now() + 60_000).toISOString()
+    }));
+    const noMfa = vi.fn(async () => null);
+    const noRateLimit = vi.fn(async () => null);
+    const noProfile = vi.fn(async () => null);
+    const workspaceMemberships = vi.fn(async () => ({ count: 1 }));
+    const verifiedLogins = vi.fn(async () => ({ count: 2 }));
+    const workspaceDisplayName = vi.fn(async () => ({ display_name: "Garrett Petersen" }));
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn(() => {
+        if (sql.includes("FROM thane_cli_rate_limits")) {
+          return { first: noRateLimit, run };
+        }
+        if (sql.includes("SELECT id, display_name")) {
+          return { first: authCode };
+        }
+        if (sql.includes("FROM thane_cli_mfa_factors")) {
+          return { first: noMfa };
+        }
+        if (sql.includes("SELECT email FROM thane_cli_account_profiles")) {
+          return { first: noProfile };
+        }
+        if (sql.includes("COUNT(*) AS count FROM thane_cli_workspace_members WHERE email = ?")) {
+          return { first: workspaceMemberships };
+        }
+        if (sql.includes("COUNT(*) AS count FROM thane_cli_auth_codes")) {
+          return { first: verifiedLogins };
+        }
+        if (sql.includes("SELECT display_name FROM thane_cli_account_profiles")) {
+          return { first: noProfile };
+        }
+        if (sql.includes("SELECT display_name") && sql.includes("FROM thane_cli_workspace_members")) {
+          return { first: workspaceDisplayName };
+        }
+        return { run };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret",
+      EMAIL: { send: vi.fn(async () => ({ messageId: "email_1" })) }
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/auth/verify", {
+        method: "POST",
+        body: JSON.stringify({ email: "garrett@example.com", code: "123456" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      account: {
+        email: "garrett@example.com",
+        displayName: "Garrett Petersen"
+      },
+      accountState: {
+        isNewAccount: false,
+        workspaceCount: 1,
+        verifiedLoginCount: 2
+      }
+    });
   });
 
   it("starts Thane CLI MFA setup with QR code renderings", async () => {

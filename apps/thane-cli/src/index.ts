@@ -41,6 +41,14 @@ interface ParsedArgs {
   flags: Map<string, string | boolean>;
 }
 
+interface HostedAccountState {
+  isNewAccount?: boolean;
+  hasProfile?: boolean;
+  workspaceCount?: number;
+  verifiedLoginCount?: number;
+  mfaEnabled?: boolean;
+}
+
 function parseArgs(argv: string[]): ParsedArgs {
   const positionals: string[] = [];
   const flags = new Map<string, string | boolean>();
@@ -241,16 +249,31 @@ async function setHostedWorkspaceHandle(store: ThaneStore, handle: string): Prom
   return workspaceHandle;
 }
 
+async function setHostedAccountDisplayName(store: ThaneStore, displayName: string): Promise<string> {
+  const cleaned = displayName.trim();
+  if (!cleaned) {
+    throw new Error("Display name must contain at least one character.");
+  }
+  const token = requireHostedAuthToken(store);
+  const response = await postThaneApiWithAuth<{ account: ThaneAccount; displayName: string; accountDisplayName?: string }>("/v1/thane-cli/profile", token, {
+    displayName: cleaned,
+    scope: "account"
+  });
+  const accountDisplayName = response.accountDisplayName ?? response.displayName;
+  await store.setAccountDisplayName(accountDisplayName);
+  await syncHostedStore(store);
+  return accountDisplayName;
+}
+
 async function verifyHostedAuth(email: string, code: string): Promise<
-  | { account: ThaneAccount; mfaRequired?: false }
-  | { email: string; mfaRequired: true; mfaChallengeToken: string }
+  | { account: ThaneAccount; accountState?: HostedAccountState; mfaRequired?: false }
+  | { email: string; accountState?: HostedAccountState; mfaRequired: true; mfaChallengeToken: string }
 > {
   return postThaneApi("/v1/thane-cli/auth/verify", { email, code });
 }
 
-async function verifyHostedMfa(challengeToken: string, code: string): Promise<ThaneAccount> {
-  const response = await postThaneApi<{ account: ThaneAccount }>("/v1/thane-cli/auth/mfa-verify", { challengeToken, code });
-  return response.account;
+async function verifyHostedMfa(challengeToken: string, code: string): Promise<{ account: ThaneAccount; accountState?: HostedAccountState }> {
+  return postThaneApi<{ account: ThaneAccount; accountState?: HostedAccountState }>("/v1/thane-cli/auth/mfa-verify", { challengeToken, code });
 }
 
 async function finishHostedAuth(input: {
@@ -258,18 +281,24 @@ async function finishHostedAuth(input: {
   email: string;
   code: string;
   prompts?: { ask(label: string): Promise<string>; close(): void } | undefined;
-}): Promise<ThaneAccount> {
+}): Promise<{ account: ThaneAccount; accountState?: HostedAccountState }> {
   const verified = await verifyHostedAuth(input.email, input.code);
   let account: ThaneAccount;
+  let accountState = verified.accountState;
   if ("mfaRequired" in verified && verified.mfaRequired) {
     const mfaCode = await input.prompts?.ask("Authenticator code: ");
-    account = await verifyHostedMfa(verified.mfaChallengeToken, mfaCode ?? "");
+    const mfaVerified = await verifyHostedMfa(verified.mfaChallengeToken, mfaCode ?? "");
+    account = mfaVerified.account;
+    accountState = mfaVerified.accountState ?? accountState;
   } else {
     account = verified.account;
   }
   const stored = await input.store.acceptVerifiedAccount(account);
   await syncHostedStore(input.store);
-  return stored;
+  return {
+    account: stored,
+    ...(accountState ? { accountState } : {})
+  };
 }
 
 function renderHostedAuthStart(response: { email: string; delivery: "email" | "dev_code"; verificationCode?: string }): string {
@@ -792,20 +821,34 @@ async function main(): Promise<void> {
       if (!email) {
         throw new Error("Usage: thane init --email <email> [--name \"...\"] [--handle <handle>] --json");
       }
-      const displayName = flagString(args, "name") ?? (prompts ? await prompts.ask("Name (optional): ") : undefined);
-      const handle = flagString(args, "handle") ?? (prompts ? await prompts.ask("Handle (optional, shown as @handle): ") : undefined);
+      const displayName = flagString(args, "name");
+      const handle = flagString(args, "handle");
       const started = await startHostedAuth(email, displayName || undefined);
       if (wantsJson(args)) {
         printJson(started);
         return;
       }
-      process.stdout.write(`${renderHostedAuthStart(started)}Enter the code to finish setup.\n`);
+      process.stdout.write(`${renderHostedAuthStart(started)}Enter the code to sign in.\n`);
       const enteredCode = await prompts?.ask("Code: ");
       const verified = await finishHostedAuth({ store, email: started.email, code: enteredCode ?? "", prompts });
+      if (verified.accountState?.isNewAccount) {
+        if (!displayName) {
+          const promptedDisplayName = await prompts?.ask("Name (optional): ");
+          if (promptedDisplayName?.trim()) {
+            await setHostedAccountDisplayName(store, promptedDisplayName);
+          }
+        }
+        if (!handle && store.hasActiveWorkspace()) {
+          const promptedHandle = await prompts?.ask("Handle (optional, shown as @handle): ");
+          if (promptedHandle?.trim()) {
+            await setHostedWorkspaceHandle(store, promptedHandle);
+          }
+        }
+      }
       if (handle && store.hasActiveWorkspace()) {
         await setHostedWorkspaceHandle(store, handle);
       }
-      process.stdout.write(`signed in as ${verified.email}\nopen chat: thane chat general\n`);
+      process.stdout.write(`signed in as ${verified.account.email}\nopen chat: thane chat general\n`);
     } finally {
       prompts?.close();
     }
@@ -840,8 +883,8 @@ async function main(): Promise<void> {
     }
     const prompts = wantsJson(args) ? undefined : createPrompter();
     try {
-      const account = await finishHostedAuth({ store, email, code, prompts });
-      wantsJson(args) ? printJson({ account }) : process.stdout.write(`signed in as ${account.email}\n`);
+      const verified = await finishHostedAuth({ store, email, code, prompts });
+      wantsJson(args) ? printJson(verified) : process.stdout.write(`signed in as ${verified.account.email}\n`);
     } finally {
       prompts?.close();
     }
