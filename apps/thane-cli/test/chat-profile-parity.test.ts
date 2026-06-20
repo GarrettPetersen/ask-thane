@@ -139,6 +139,7 @@ describe("chat profile action parity", () => {
     expect(terminalChatSource).toContain("addOptimisticMessage");
     expect(terminalChatSource).toContain("Send failed:");
     expect(terminalChatSource).toContain("(sending)");
+    expect(terminalChatSource).toContain("const sent = await sendChatMessage(text, root.threadRootId ?? root.id);");
   });
 
   it("keeps admin-only slash commands out of non-admin terminal menus", () => {

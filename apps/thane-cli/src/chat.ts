@@ -1276,10 +1276,12 @@ export async function runChat(initialChannel = "general"): Promise<void> {
         status = `Channel ${root.channel} was not found.`;
         return;
       }
-      requireHostedAuthToken(store);
-      await sendHostedMessage(store, { channelId: target.id, text, source: "chat", threadRootId: root.threadRootId ?? root.id });
-      store = await ThaneStore.open();
       activeChannel = target;
+      const sent = await sendChatMessage(text, root.threadRootId ?? root.id);
+      if (!sent) {
+        return;
+      }
+      store = await ThaneStore.open();
       sidePanelLines = [`${BOLD}Thread${RESET}`, "", ...renderMessages(store.thread(messageId)).split("\n")];
       workspacePickerOpen = false;
       showHelp = false;
