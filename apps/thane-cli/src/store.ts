@@ -1520,6 +1520,24 @@ export class ThaneStore {
     );
   }
 
+  private userDisplayLabel(user: ThaneUser | undefined): string {
+    return user?.displayName?.trim() || (user?.handle ? `@${user.handle}` : "unknown");
+  }
+
+  dmDisplayLabel(channel: ThaneChannel, currentUserId = this.currentUserForWorkspace(channel.workspaceId)?.id): string {
+    if (channel.kind !== "dm") {
+      return channel.name;
+    }
+    const peers = this.data.users
+      .filter((user) => user.workspaceId === channel.workspaceId && channel.memberIds.includes(user.id) && user.id !== currentUserId)
+      .map((user) => this.userDisplayLabel(user));
+    return peers.length > 0 ? peers.join(", ") : channel.name;
+  }
+
+  conversationDisplayLabel(channel: ThaneChannel, currentUserId = this.currentUserForWorkspace(channel.workspaceId)?.id): string {
+    return channel.kind === "dm" ? this.dmDisplayLabel(channel, currentUserId) : `#${channel.name}`;
+  }
+
   private findChannelInWorkspace(workspaceId: string, nameOrId: string, userId: string): ThaneChannel | undefined {
     const normalized = normalizeChannelName(nameOrId);
     return this.data.channels.find(
@@ -1851,7 +1869,7 @@ export class ThaneStore {
         workspace: workspace.slug,
         workspaceId: workspace.id,
         conversationId: channel.id,
-        conversation: channel.name,
+        conversation: channel.kind === "dm" ? this.dmDisplayLabel(channel, localUser.id) : channel.name,
         conversationKind: channel.kind,
         unreadCount: inboxUnread,
         mentionCount,
@@ -2044,20 +2062,23 @@ export class ThaneStore {
       }
     }
     const handle = this.data.users.find((user) => user.id === userId)?.handle.toLowerCase() ?? "";
-    return messages.map((message) => ({
-      id: message.id,
-      workspace: workspace?.slug ?? workspaceId,
-      channel: channels.get(message.channelId)?.name ?? message.channelId,
-      conversationKind: channels.get(message.channelId)?.kind ?? "channel",
-      author: userDisplayLabel(users.get(message.authorId), message.authorId),
-      text: message.text,
-      createdAt: message.createdAt,
-      ...(message.source ? { source: message.source } : {}),
-      ...(message.threadRootId ? { threadRootId: message.threadRootId } : {}),
-      replyCount: repliesByRoot.get(message.id) ?? 0,
-      reactions: message.reactions,
-      mentions: message.mentions,
-      mentionsMe: message.mentions.includes(handle)
-    }));
+    return messages.map((message) => {
+      const channel = channels.get(message.channelId);
+      return {
+        id: message.id,
+        workspace: workspace?.slug ?? workspaceId,
+        channel: channel ? (channel.kind === "dm" ? this.dmDisplayLabel(channel, userId) : channel.name) : message.channelId,
+        conversationKind: channel?.kind ?? "channel",
+        author: userDisplayLabel(users.get(message.authorId), message.authorId),
+        text: message.text,
+        createdAt: message.createdAt,
+        ...(message.source ? { source: message.source } : {}),
+        ...(message.threadRootId ? { threadRootId: message.threadRootId } : {}),
+        replyCount: repliesByRoot.get(message.id) ?? 0,
+        reactions: message.reactions,
+        mentions: message.mentions,
+        mentionsMe: message.mentions.includes(handle)
+      };
+    });
   }
 }

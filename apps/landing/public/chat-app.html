@@ -928,6 +928,26 @@
           .reduce((total, channel) => total + conversationUnreadCount(channel.id), 0);
       }
 
+      function userForId(userId, usersById) {
+        return usersById?.get?.(userId) || (currentSnapshot().users || []).find((user) => user.id === userId) || null;
+      }
+
+      function dmDisplayLabel(channel, usersById) {
+        if (!channel) return "DM";
+        const activeUser = currentUser();
+        const peers = (channel.memberIds || [])
+          .filter((memberId) => memberId !== activeUser?.id)
+          .map((memberId) => userForId(memberId, usersById))
+          .filter(Boolean);
+        const labels = peers.map((user) => userDisplayLabel(user));
+        return labels.length ? labels.join(", ") : channel.name || "DM";
+      }
+
+      function conversationDisplayLabel(channel, usersById) {
+        if (!channel) return "general";
+        return channel.kind === "dm" ? dmDisplayLabel(channel, usersById) : `#${channel.name}`;
+      }
+
       function updateDocumentTitle() {
         const count = state.snapshot ? totalUnreadCount() : 0;
         document.title = count > 0 ? `(${count}) Thane Chat` : "Thane Chat";
@@ -2574,13 +2594,13 @@
         const snap = state.snapshot || { workspaces: [], channels: [], messages: [], users: [] };
         const workspace = snap.workspaces.find((item) => item.id === state.activeWorkspaceId) || snap.workspaces[0];
         const channel = snap.channels.find((item) => item.id === state.activeChannelId) || snap.channels[0];
-        const channelPrefix = channel?.kind === "dm" ? "@" : "#";
         const channelItems = snap.channels.filter((item) => item.kind === "channel");
         const dmItems = snap.channels.filter((item) => item.kind === "dm");
         const channelUnreadTotal = conversationKindUnreadCount("channel");
         const dmUnreadTotal = conversationKindUnreadCount("dm");
         const workspaceUnreadTotal = totalUnreadCount();
         const users = new Map((snap.users || []).map((user) => [user.id, user]));
+        const activeConversationLabel = conversationDisplayLabel(channel, users);
         const activeUser = currentUser();
         const messages = (snap.messages || []).filter((message) => message.channelId === channel?.id);
         const searchQuery = state.searchQuery.trim().toLowerCase();
@@ -2624,8 +2644,8 @@
                 ${state.channelMenuOpen ? `<div class="list">${channelItems.map((item) => `<button class="item ${item.id === state.activeChannelId ? "active" : ""}" data-channel-id="${esc(item.id)}" type="button"><span class="cursor">${item.id === state.activeChannelId ? ">" : " "}</span> #${esc(item.name)}${unreadBadge(conversationUnreadCount(item.id))}</button>`).join("") || `<div class="empty">No channels yet</div>`}</div>` : ""}
               </section>
               <section class="section">
-                <div class="section-head"><button class="section-toggle" data-menu-toggle="dms" type="button"><span class="menu-caret">${state.dmMenuOpen ? "v" : ">"}</span><span>DMs</span><span class="summary">${channel?.kind === "dm" ? `@${esc(channel.name)}` : `${dmItems.length}`}${unreadBadge(dmUnreadTotal)}</span></button></div>
-                ${state.dmMenuOpen ? `<div class="list">${dmItems.map((item) => `<button class="item ${item.id === state.activeChannelId ? "active" : ""}" data-channel-id="${esc(item.id)}" type="button"><span class="cursor">${item.id === state.activeChannelId ? ">" : " "}</span> @${esc(item.name)}${unreadBadge(conversationUnreadCount(item.id))}</button>`).join("") || `<div class="empty">No DMs yet</div>`}</div>` : ""}
+                <div class="section-head"><button class="section-toggle" data-menu-toggle="dms" type="button"><span class="menu-caret">${state.dmMenuOpen ? "v" : ">"}</span><span>DMs</span><span class="summary">${channel?.kind === "dm" ? esc(activeConversationLabel) : `${dmItems.length}`}${unreadBadge(dmUnreadTotal)}</span></button></div>
+                ${state.dmMenuOpen ? `<div class="list">${dmItems.map((item) => `<button class="item ${item.id === state.activeChannelId ? "active" : ""}" data-channel-id="${esc(item.id)}" type="button"><span class="cursor">${item.id === state.activeChannelId ? ">" : " "}</span> ${esc(conversationDisplayLabel(item, users))}${unreadBadge(conversationUnreadCount(item.id))}</button>`).join("") || `<div class="empty">No DMs yet</div>`}</div>` : ""}
               </section>
             </aside>
             <main class="main">
@@ -2633,7 +2653,7 @@
                 <div class="topbar-left">
                   <button class="icon-button" onclick="toggleSidebar()" title="${state.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}">${state.sidebarCollapsed ? ">" : "<"}</button>
                   <div>
-                    <h2 class="channel-name">Thane Chat</h2>
+                    <h2 class="channel-name">${esc(activeConversationLabel)}</h2>
                     <p class="prompt-line">${esc(workspace?.slug || "chat")} / typing</p>
                   </div>
                 </div>
@@ -2646,13 +2666,13 @@
               <section class="messages">
                 ${rootMessages.length ? rootMessages.map((message) => renderMessage(message, users, repliesByRoot)).join("") : `<div class="empty">No messages in this channel yet.</div>`}
               </section>
-              <div class="statusbar"><span><strong>${channelPrefix}${esc(channel?.name || "general")}</strong> Up messages. Left conversations. Right messages.</span><span>${messages.length} msg${messages.length === 1 ? "" : "s"} · ${state.realtimeStatus === "live" ? "live" : "sync 30s"}</span></div>
+              <div class="statusbar"><span><strong>${esc(activeConversationLabel)}</strong> Up messages. Left conversations. Right messages.</span><span>${messages.length} msg${messages.length === 1 ? "" : "s"} · ${state.realtimeStatus === "live" ? "live" : "sync 30s"}</span></div>
               <div class="composer-wrap">
                 ${replyTarget ? `<div class="reply-target"><span>replying to ${esc(userDisplayLabel(users.get(replyTarget.authorId)))}: ${esc(replyTarget.text.slice(0, 80))}</span><button onclick="state.replyToId=''; render()">cancel</button></div>` : ""}
                 <div class="mention-suggestions ${mentionUsersHtml ? "" : "hidden"}" data-mention-suggestions>${mentionUsersHtml}</div>
                 <form class="composer" onsubmit="sendMessage(event)">
                   <span class="prompt-symbol">${replyTarget ? "reply>" : ">"}</span>
-                  <textarea name="text" oninput="updateDraft(this.value)" onkeydown="handleComposerKeydown(event)" placeholder="${replyTarget ? "Type a reply" : `Type a message for ${channelPrefix}${esc(channel?.name || "general")}`}">${esc(state.draftText)}</textarea>
+                  <textarea name="text" oninput="updateDraft(this.value)" onkeydown="handleComposerKeydown(event)" placeholder="${replyTarget ? "Type a reply" : `Type a message for ${esc(activeConversationLabel)}`}">${esc(state.draftText)}</textarea>
                   <button>${replyTarget ? "reply" : "send"}</button>
                 </form>
               </div>
@@ -2683,8 +2703,7 @@
                   <button>Search messages</button>
                   ${searchQuery ? `<div class="kv">${searchResults.length ? searchResults.map((message) => {
                     const resultChannel = snap.channels.find((item) => item.id === message.channelId);
-                    const prefix = resultChannel?.kind === "dm" ? "@" : "#";
-                    return `<button type="button" class="item" onclick="openSearchResult(${jsAttr(message.channelId)})">${prefix}${esc(resultChannel?.name || "channel")} ${esc(userDisplayLabel(users.get(message.authorId)) + ": " + message.text.slice(0, 80))}</button>`;
+                    return `<button type="button" class="item" onclick="openSearchResult(${jsAttr(message.channelId)})">${esc(conversationDisplayLabel(resultChannel, users))} ${esc(userDisplayLabel(users.get(message.authorId)) + ": " + message.text.slice(0, 80))}</button>`;
                   }).join("") : `<div class="muted small">No results</div>`}</div>` : ""}
                 </form>
               </section>

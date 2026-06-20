@@ -113,8 +113,12 @@ describe("local Thane Chat handle generation", () => {
     });
 
     const dm = store.inbox({ includeQuiet: true }).find((summary) => summary.conversationId === "tcc_dm");
+    const channel = store.listDms()[0];
 
     expect(dm?.conversationKind).toBe("dm");
+    expect(dm?.conversation).toBe("Owner");
     expect(dm?.unreadCount).toBe(1);
+    expect(channel && store.conversationDisplayLabel(channel)).toBe("Owner");
+    expect(store.recent("tcc_dm", 1)[0]?.channel).toBe("Owner");
   });
 });

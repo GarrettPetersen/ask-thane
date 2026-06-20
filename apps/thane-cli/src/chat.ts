@@ -192,8 +192,8 @@ function wrap(value: string, width: number): string[] {
   return lines.length ? lines : [""];
 }
 
-function channelLabel(channel: ThaneChannel): string {
-  return channel.kind === "dm" ? `@${channel.name}` : `#${channel.name}`;
+function channelLabel(channel: ThaneChannel, store?: ThaneStore): string {
+  return store?.conversationDisplayLabel(channel) ?? (channel.kind === "dm" ? `@${channel.name}` : `#${channel.name}`);
 }
 
 function conversations(store: ThaneStore, activeId: string): ChatConversation[] {
@@ -204,7 +204,7 @@ function conversations(store: ThaneStore, activeId: string): ChatConversation[] 
     const summary = activity.get(channel.id);
     return {
       id: channel.id,
-      label: channelLabel(channel),
+      label: channelLabel(channel, store),
       name: channel.name,
       kind: channel.kind,
       unreadCount: summary?.unreadCount ?? 0,
@@ -215,7 +215,7 @@ function conversations(store: ThaneStore, activeId: string): ChatConversation[] 
     const summary = activity.get(dm.id);
     return {
       id: dm.id,
-      label: channelLabel(dm),
+      label: channelLabel(dm, store),
       name: dm.name,
       kind: dm.kind,
       unreadCount: summary?.unreadCount ?? 0,
@@ -228,7 +228,7 @@ function conversations(store: ThaneStore, activeId: string): ChatConversation[] 
     if (channel) {
       all.unshift({
         id: channel.id,
-        label: channelLabel(channel),
+        label: channelLabel(channel, store),
         name: channel.name,
         kind: channel.kind,
         unreadCount: 0,
@@ -752,7 +752,7 @@ function renderScreen(inputText: string, state: {
     ? `${DIM}Up/down chooses a channel or DM. Down at the bottom types. Enter opens.${RESET}`
     : state.focus === "messages"
     ? `${DIM}Up/down chooses a message. Down at the bottom types. r replies. e reacts.${RESET}`
-    : `${active ? channelLabel(active) : "conversation"}  ${DIM}Up messages. Left channels. Right messages. /menu opens menu.${RESET}`;
+    : `${active ? channelLabel(active, state.store) : "conversation"}  ${DIM}Up messages. Left channels. Right messages. /menu opens menu.${RESET}`;
   const status = modePrefix || suggestionStatus || state.status || defaultStatus;
   lines.push(`${"─".repeat(columns)}`);
   lines.push(fit(status, columns));
@@ -926,7 +926,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     showReactionPicker = false;
     focus = nextFocus;
     messageIndex = Math.max(0, threadedMessages(store.recent(activeChannel.id, 200)).length - 1);
-    status = `Switched to ${channelLabel(channel)}`;
+    status = `Switched to ${channelLabel(channel, store)}`;
     await markConversationRead(activeChannel.id);
     await refresh();
   };
@@ -1212,12 +1212,12 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     }
     if (trimmed === "/members" || trimmed === "/channel-members") {
       const members = activeChannel.kind === "channel" ? store.channelMembers(activeChannel.name) : store.listUsers();
-      sidePanelLines = [`${BOLD}Members: ${channelLabel(activeChannel)}${RESET}`, "", ...renderUsers(members).split("\n")];
+      sidePanelLines = [`${BOLD}Members: ${channelLabel(activeChannel, store)}${RESET}`, "", ...renderUsers(members).split("\n")];
       workspacePickerOpen = false;
       showHelp = false;
       showMenu = false;
       showReactionPicker = false;
-      status = `Members in ${channelLabel(activeChannel)}.`;
+      status = `Members in ${channelLabel(activeChannel, store)}.`;
       return;
     }
     if (trimmed === "/team-members" || trimmed === "/workspace-members") {
@@ -1245,7 +1245,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     }
     if (trimmed === "/recent") {
       sidePanelLines = [
-        `${BOLD}Recent: ${channelLabel(activeChannel)}${RESET}`,
+        `${BOLD}Recent: ${channelLabel(activeChannel, store)}${RESET}`,
         "",
         ...renderMessages(store.recent(activeChannel.id, 12)).split("\n")
       ];
@@ -1253,7 +1253,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       showHelp = false;
       showMenu = false;
       showReactionPicker = false;
-      status = `Recent messages in ${channelLabel(activeChannel)}.`;
+      status = `Recent messages in ${channelLabel(activeChannel, store)}.`;
       return;
     }
     if (trimmed.startsWith("/thread ")) {
@@ -1355,7 +1355,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       }
       activeChannel = await selectConversation(store, channelName);
       await markConversationRead(activeChannel.id);
-      status = `Joined ${channelLabel(activeChannel)}`;
+      status = `Joined ${channelLabel(activeChannel, store)}`;
       showHelp = false;
       showMenu = false;
       sidePanelLines = undefined;
@@ -1374,7 +1374,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       requireHostedAuthToken(store);
       await addHostedChannelMember(store, { channelName: activeChannel.name, target });
       store = await ThaneStore.open();
-      status = `Invited ${target} to ${channelLabel(activeChannel)}`;
+      status = `Invited ${target} to ${channelLabel(activeChannel, store)}`;
       return;
     }
     if (trimmed.startsWith("/channel-remove ")) {
@@ -1386,7 +1386,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       requireHostedAuthToken(store);
       await removeHostedChannelMember(store, { channelName: activeChannel.name, target });
       store = await ThaneStore.open();
-      status = `Removed ${target} from ${channelLabel(activeChannel)}`;
+      status = `Removed ${target} from ${channelLabel(activeChannel, store)}`;
       return;
     }
     if (trimmed === "/team-leave" || trimmed === "/workspace-leave") {
@@ -1461,7 +1461,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
         status = `Sent DM to @${target.replace(/^@/, "")}`;
       } else {
         activeChannel = await selectConversation(store, `@${target}`);
-        status = `Opened ${channelLabel(activeChannel)}`;
+        status = `Opened ${channelLabel(activeChannel, store)}`;
       }
       await markConversationRead(activeChannel.id);
       showHelp = false;

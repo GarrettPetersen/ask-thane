@@ -1606,7 +1606,7 @@ async function main(): Promise<void> {
 
   if (command === "dms") {
     const dms = store.listDms();
-    wantsJson(args) ? printJson({ dms }) : process.stdout.write(`${renderDms(dms)}\n`);
+    wantsJson(args) ? printJson({ dms }) : process.stdout.write(`${renderDms(dms, (dm) => store.conversationDisplayLabel(dm))}\n`);
     return;
   }
 

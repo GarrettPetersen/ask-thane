@@ -147,9 +147,11 @@ describe("chat profile action parity", () => {
     expect(chatAppHtml).toContain("data-menu-toggle=\"dms\"");
     expect(chatAppHtml).toContain("unreadBadge(conversationUnreadCount(item.id))");
     expect(chatAppHtml).toContain("conversationKindUnreadCount(\"dm\")");
+    expect(chatAppHtml).toContain("conversationDisplayLabel(item, users)");
     expect(chatAppHtml).toContain("document.title = count > 0 ? `(${count}) Thane Chat` : \"Thane Chat\"");
 
     expect(terminalChatSource).toContain("unreadCount");
+    expect(terminalChatSource).toContain("conversationDisplayLabel");
     expect(findCliCommand("thane inbox [--all-teams] [--json]")?.description).toContain("unread");
     expect(findCliCommand("thane unread [--json]")?.description).toContain("unread");
   });

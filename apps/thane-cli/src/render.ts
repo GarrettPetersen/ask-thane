@@ -13,11 +13,11 @@ export function renderChannels(channels: ThaneChannel[]): string {
     .join("\n");
 }
 
-export function renderDms(dms: ThaneChannel[]): string {
+export function renderDms(dms: ThaneChannel[], labelForDm: (dm: ThaneChannel) => string = (dm) => `@${dm.name}`): string {
   if (dms.length === 0) {
     return "No DMs yet.";
   }
-  return dms.map((dm) => `@${dm.name}`).join("\n");
+  return dms.map((dm) => labelForDm(dm)).join("\n");
 }
 
 export function renderUsers(users: ThaneUser[]): string {
@@ -56,10 +56,10 @@ export function renderInbox(summaries: ConversationSummary[]): string {
   }
   return summaries
     .map((summary) => {
-      const prefix = summary.conversationKind === "dm" ? "@" : "#";
+      const conversation = summary.conversationKind === "dm" ? summary.conversation : `#${summary.conversation}`;
       const mention = summary.mentionCount > 0 ? `, ${summary.mentionCount} mention${summary.mentionCount === 1 ? "" : "s"}` : "";
       const latest = summary.latestText ? ` - ${summary.latestAuthor ?? "unknown"}: ${summary.latestText}` : "";
-      return `${summary.workspace} ${prefix}${summary.conversation}  ${summary.unreadCount} unread${mention}${latest}`;
+      return `${summary.workspace} ${conversation}  ${summary.unreadCount} unread${mention}${latest}`;
     })
     .join("\n");
 }
@@ -78,7 +78,7 @@ function isWorkspaceJoinMessage(message: MessageView): boolean {
 export function renderMessage(message: MessageView): string {
   const date = new Date(message.createdAt);
   const stamp = Number.isNaN(date.getTime()) ? message.createdAt : date.toLocaleString();
-  const conversation = message.conversationKind === "dm" ? `@${message.channel}` : `#${message.channel}`;
+  const conversation = message.conversationKind === "dm" ? message.channel : `#${message.channel}`;
   if (isWorkspaceJoinMessage(message)) {
     return `[${stamp}] ${conversation} * ${message.text}\n  id: ${message.id}`;
   }
