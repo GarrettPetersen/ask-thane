@@ -146,6 +146,20 @@ article {
   box-shadow: none !important;
 }
 
+.card {
+  align-content: start !important;
+  justify-items: start !important;
+  margin: 0 !important;
+  width: 100% !important;
+}
+
+.card .button {
+  align-self: start !important;
+  justify-self: start !important;
+  text-align: left !important;
+  width: fit-content !important;
+}
+
 body.product-chat .hero,
 body.product-chat .card,
 body.product-chat .panel,
@@ -306,7 +320,7 @@ th {
   padding: 11px 12px !important;
 }
 
-article {
+article:not(.card) {
   margin: 24px auto !important;
 }
 
