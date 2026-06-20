@@ -142,6 +142,16 @@ describe("chat profile action parity", () => {
     expect(terminalChatSource).toContain("const sent = await sendChatMessage(text, root.threadRootId ?? root.id);");
   });
 
+  it("surfaces unread channels and DMs across chat surfaces", () => {
+    expect(chatAppHtml).toContain("workspaceUnreadCounts");
+    expect(chatAppHtml).toContain("data-menu-toggle=\"dms\"");
+    expect(chatAppHtml).toContain("unreadBadge(conversationUnreadCount(item.id))");
+
+    expect(terminalChatSource).toContain("unreadCount");
+    expect(findCliCommand("thane inbox [--all-teams] [--json]")?.description).toContain("unread");
+    expect(findCliCommand("thane unread [--json]")?.description).toContain("unread");
+  });
+
   it("keeps admin-only slash commands out of non-admin terminal menus", () => {
     const adminCommands = slashCommandsForRole({ isAdmin: true }).map((command) => command.name);
     const memberCommands = slashCommandsForRole({ isAdmin: false }).map((command) => command.name);

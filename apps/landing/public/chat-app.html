@@ -191,6 +191,10 @@
       .item .cursor {
         color: var(--amber);
       }
+      .unread-badge {
+        color: var(--amber);
+        margin-left: 4px;
+      }
       .member-row {
         display: flex;
         align-items: center;
@@ -734,6 +738,7 @@
         sidebarCollapsed: localStorage.getItem("thane.web.sidebarCollapsed") === "true",
         workspaceMenuOpen: localStorage.getItem("thane.web.workspaceMenuOpen") === "true",
         channelMenuOpen: localStorage.getItem("thane.web.channelMenuOpen") === "true",
+        dmMenuOpen: localStorage.getItem("thane.web.dmMenuOpen") !== "false",
         cliInstallOpen: false,
         settingsMenuOpen: false,
         settingsMenuScrollTop: 0,
@@ -876,6 +881,79 @@
       function currentMessages() {
         const channel = currentChannel();
         return (currentSnapshot().messages || []).filter((message) => message.channelId === channel?.id);
+      }
+
+      function unreadBadge(count) {
+        return count > 0 ? `<span class="unread-badge">(${count})</span>` : "";
+      }
+
+      function readStateForChannel(channelId) {
+        return (currentSnapshot().readStates || []).find((readState) => readState.channelId === channelId) || null;
+      }
+
+      function calculatedUnreadCount(channelId) {
+        const user = currentUser();
+        if (!user) return 0;
+        const readAt = readStateForChannel(channelId)?.lastReadAt || "";
+        return (currentSnapshot().messages || []).filter((message) =>
+          message.channelId === channelId &&
+          message.authorId !== user.id &&
+          (!readAt || message.createdAt > readAt)
+        ).length;
+      }
+
+      function conversationUnreadCount(channelId) {
+        const count = (currentSnapshot().unreadCounts || []).find((item) => item.channelId === channelId);
+        return typeof count?.unreadCount === "number" ? count.unreadCount : calculatedUnreadCount(channelId);
+      }
+
+      function workspaceUnreadCount(workspaceId) {
+        const count = (currentSnapshot().workspaceUnreadCounts || []).find((item) => item.workspaceId === workspaceId);
+        if (typeof count?.unreadCount === "number") return count.unreadCount;
+        if (workspaceId !== state.activeWorkspaceId) return 0;
+        return (currentSnapshot().channels || []).reduce((total, channel) => total + conversationUnreadCount(channel.id), 0);
+      }
+
+      function clearUnreadForChannel(channelId) {
+        if (!state.snapshot) return;
+        const channel = (state.snapshot.channels || []).find((item) => item.id === channelId);
+        const user = currentUser();
+        if (!channel || !user) return;
+        const previous = conversationUnreadCount(channelId);
+        const now = new Date().toISOString();
+        const readState = {
+          workspaceId: channel.workspaceId,
+          channelId,
+          userId: user.id,
+          lastReadAt: now
+        };
+        const readStates = (state.snapshot.readStates || []).filter((item) => item.channelId !== channelId);
+        const unreadCounts = (state.snapshot.unreadCounts || []).filter((item) => item.channelId !== channelId);
+        const workspaceUnreadCounts = (state.snapshot.workspaceUnreadCounts || []).map((item) =>
+          item.workspaceId === channel.workspaceId
+            ? { ...item, unreadCount: Math.max(0, Number(item.unreadCount || 0) - previous) }
+            : item
+        );
+        state.snapshot = {
+          ...state.snapshot,
+          readStates: [...readStates, readState],
+          unreadCounts,
+          workspaceUnreadCounts
+        };
+      }
+
+      function markConversationRead(channelId) {
+        if (!channelId || !state.activeWorkspaceId) return;
+        const shouldPost = conversationUnreadCount(channelId) > 0;
+        clearUnreadForChannel(channelId);
+        if (!shouldPost) return;
+        void api("/v1/thane-cli/read-states", {
+          method: "POST",
+          body: JSON.stringify({
+            workspaceId: state.activeWorkspaceId,
+            channelId
+          })
+        }).catch(() => {});
       }
 
       function currentWorkspaceRole() {
@@ -1129,6 +1207,10 @@
           state.channelMenuOpen = !state.channelMenuOpen;
           remember("thane.web.channelMenuOpen", String(state.channelMenuOpen));
         }
+        if (name === "dms") {
+          state.dmMenuOpen = !state.dmMenuOpen;
+          remember("thane.web.dmMenuOpen", String(state.dmMenuOpen));
+        }
         render();
       }
 
@@ -1226,6 +1308,7 @@
           state.activeChannelId = channels.find((channel) => channel.name === "general")?.id || channels[0]?.id || "";
         }
         rememberNavigationSelection();
+        markConversationRead(state.activeChannelId);
         connectRealtime();
       }
 
@@ -1321,6 +1404,7 @@
         state.activeChannelId = id;
         state.replyToId = "";
         rememberChannelSelection();
+        markConversationRead(id);
         render();
       }
 
@@ -1396,6 +1480,7 @@
           state.activeChannelId = existing.id;
           state.status = `Opened @${user.handle}`;
           rememberChannelSelection();
+          markConversationRead(existing.id);
           render();
           requestAnimationFrame(() => document.querySelector(".composer textarea")?.focus());
           return;
@@ -1439,6 +1524,7 @@
           state.dmComposeTarget = null;
           state.dmDraftText = "";
           rememberChannelSelection();
+          markConversationRead(state.activeChannelId);
           try {
             await sync();
             state.status = `Sent DM to @${target.handle}`;
@@ -1508,6 +1594,7 @@
         state.searchQuery = "";
         state.replyToId = "";
         rememberChannelSelection();
+        markConversationRead(channelId);
         render();
       }
 
@@ -1576,6 +1663,7 @@
         await sync();
         state.activeChannelId = state.snapshot.channels.find((channel) => channel.name === name.replace(/^#/, "").toLowerCase())?.id || state.activeChannelId;
         rememberChannelSelection();
+        markConversationRead(state.activeChannelId);
         render();
       }
 
@@ -2468,6 +2556,8 @@
         const workspace = snap.workspaces.find((item) => item.id === state.activeWorkspaceId) || snap.workspaces[0];
         const channel = snap.channels.find((item) => item.id === state.activeChannelId) || snap.channels[0];
         const channelPrefix = channel?.kind === "dm" ? "@" : "#";
+        const channelItems = snap.channels.filter((item) => item.kind === "channel");
+        const dmItems = snap.channels.filter((item) => item.kind === "dm");
         const users = new Map((snap.users || []).map((user) => [user.id, user]));
         const activeUser = currentUser();
         const messages = (snap.messages || []).filter((message) => message.channelId === channel?.id);
@@ -2504,15 +2594,16 @@
                 <p class="muted small">${esc(userDisplayLabel(activeUser))}${activeUser?.handle ? ` @${esc(activeUser.handle)}` : ""}</p>
               </div>
               <section class="section">
-                <div class="section-head"><button class="section-toggle" data-menu-toggle="workspaces" type="button"><span class="menu-caret">${state.workspaceMenuOpen ? "v" : ">"}</span><span>Teams</span><span class="summary">${esc(workspace?.slug || "none")}</span></button><button onclick="sync().then(render)">sync</button></div>
-                ${state.workspaceMenuOpen ? `<div class="list">${snap.workspaces.map((item) => `<button class="item ${item.id === state.activeWorkspaceId ? "active" : ""}" data-workspace-id="${esc(item.id)}" type="button"><span class="cursor">${item.id === state.activeWorkspaceId ? ">" : " "}</span> ${esc(item.slug)}</button>`).join("") || `<div class="empty">No teams yet</div>`}</div>` : ""}
+                <div class="section-head"><button class="section-toggle" data-menu-toggle="workspaces" type="button"><span class="menu-caret">${state.workspaceMenuOpen ? "v" : ">"}</span><span>Teams</span><span class="summary">${esc(workspace?.slug || "none")}${unreadBadge(workspaceUnreadCount(workspace?.id || ""))}</span></button><button onclick="sync().then(render)">sync</button></div>
+                ${state.workspaceMenuOpen ? `<div class="list">${snap.workspaces.map((item) => `<button class="item ${item.id === state.activeWorkspaceId ? "active" : ""}" data-workspace-id="${esc(item.id)}" type="button"><span class="cursor">${item.id === state.activeWorkspaceId ? ">" : " "}</span> ${esc(item.slug)}${unreadBadge(workspaceUnreadCount(item.id))}</button>`).join("") || `<div class="empty">No teams yet</div>`}</div>` : ""}
               </section>
               <section class="section">
-                <div class="section-head"><button class="section-toggle" data-menu-toggle="channels" type="button"><span class="menu-caret">${state.channelMenuOpen ? "v" : ">"}</span><span>Conversations</span><span class="summary">${channelPrefix}${esc(channel?.name || "general")}</span></button></div>
-                ${state.channelMenuOpen ? `<div class="list">${snap.channels.map((item) => {
-                  const prefix = item.kind === "dm" ? "@" : "#";
-                  return `<button class="item ${item.id === state.activeChannelId ? "active" : ""}" data-channel-id="${esc(item.id)}" type="button"><span class="cursor">${item.id === state.activeChannelId ? ">" : " "}</span> ${prefix}${esc(item.name)}</button>`;
-                }).join("") || `<div class="empty">No conversations yet</div>`}</div>` : ""}
+                <div class="section-head"><button class="section-toggle" data-menu-toggle="channels" type="button"><span class="menu-caret">${state.channelMenuOpen ? "v" : ">"}</span><span>Channels</span><span class="summary">${channel?.kind === "channel" ? `#${esc(channel.name)}` : `${channelItems.length}`}</span></button></div>
+                ${state.channelMenuOpen ? `<div class="list">${channelItems.map((item) => `<button class="item ${item.id === state.activeChannelId ? "active" : ""}" data-channel-id="${esc(item.id)}" type="button"><span class="cursor">${item.id === state.activeChannelId ? ">" : " "}</span> #${esc(item.name)}${unreadBadge(conversationUnreadCount(item.id))}</button>`).join("") || `<div class="empty">No channels yet</div>`}</div>` : ""}
+              </section>
+              <section class="section">
+                <div class="section-head"><button class="section-toggle" data-menu-toggle="dms" type="button"><span class="menu-caret">${state.dmMenuOpen ? "v" : ">"}</span><span>DMs</span><span class="summary">${channel?.kind === "dm" ? `@${esc(channel.name)}` : `${dmItems.length}`}</span></button></div>
+                ${state.dmMenuOpen ? `<div class="list">${dmItems.map((item) => `<button class="item ${item.id === state.activeChannelId ? "active" : ""}" data-channel-id="${esc(item.id)}" type="button"><span class="cursor">${item.id === state.activeChannelId ? ">" : " "}</span> @${esc(item.name)}${unreadBadge(conversationUnreadCount(item.id))}</button>`).join("") || `<div class="empty">No DMs yet</div>`}</div>` : ""}
               </section>
             </aside>
             <main class="main">

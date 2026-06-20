@@ -472,6 +472,7 @@ export class ThaneStore {
     users: ThaneUser[];
     channels: ThaneChannel[];
     messages: ThaneMessage[];
+    readStates?: ThaneReadState[];
     askThaneIntegrations?: AskThaneIntegration[];
     notificationPreferences?: NotificationPreference[];
     billingPlans?: WorkspaceBillingPlan[];
@@ -515,6 +516,11 @@ export class ThaneStore {
       this.data.users = this.data.users.filter((user) => user.workspaceId !== activeWorkspaceId).concat(snapshot.users);
       this.data.channels = this.data.channels.filter((channel) => channel.workspaceId !== activeWorkspaceId).concat(snapshot.channels);
       this.data.messages = this.data.messages.filter((message) => message.workspaceId !== activeWorkspaceId).concat(snapshot.messages);
+      if (snapshot.readStates) {
+        this.data.readStates = this.data.readStates
+          .filter((readState) => readState.workspaceId !== activeWorkspaceId)
+          .concat(snapshot.readStates);
+      }
       if (snapshot.askThaneIntegrations) {
         this.data.askThaneIntegrations = this.data.askThaneIntegrations
           .filter((integration) => integration.workspaceId !== activeWorkspaceId)

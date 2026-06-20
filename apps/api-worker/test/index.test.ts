@@ -909,6 +909,181 @@ describe("@ask-thane/api-worker", () => {
     ]);
   });
 
+  it("syncs hosted read states and unread counts for Thane Chat", async () => {
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("SELECT display_name")) {
+        return { display_name: "Owner" };
+      }
+      return null;
+    });
+    const all = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members m")) {
+        return {
+          results: [
+            {
+              id: "wsp_1",
+              workspace_slug: "acme",
+              workspace_name: "Acme",
+              ascii_art: null,
+              created_at: "2026-06-18T00:00:00.000Z",
+              member_id: "tcm_1",
+              role: "owner"
+            }
+          ]
+        };
+      }
+      if (sql.includes("COUNT(msg.id) AS unread_count")) {
+        return {
+          results: [
+            {
+              workspace_id: "wsp_1",
+              channel_id: "tcc_1",
+              unread_count: 2,
+              mention_count: 0
+            }
+          ]
+        };
+      }
+      if (sql.includes("FROM thane_cli_workspace_members") && !sql.includes("JOIN")) {
+        return {
+          results: [
+            {
+              id: "tcm_1",
+              account_id: "acct_1",
+              email: "owner@example.com",
+              display_name: "Owner",
+              handle: "owner",
+              role: "owner",
+              joined_at: "2026-06-18T00:00:00.000Z"
+            }
+          ]
+        };
+      }
+      if (sql.includes("FROM thane_cli_channels")) {
+        return {
+          results: [
+            {
+              id: "tcc_1",
+              workspace_id: "wsp_1",
+              name: "general",
+              kind: "channel",
+              visibility: "public",
+              topic: "General",
+              created_at: "2026-06-18T00:00:00.000Z"
+            }
+          ]
+        };
+      }
+      if (sql.includes("FROM thane_cli_read_states")) {
+        return {
+          results: [
+            {
+              workspace_id: "wsp_1",
+              channel_id: "tcc_1",
+              member_id: "tcm_1",
+              last_read_at: "2026-06-18T00:01:00.000Z"
+            }
+          ]
+        };
+      }
+      return { results: [] };
+    });
+    const noRateLimit = vi.fn(async () => null);
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn(() => {
+        if (sql.includes("thane_cli_rate_limits")) {
+          return { first: noRateLimit, run };
+        }
+        return sql.includes("SELECT display_name") ? { first: first.bind({ sql }) } : { all: all.bind({ sql }) };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/sync?workspaceId=wsp_1", {
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` }
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      readStates: [
+        {
+          workspaceId: "wsp_1",
+          channelId: "tcc_1",
+          userId: "tcm_1",
+          lastReadAt: "2026-06-18T00:01:00.000Z"
+        }
+      ],
+      unreadCounts: [{ workspaceId: "wsp_1", channelId: "tcc_1", unreadCount: 2, mentionCount: 0 }],
+      workspaceUnreadCounts: [{ workspaceId: "wsp_1", unreadCount: 2, mentionCount: 0 }]
+    });
+  });
+
+  it("marks hosted Thane Chat conversations read", async () => {
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members") && sql.includes("email = ?")) {
+        return {
+          id: "tcm_1",
+          account_id: "acct_1",
+          email: "owner@example.com",
+          display_name: "Owner",
+          handle: "owner",
+          role: "owner"
+        };
+      }
+      if (sql.includes("SELECT id, name, kind, visibility FROM thane_cli_channels")) {
+        return { id: "tcc_1", name: "general", kind: "channel", visibility: "public" };
+      }
+      if (sql.includes("FROM thane_cli_channel_members")) {
+        return { left_at: null };
+      }
+      return null;
+    });
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => ({
+        run: run.bind({ sql, args }),
+        first: first.bind({ sql, args }),
+        all: vi.fn(async () => ({ results: [] }))
+      }))
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/read-states", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
+        body: JSON.stringify({ workspaceId: "wsp_1", channelId: "tcc_1" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      readState: {
+        workspaceId: "wsp_1",
+        channelId: "tcc_1",
+        userId: "tcm_1"
+      }
+    });
+    expect(run).toHaveBeenCalled();
+  });
+
   it("redacts other member emails and masks legacy email-derived handles in member sync responses", async () => {
     const first = vi.fn(async () => null);
     const all = vi.fn(async function (this: { sql?: string }) {

@@ -102,6 +102,12 @@ interface ThaneCliChannelMembershipPayload {
   target?: unknown;
 }
 
+interface ThaneCliReadStatePayload {
+  workspaceId?: unknown;
+  channelId?: unknown;
+  channelName?: unknown;
+}
+
 interface ThaneCliMessageCreatePayload {
   workspaceId?: unknown;
   channelId?: unknown;
@@ -2875,7 +2881,7 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
   const requestedWorkspaceId = url.searchParams.get("workspaceId")?.trim() || null;
   const workspaceRows = await env.DB
     .prepare(
-      `SELECT w.id, w.workspace_slug, w.workspace_name, w.ascii_art, w.plan_tier, w.created_at, w.updated_at, m.role
+      `SELECT w.id, w.workspace_slug, w.workspace_name, w.ascii_art, w.plan_tier, w.created_at, w.updated_at, m.id AS member_id, m.role
        FROM thane_cli_workspace_members m
        JOIN thane_cli_workspaces w ON w.id = m.workspace_id
        WHERE m.email = ? AND m.left_at IS NULL AND w.status = 'active'
@@ -2890,6 +2896,7 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
       plan_tier: ThaneCliPlanTier | string | null;
       created_at: string;
       updated_at: string;
+      member_id: string;
       role: string;
     }>();
 
@@ -2900,6 +2907,46 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
     createdAt: row.created_at,
     ...(row.ascii_art ? { asciiArt: row.ascii_art } : {})
   }));
+  const workspaceMemberIds = (workspaceRows.results ?? []).map((row) => row.member_id).filter(Boolean);
+  const unreadCountsByWorkspace = new Map<string, { unreadCount: number; mentionCount: number }>();
+  const unreadCountsByConversation = new Map<string, { workspaceId: string; channelId: string; unreadCount: number; mentionCount: number }>();
+  if (workspaceMemberIds.length > 0) {
+    const unreadRows = await env.DB
+      .prepare(
+        `SELECT c.workspace_id, c.id AS channel_id, COUNT(msg.id) AS unread_count, 0 AS mention_count
+         FROM thane_cli_channels c
+         JOIN thane_cli_channel_members cm
+           ON cm.channel_id = c.id
+          AND cm.member_id IN (${workspaceMemberIds.map(() => "?").join(", ")})
+          AND cm.left_at IS NULL
+         JOIN thane_cli_chat_messages msg
+           ON msg.workspace_id = c.workspace_id
+          AND msg.channel_id = c.id
+          AND msg.author_member_id != cm.member_id
+         LEFT JOIN thane_cli_read_states rs
+           ON rs.workspace_id = c.workspace_id
+          AND rs.channel_id = c.id
+          AND rs.member_id = cm.member_id
+         WHERE rs.last_read_at IS NULL OR msg.created_at > rs.last_read_at
+         GROUP BY c.workspace_id, c.id`
+      )
+      .bind(...workspaceMemberIds)
+      .all<{ workspace_id: string; channel_id: string; unread_count: number; mention_count: number }>();
+    for (const row of unreadRows.results ?? []) {
+      const unreadCount = Number(row.unread_count) || 0;
+      const mentionCount = Number(row.mention_count) || 0;
+      unreadCountsByConversation.set(row.channel_id, {
+        workspaceId: row.workspace_id,
+        channelId: row.channel_id,
+        unreadCount,
+        mentionCount
+      });
+      const workspaceCounts = unreadCountsByWorkspace.get(row.workspace_id) ?? { unreadCount: 0, mentionCount: 0 };
+      workspaceCounts.unreadCount += unreadCount;
+      workspaceCounts.mentionCount += mentionCount;
+      unreadCountsByWorkspace.set(row.workspace_id, workspaceCounts);
+    }
+  }
   const activeWorkspace =
     workspaces.find((workspace) => workspace.id === requestedWorkspaceId || workspace.slug === requestedWorkspaceId) ?? workspaces[0];
   const activeWorkspaceRow = (workspaceRows.results ?? []).find((row) => row.id === activeWorkspace?.id);
@@ -2914,6 +2961,9 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
       users: [],
       channels: [],
       messages: [],
+      readStates: [],
+      unreadCounts: [],
+      workspaceUnreadCounts: [],
       askThaneIntegrations: [],
       notificationPreferences: [],
       billingPlans: []
@@ -3067,6 +3117,31 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
     reactions: reactionsByMessage.get(message.id) ?? [],
     mentions: [...message.text.matchAll(/@([a-zA-Z0-9._-]+)/g)].map((match) => String(match[1] ?? "").toLowerCase()).filter(Boolean)
   }));
+  const readStateRows = currentMember
+    ? await env.DB
+        .prepare(
+          `SELECT workspace_id, channel_id, member_id, last_read_at
+           FROM thane_cli_read_states
+           WHERE workspace_id = ? AND member_id = ?`
+        )
+        .bind(activeWorkspace.id, currentMember.id)
+        .all<{ workspace_id: string; channel_id: string; member_id: string; last_read_at: string }>()
+    : { results: [] as Array<{ workspace_id: string; channel_id: string; member_id: string; last_read_at: string }> };
+  const readStates = (readStateRows.results ?? []).map((row) => ({
+    workspaceId: row.workspace_id,
+    channelId: row.channel_id,
+    userId: row.member_id,
+    lastReadAt: row.last_read_at
+  }));
+  const unreadCounts = [...unreadCountsByConversation.values()].filter((count) => count.workspaceId === activeWorkspace.id);
+  const workspaceUnreadCounts = workspaces.map((workspace) => {
+    const counts = unreadCountsByWorkspace.get(workspace.id) ?? { unreadCount: 0, mentionCount: 0 };
+    return {
+      workspaceId: workspace.id,
+      unreadCount: counts.unreadCount,
+      mentionCount: counts.mentionCount
+    };
+  });
   const askThaneIntegration = renderAskThaneIntegration(rawAskThaneIntegration);
   const notificationPreference = await readThaneCliNotificationPreferenceForSync(env, {
     accountId: String(account.id),
@@ -3083,6 +3158,9 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
     users,
     channels,
     messages,
+    readStates,
+    unreadCounts,
+    workspaceUnreadCounts,
     askThaneIntegrations: askThaneIntegration ? [askThaneIntegration] : [],
     notificationPreferences: [notificationPreference],
     billingPlans: [
@@ -3543,6 +3621,52 @@ async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<
       mentions: [...text.matchAll(/@([a-zA-Z0-9._-]+)/g)].map((match) => String(match[1] ?? "").toLowerCase()).filter(Boolean)
     },
     passiveTaskCount: 0
+  });
+}
+
+async function handleThaneCliReadStateMark(request: Request, env: Env): Promise<Response> {
+  const email = await requireAuthEmail(request, env);
+  if (!email) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  const payload = await parseJsonObject<ThaneCliReadStatePayload>(request);
+  const workspaceId = typeof payload?.workspaceId === "string" && payload.workspaceId.trim() ? payload.workspaceId.trim() : null;
+  const channelId = typeof payload?.channelId === "string" && payload.channelId.trim() ? payload.channelId.trim() : null;
+  const channelName = normalizeChannelName(payload?.channelName);
+  if (!workspaceId || (!channelId && !channelName)) {
+    return Response.json({ ok: false, error: "workspace_id_and_channel_required" }, { status: 400 });
+  }
+  const member = await requireThaneCliWorkspaceMember(env, workspaceId, email);
+  if (!member) {
+    return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
+  }
+  const channel = await resolveThaneCliChannel(env, { workspaceId, channelId, channelName });
+  if (!channel?.id || !channel.visibility) {
+    return Response.json({ ok: false, error: "channel_not_found" }, { status: 404 });
+  }
+  if (!(await canThaneCliMemberUseChannel(env, { channelId: channel.id, visibility: channel.visibility, memberId: member.id }))) {
+    return Response.json({ ok: false, error: "channel_not_found" }, { status: 404 });
+  }
+  const now = nowIso();
+  await env.DB
+    .prepare(
+      `INSERT INTO thane_cli_read_states (
+         id, workspace_id, channel_id, member_id, last_read_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(workspace_id, channel_id, member_id) DO UPDATE SET
+         last_read_at = excluded.last_read_at,
+         updated_at = excluded.updated_at`
+    )
+    .bind(makeId("tcrs"), workspaceId, channel.id, member.id, now, now)
+    .run();
+  return Response.json({
+    ok: true,
+    readState: {
+      workspaceId,
+      channelId: channel.id,
+      userId: member.id,
+      lastReadAt: now
+    }
   });
 }
 
@@ -4928,6 +5052,9 @@ async function handleThaneCliRequest(request: Request, env: Env): Promise<Respon
   }
   if (url.pathname === "/v1/thane-cli/messages" && request.method === "POST") {
     return handleThaneCliMessageCreate(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/read-states" && request.method === "POST") {
+    return handleThaneCliReadStateMark(request, env);
   }
   if (url.pathname === "/v1/thane-cli/reactions" && request.method === "POST") {
     return handleThaneCliReactionCreate(request, env);

@@ -5,6 +5,7 @@ import type {
   ThaneAccount,
   ThaneChannel,
   ThaneMessage,
+  ThaneReadState,
   ThaneUser,
   ThaneWorkspace,
   ThaneWorkspaceMember,
@@ -20,6 +21,9 @@ export interface HostedSyncSnapshot {
   users: ThaneUser[];
   channels: ThaneChannel[];
   messages: ThaneMessage[];
+  readStates?: ThaneReadState[];
+  unreadCounts?: Array<{ workspaceId: string; channelId: string; unreadCount: number; mentionCount: number }>;
+  workspaceUnreadCounts?: Array<{ workspaceId: string; unreadCount: number; mentionCount: number }>;
   askThaneIntegrations?: AskThaneIntegration[];
   notificationPreferences?: NotificationPreference[];
   billingPlans?: WorkspaceBillingPlan[];
@@ -387,4 +391,12 @@ export async function reactHostedMessage(store: ThaneStore, input: { messageId: 
     emoji: input.emoji
   });
   await syncHostedStore(store);
+}
+
+export async function markHostedRead(store: ThaneStore, input: { channelId: string }): Promise<ThaneReadState> {
+  const response = await postHosted<{ ok: true; readState: ThaneReadState }>(store, "/v1/thane-cli/read-states", {
+    workspaceId: store.activeWorkspace.id,
+    channelId: input.channelId
+  });
+  return response.readState;
 }

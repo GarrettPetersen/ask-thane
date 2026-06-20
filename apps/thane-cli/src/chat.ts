@@ -10,6 +10,7 @@ import {
   joinHostedChannel,
   leaveHostedChannel,
   leaveHostedWorkspace,
+  markHostedRead,
   reactHostedMessage,
   removeHostedChannelMember,
   removeHostedWorkspaceMember,
@@ -862,7 +863,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       const sentIndex = messages.findIndex((message) => message.id === sent.id);
       messageIndex = Math.max(0, sentIndex >= 0 ? sentIndex : messages.length - 1);
       status = "";
-      await store.markReadConversation(activeChannel.id);
+      await markConversationRead(activeChannel.id);
       return true;
     } catch (error) {
       store = await ThaneStore.open();
@@ -905,6 +906,13 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     return updateStatus;
   };
 
+  const markConversationRead = async (channelId: string): Promise<void> => {
+    await store.markReadConversation(channelId);
+    if (hasHostedChat(store)) {
+      await markHostedRead(store, { channelId }).catch(() => undefined);
+    }
+  };
+
   const switchTo = async (conversationId: string, nextFocus: ChatFocus = "messages"): Promise<void> => {
     const channel = store.findChannel(conversationId);
     if (!channel) {
@@ -919,7 +927,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
     focus = nextFocus;
     messageIndex = Math.max(0, threadedMessages(store.recent(activeChannel.id, 200)).length - 1);
     status = `Switched to ${channelLabel(channel)}`;
-    await store.markReadConversation(activeChannel.id);
+    await markConversationRead(activeChannel.id);
     await refresh();
   };
 
@@ -1346,7 +1354,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
         store = await ThaneStore.open();
       }
       activeChannel = await selectConversation(store, channelName);
-      await store.markReadConversation(activeChannel.id);
+      await markConversationRead(activeChannel.id);
       status = `Joined ${channelLabel(activeChannel)}`;
       showHelp = false;
       showMenu = false;
@@ -1455,7 +1463,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
         activeChannel = await selectConversation(store, `@${target}`);
         status = `Opened ${channelLabel(activeChannel)}`;
       }
-      await store.markReadConversation(activeChannel.id);
+      await markConversationRead(activeChannel.id);
       showHelp = false;
       showMenu = false;
       sidePanelLines = undefined;
@@ -1792,7 +1800,7 @@ export async function runChat(initialChannel = "general"): Promise<void> {
   }, 30_000);
 
   try {
-    await store.markReadConversation(activeChannel.id);
+    await markConversationRead(activeChannel.id);
     await refresh();
     while (isOpen) {
       await new Promise((resolve) => setTimeout(resolve, 50));
