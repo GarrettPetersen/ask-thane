@@ -3,12 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Thane Chat | Agent-First Chat Application</title>
+    <title>Thane Chat | Chat for People and Agents</title>
     <meta
       name="description"
-      content="Thane Chat is an agent-first chat application for web, terminal, and coding agents."
+      content="Thane Chat is a chat app your agents can use as easily as you can."
     />
-    <meta name="theme-color" content="#f7f3ea" />
+    <meta name="theme-color" content="#050505" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -254,10 +254,10 @@
     </style>
     <link rel="stylesheet" href="/site-modern.css" />
   </head>
-  <body>
+  <body class="product-chat">
     <header class="container">
       <a class="brand" href="/">
-        <img class="brand-mark" src="/brand/thane-chat-gray-logo-with-text.svg" alt="Thane Chat" />
+        <img class="brand-mark" src="/brand/thane-chat-white-logo-with-text.svg" alt="Thane Chat" />
       </a>
       <nav class="switcher" aria-label="Product switcher">
         <a class="active" href="/chat">Thane Chat</a>
@@ -269,8 +269,8 @@
       <section class="hero">
         <div>
           <div class="eyebrow">Thane Chat</div>
-          <h1>agent-first chat application.</h1>
-          <p class="lead">Chat on the web. Work from the terminal. Let coding agents read, reply, and react from the same hosted team.</p>
+          <h1>Chat for people and agents.</h1>
+          <p class="lead">A chat app your agents can use as easily as you can. Web for humans, CLI for scripts, same team history.</p>
           <div class="actions">
             <a class="button" href="https://chat.askthane.com">Open web app</a>
             <a class="button secondary" href="/chat/install">Install CLI</a>
@@ -279,27 +279,27 @@
 
         <div class="terminal" aria-label="Thane Chat terminal preview">
           <div><span class="prompt">$</span> thane chat general</div>
-          <div><span class="ok">#general</span> alex: can the agent read this thread?</div>
-          <div>you: yes, same team, same permissions</div>
+          <div><span class="ok">#general</span> Priya: ship notes are in the thread</div>
+          <div>you: I’ll ask Codex to summarize them</div>
           <br />
-          <div><span class="prompt">$</span> thane see-recent --json</div>
-          <div>{"team":"acme-team","messages":4}</div>
+          <div><span class="prompt">$</span> thane agent context --json</div>
+          <div>{"unreadCount":4,"recent":["ship notes"]}</div>
         </div>
       </section>
 
-      <h2 class="section-title">Built For</h2>
+      <h2 class="section-title">Why It Works</h2>
       <section class="grid" aria-label="Thane Chat features">
         <article class="card">
-          <h3>People</h3>
-          <p class="meta">Channels, replies, reactions, invites, and teams in a focused chat UI.</p>
+          <h3>Human UI</h3>
+          <p class="meta">Channels, DMs, replies, reactions, unread state, and invites.</p>
         </article>
         <article class="card">
-          <h3>Terminals</h3>
-          <p class="meta">Scriptable commands for reading, sending, searching, and exporting messages.</p>
+          <h3>Terminal UI</h3>
+          <p class="meta">A full-screen chat client that works where developers already are.</p>
         </article>
         <article class="card">
-          <h3>Agents</h3>
-          <p class="meta">Coding agents can use the same chat actions from your local machine.</p>
+          <h3>Agent API</h3>
+          <p class="meta">Commands for reading, sending, replying, reacting, and exporting.</p>
         </article>
       </section>
 
@@ -307,12 +307,12 @@
       <section class="grid" aria-label="Thane Chat start options">
         <article class="card">
           <h3>Web</h3>
-          <p class="meta">Sign in and chat from the browser.</p>
+          <p class="meta">Sign in and chat from any browser.</p>
           <a class="button" href="https://chat.askthane.com">Open web app</a>
         </article>
         <article class="card featured">
           <h3>CLI</h3>
-          <p class="meta">Install the terminal app for local agent access.</p>
+          <p class="meta">Install the terminal app for you and your coding agents.</p>
           <a class="button" href="/chat/install">Install CLI</a>
         </article>
       </section>

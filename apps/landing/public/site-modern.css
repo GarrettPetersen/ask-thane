@@ -1,34 +1,42 @@
 :root {
-  --page-bg: #f6f5f0;
-  --page-ink: #171717;
-  --page-muted: #5f625e;
-  --page-soft: #eef1ed;
-  --page-surface: rgba(255, 255, 255, 0.86);
-  --page-surface-strong: #ffffff;
-  --page-border: #dedbd2;
-  --page-blue: #1457d9;
-  --page-blue-dark: #0d3f9c;
-  --page-copper: #bd5b2a;
-  --page-copper-dark: #884018;
-  --page-shadow: 0 18px 48px rgba(31, 35, 40, 0.08);
-  --page-shadow-soft: 0 8px 24px rgba(31, 35, 40, 0.06);
+  --mono-black: #050505;
+  --mono-white: #ffffff;
+  --mono-ink: #111111;
+  --mono-muted: #686868;
+  --mono-faint: #f4f4f1;
+  --mono-line: #d8d8d2;
+  --mono-line-dark: #2a2a2a;
+  --mono-dark-muted: #b8b8b8;
+  --mono-dark-soft: #101010;
 }
 
 html {
-  background: var(--page-bg);
+  background: var(--mono-white);
   text-rendering: optimizeLegibility;
 }
 
 body {
-  background: var(--page-bg) !important;
-  color: var(--page-ink) !important;
+  margin: 0;
+  background: var(--mono-white) !important;
+  color: var(--mono-ink) !important;
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
-  letter-spacing: 0;
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif !important;
+  letter-spacing: 0 !important;
   -webkit-font-smoothing: antialiased;
 }
 
+body.product-chat,
+body.chat-install-page {
+  background: var(--mono-black) !important;
+  color: var(--mono-white) !important;
+}
+
+* {
+  box-sizing: border-box;
+}
+
 a {
+  color: inherit;
   text-underline-offset: 3px;
 }
 
@@ -38,21 +46,22 @@ button,
 .product-choice,
 .card,
 .panel,
-.kpi {
+.kpi,
+.choice {
   transition:
-    background-color 160ms ease,
-    border-color 160ms ease,
-    box-shadow 160ms ease,
-    color 160ms ease,
-    transform 160ms ease;
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
 }
 
 a:focus-visible,
 button:focus-visible,
 .button:focus-visible,
-.product-choice:focus-visible {
-  outline: 3px solid rgba(20, 87, 217, 0.28) !important;
-  outline-offset: 3px !important;
+.product-choice:focus-visible,
+.choice:focus-visible {
+  outline: 2px solid currentColor !important;
+  outline-offset: 4px !important;
 }
 
 .container,
@@ -60,58 +69,20 @@ button:focus-visible,
   width: min(1120px, 100% - 32px) !important;
 }
 
-header,
-.container > .brand,
-main.container,
-.shell {
-  position: relative;
+header {
+  border-bottom: 1px solid var(--mono-line);
+}
+
+body.product-chat header,
+body.chat-install-page header {
+  border-bottom-color: var(--mono-line-dark);
 }
 
 .brand-mark,
 .brand img,
 .product-logo {
   display: block;
-}
-
-.hero,
-.card,
-.panel,
-.kpi,
-.flow,
-.digest,
-.task-row,
-.product-choice,
-article {
-  border: 1px solid var(--page-border) !important;
-  border-radius: 8px !important;
-  background: var(--page-surface) !important;
-  box-shadow: var(--page-shadow-soft) !important;
-}
-
-.hero,
-.digest,
-.product-choice {
-  box-shadow: var(--page-shadow) !important;
-}
-
-.product-choice:hover,
-.card.featured,
-.panel:hover,
-.kpi:hover {
-  box-shadow: var(--page-shadow) !important;
-}
-
-.product-choice.chat {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(245, 248, 255, 0.9)),
-    var(--page-surface-strong) !important;
-}
-
-.product-choice.ask,
-.digest {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 248, 241, 0.9)),
-    var(--page-surface-strong) !important;
+  filter: none !important;
 }
 
 h1,
@@ -121,12 +92,13 @@ h3,
 .price,
 .kpi-value,
 .panel-stat {
-  color: var(--page-ink) !important;
+  color: inherit !important;
   letter-spacing: 0 !important;
+  text-wrap: balance;
 }
 
 h1 {
-  text-wrap: balance;
+  font-weight: 900 !important;
 }
 
 .lead,
@@ -137,58 +109,133 @@ li,
 .card li,
 .flow li,
 .task-row span,
-footer {
-  color: var(--page-muted) !important;
+footer,
+.choice p {
+  color: var(--mono-muted) !important;
+}
+
+body.product-chat .lead,
+body.product-chat .meta,
+body.product-chat .muted,
+body.product-chat li,
+body.product-chat .card p,
+body.product-chat .card li,
+body.product-chat footer,
+body.chat-install-page .lead,
+body.chat-install-page .meta,
+body.chat-install-page .muted,
+body.chat-install-page p,
+body.chat-install-page li,
+body.chat-install-page footer {
+  color: var(--mono-dark-muted) !important;
+}
+
+.hero,
+.card,
+.panel,
+.kpi,
+.flow,
+.digest,
+.task-row,
+.product-choice,
+.choice,
+article {
+  border: 1px solid var(--mono-line) !important;
+  border-radius: 0 !important;
+  background: var(--mono-white) !important;
+  box-shadow: none !important;
+}
+
+body.product-chat .hero,
+body.product-chat .card,
+body.product-chat .panel,
+body.product-chat .kpi,
+body.product-chat .flow,
+body.product-chat .terminal,
+body.product-chat .product-choice,
+body.chat-install-page .hero,
+body.chat-install-page .card,
+body.chat-install-page .panel,
+body.chat-install-page .command,
+body.chat-install-page .choice {
+  border-color: var(--mono-line-dark) !important;
+  background: var(--mono-dark-soft) !important;
+  color: var(--mono-white) !important;
+}
+
+.hero {
+  min-height: 58vh;
+}
+
+.product-choice,
+.choice {
+  min-height: 330px;
+}
+
+.product-choice:hover,
+.choice:hover,
+.card.featured,
+.panel:hover,
+.kpi:hover {
+  transform: translateY(-2px);
+  border-color: currentColor !important;
+  box-shadow: none !important;
 }
 
 .button,
 button {
-  border: 1px solid transparent !important;
-  border-radius: 8px !important;
-  background: var(--page-blue) !important;
-  color: #fff !important;
-  box-shadow: 0 8px 18px rgba(20, 87, 217, 0.15);
+  border: 1px solid var(--mono-black) !important;
+  border-radius: 0 !important;
+  background: var(--mono-black) !important;
+  color: var(--mono-white) !important;
+  box-shadow: none !important;
 }
 
 .button:hover,
 button:hover {
-  background: var(--page-blue-dark) !important;
+  background: var(--mono-white) !important;
+  color: var(--mono-black) !important;
   transform: translateY(-1px);
+}
+
+body.product-chat .button,
+body.product-chat button,
+body.chat-install-page .button,
+body.chat-install-page button {
+  border-color: var(--mono-white) !important;
+  background: var(--mono-white) !important;
+  color: var(--mono-black) !important;
+}
+
+body.product-chat .button:hover,
+body.product-chat button:hover,
+body.chat-install-page .button:hover,
+body.chat-install-page button:hover {
+  background: var(--mono-black) !important;
+  color: var(--mono-white) !important;
 }
 
 .button.secondary,
 .secondary,
 .top-link,
-.switcher a {
-  border: 1px solid var(--page-border) !important;
-  background: rgba(255, 255, 255, 0.72) !important;
-  color: var(--page-blue-dark) !important;
+.switcher a,
+.pill {
+  border: 1px solid currentColor !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: inherit !important;
   box-shadow: none !important;
-}
-
-.secondary {
-  margin-left: 0 !important;
-}
-
-.card .button,
-.flow .button {
-  margin-top: 4px;
 }
 
 .button + .button {
   margin-left: 8px;
 }
 
-.button.secondary:hover,
-.secondary:hover,
-.top-link:hover {
-  background: #eef3ff !important;
-}
-
 .switcher {
-  border-color: var(--page-border) !important;
-  background: rgba(255, 255, 255, 0.7) !important;
-  box-shadow: var(--page-shadow-soft);
+  border: 1px solid currentColor !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 .switcher a {
@@ -196,32 +243,42 @@ button:hover {
 }
 
 .switcher a.active {
-  background: var(--page-ink) !important;
-  color: #fff !important;
+  background: var(--mono-black) !important;
+  color: var(--mono-white) !important;
+}
+
+body.product-chat .switcher a.active,
+body.chat-install-page .switcher a.active {
+  background: var(--mono-white) !important;
+  color: var(--mono-black) !important;
 }
 
 .product-tag,
 .product-label,
 .label,
 .eyebrow {
-  letter-spacing: 0.06em !important;
+  letter-spacing: 0.08em !important;
 }
 
+.eyebrow,
 .product-tag,
 .product-label,
 .label {
-  border-radius: 999px !important;
-  border-color: var(--page-border) !important;
-  background: var(--page-soft) !important;
-  color: var(--page-ink) !important;
+  color: inherit !important;
 }
 
 .terminal,
 .command {
-  border: 1px solid #242936 !important;
-  border-radius: 8px !important;
-  background: #101521 !important;
-  box-shadow: var(--page-shadow-soft);
+  border: 1px solid currentColor !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: inherit !important;
+  box-shadow: none !important;
+}
+
+pre,
+code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace !important;
 }
 
 table,
@@ -230,18 +287,18 @@ table,
   border-spacing: 0;
   width: 100%;
   overflow: hidden;
-  border: 1px solid var(--page-border);
-  border-radius: 8px;
+  border: 1px solid currentColor;
+  border-radius: 0;
 }
 
 th,
 td {
-  border-color: var(--page-border) !important;
+  border-color: var(--mono-line) !important;
 }
 
 th {
-  background: #f3f4f0 !important;
-  color: var(--page-ink);
+  background: var(--mono-faint) !important;
+  color: var(--mono-ink);
 }
 
 td,
@@ -263,13 +320,94 @@ article li {
 }
 
 footer {
-  border-top: 1px solid var(--page-border);
+  border-top: 1px solid currentColor;
   padding-top: 18px;
 }
 
-footer a {
-  color: var(--page-blue-dark) !important;
-  font-weight: 700;
+footer a,
+nav a {
+  color: inherit !important;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.home-page .shell {
+  min-height: 100vh;
+  width: 100% !important;
+  padding: 0;
+  grid-template-rows: auto 1fr auto;
+}
+
+.home-page header,
+.home-page footer {
+  width: min(1120px, 100% - 32px);
+  margin: 0 auto;
+}
+
+.home-page header {
+  justify-content: flex-start;
+  padding: 22px 0;
+}
+
+.home-page main {
+  align-content: stretch;
+}
+
+.home-page h1 {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.home-page .product-grid {
+  min-height: calc(100vh - 170px);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+}
+
+.home-page .product-choice {
+  border-left: 0 !important;
+  border-right: 0 !important;
+  border-bottom: 0 !important;
+  padding: clamp(24px, 5vw, 72px);
+  display: grid;
+  align-content: space-between;
+}
+
+.home-page .product-choice.chat {
+  background: var(--mono-black) !important;
+  color: var(--mono-white) !important;
+  border-color: var(--mono-black) !important;
+}
+
+.home-page .product-choice.ask {
+  background: var(--mono-white) !important;
+  color: var(--mono-black) !important;
+}
+
+.home-page .product-logo {
+  width: min(260px, 70%);
+}
+
+.home-page .chat .product-logo {
+  width: min(220px, 64%);
+}
+
+.home-page h2 {
+  font-size: clamp(3rem, 8vw, 7.8rem) !important;
+  line-height: 0.9;
+}
+
+.home-page p {
+  max-width: 30ch;
+  font-size: clamp(1rem, 1.6vw, 1.25rem);
+  line-height: 1.35;
+}
+
+.home-page .chat p {
+  color: var(--mono-dark-muted) !important;
 }
 
 @media (max-width: 760px) {
@@ -286,6 +424,24 @@ footer a {
   .button + .button {
     margin-left: 0;
     margin-top: 8px;
+  }
+
+  .home-page .shell {
+    width: 100% !important;
+  }
+
+  .home-page header,
+  .home-page footer {
+    width: min(100% - 24px, 560px);
+  }
+
+  .home-page .product-grid {
+    min-height: auto;
+    grid-template-columns: 1fr;
+  }
+
+  .home-page .product-choice {
+    min-height: 44vh;
   }
 
   table,
