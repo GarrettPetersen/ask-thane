@@ -26,6 +26,7 @@ import type { ParsedSlackConversation, ParsedSlackExport, SlackExportMessage, Sl
 import { previewSlackExport } from "./slack-import.js";
 
 const defaultStorePath = join(homedir(), ".thane", "store.json");
+const reservedHandles = new Set(["thane"]);
 
 export function resolveStorePath(): string {
   if (process.env.THANE_STORE_PATH) {
@@ -52,6 +53,57 @@ function normalizeEmail(email: string): string {
 
 function handleFromAccountId(accountId: string): string {
   return `user-${accountId.replace(/^acct_/, "").replace(/[^a-z0-9]+/gi, "").slice(0, 8).toLowerCase() || "member"}`;
+}
+
+function handleSeedFromDisplayName(displayName: string | undefined): string | undefined {
+  const token = displayName
+    ?.toLowerCase()
+    .match(/[a-z0-9]+/g)
+    ?.filter((candidate) => !["mr", "mrs", "ms", "dr", "phd"].includes(candidate))
+    .find((candidate) => candidate.length >= 2);
+  return token ? normalizeHandle(token) : undefined;
+}
+
+function handleSeedForAccount(account: ThaneAccount): string {
+  return handleSeedFromDisplayName(account.displayName) || handleFromAccountId(account.id);
+}
+
+function uniqueWorkspaceHandle(
+  users: ThaneUser[],
+  workspaceId: string,
+  desiredHandle: string,
+  excludeUserId?: string
+): string {
+  const desired = normalizeHandle(desiredHandle) || "member";
+  const seed = reservedHandles.has(desired) ? `${desired}-user` : desired;
+  const taken = new Set(
+    users
+      .filter((user) => user.workspaceId === workspaceId && user.id !== excludeUserId)
+      .map((user) => normalizeHandle(user.handle))
+      .filter(Boolean)
+  );
+  for (const handle of reservedHandles) {
+    taken.add(handle);
+  }
+  if (!taken.has(seed)) {
+    return seed;
+  }
+  const base = seed.slice(0, 28).replace(/[-._]+$/g, "") || "member";
+  for (let suffix = 2; suffix < 10_000; suffix += 1) {
+    const candidate = `${base}-${suffix}`.slice(0, 32);
+    if (!taken.has(candidate)) {
+      return candidate;
+    }
+  }
+  return `${base}-${Math.random().toString(36).slice(2, 6)}`.slice(0, 32);
+}
+
+function isGeneratedAccountHandle(handle: string | undefined, accountId: string | undefined): boolean {
+  if (!accountId || !handle) {
+    return false;
+  }
+  const normalized = normalizeHandle(handle);
+  return normalized === handleFromAccountId(accountId) || /^user-[a-z0-9]{1,8}$/.test(normalized);
 }
 
 function displayNameFromAccountId(accountId: string): string {
@@ -265,6 +317,12 @@ function normalizeChannelName(name: string): string {
 
 function normalizeHandle(handle: string): string {
   return handle.trim().replace(/^@/, "").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function assertUserHandleAllowed(handle: string): void {
+  if (reservedHandles.has(handle)) {
+    throw new Error("@thane is reserved for Ask Thane.");
+  }
 }
 
 function extractMentions(text: string): string[] {
@@ -523,6 +581,9 @@ export class ThaneStore {
       throw new Error("Current workspace user is missing. Run `thane sync` or `thane workspaces` to refresh.");
     }
     user.displayName = cleaned.slice(0, 120);
+    if (account && isGeneratedAccountHandle(user.handle, account.id)) {
+      user.handle = uniqueWorkspaceHandle(this.data.users, workspaceId, handleSeedFromDisplayName(cleaned) || handleFromAccountId(account.id), user.id);
+    }
     await saveData(this.data);
     return { user };
   }
@@ -532,6 +593,7 @@ export class ThaneStore {
     if (!cleaned) {
       throw new Error("Handle must contain at least one character.");
     }
+    assertUserHandleAllowed(cleaned);
     const account = this.currentAccount;
     const user =
       (account && this.data.users.find((candidate) => candidate.workspaceId === workspaceId && candidate.accountId === account.id)) ||
@@ -1137,7 +1199,7 @@ export class ThaneStore {
         id: id("usr"),
         workspaceId,
         accountId: account.id,
-        handle: handleFromAccountId(account.id),
+        handle: uniqueWorkspaceHandle(this.data.users, workspaceId, handleSeedForAccount(account)),
         displayName: account.displayName || displayNameFromAccountId(account.id),
         email: account.email
       };
@@ -1308,7 +1370,9 @@ export class ThaneStore {
     const member = this.ensureAccountMembership(account, this.activeWorkspace.id, role);
     const user = this.data.users.find((candidate) => candidate.id === member.userId);
     if (user && handle) {
-      user.handle = normalizeHandle(handle);
+      const cleanedHandle = normalizeHandle(handle);
+      assertUserHandleAllowed(cleanedHandle);
+      user.handle = cleanedHandle;
     }
     await saveData(this.data);
     return member;
@@ -1363,6 +1427,7 @@ export class ThaneStore {
     if (!normalized) {
       throw new Error("User handle must contain at least one character.");
     }
+    assertUserHandleAllowed(normalized);
     const existing = this.findUser(normalized);
     if (existing) {
       return existing;

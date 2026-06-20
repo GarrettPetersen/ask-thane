@@ -270,6 +270,8 @@ interface NativeAgentRefs {
 type ThaneCliConversationKind = "channel" | "dm";
 type ThaneCliConversationVisibility = "public" | "private";
 
+const RESERVED_THANE_CLI_HANDLES = new Set(["thane"]);
+
 function normalizeEmail(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -341,6 +343,29 @@ function normalizeHandle(value: unknown): string | null {
   return handle ? handle.slice(0, 32) : null;
 }
 
+function isReservedThaneCliHandle(handle: string): boolean {
+  return RESERVED_THANE_CLI_HANDLES.has(handle.toLowerCase());
+}
+
+function handleSeedFromDisplayName(value: string | null | undefined): string | null {
+  const tokens = String(value ?? "")
+    .toLowerCase()
+    .match(/[a-z0-9]+/g)
+    ?.filter((token) => !["mr", "mrs", "ms", "dr", "phd"].includes(token));
+  const token = tokens?.find((candidate) => candidate.length >= 2);
+  return token ? normalizeHandle(token) : null;
+}
+
+function handleSeedFromEmail(email: string): string | null {
+  const localPart = email.split("@")[0]?.trim().toLowerCase() || "";
+  const token = localPart.split(/[._+-]+/).find((candidate) => candidate.length >= 2) || localPart;
+  return normalizeHandle(token);
+}
+
+function generatedHandleSeed(input: { email: string; displayName?: string | null; accountId: string }): string {
+  return handleSeedFromDisplayName(input.displayName) || handleSeedFromEmail(input.email) || publicHandleForAccountId(input.accountId);
+}
+
 function publicHandleForAccountId(accountId: string): string {
   return `user-${accountId.replace(/^acct_/, "").slice(0, 8) || "member"}`;
 }
@@ -393,6 +418,44 @@ function publicDisplayNameForMember(member: {
     return displayName.slice(0, 120);
   }
   return fallbackDisplayNameForAccountId(member.account_id);
+}
+
+async function uniqueThaneCliHandle(
+  env: Env,
+  input: { workspaceId: string; desiredHandle: string; excludeEmail?: string | null; allowReserved?: boolean }
+): Promise<string> {
+  const desired = normalizeHandle(input.desiredHandle) || "member";
+  const seed = input.allowReserved || !isReservedThaneCliHandle(desired) ? desired : `${desired}-user`;
+  const existingQuery = env.DB
+    .prepare("SELECT account_id, email, handle FROM thane_cli_workspace_members WHERE workspace_id = ?")
+    .bind(input.workspaceId);
+  const existingRows =
+    typeof existingQuery.all === "function"
+      ? await existingQuery.all<{ account_id: string; email: string; handle: string | null }>()
+      : { results: [] };
+  const taken = new Set<string>();
+  if (!input.allowReserved) {
+    for (const handle of RESERVED_THANE_CLI_HANDLES) {
+      taken.add(handle);
+    }
+  }
+  for (const row of existingRows.results ?? []) {
+    if (input.excludeEmail && row.email === input.excludeEmail) {
+      continue;
+    }
+    taken.add(publicHandleForMember(row));
+  }
+  if (!taken.has(seed)) {
+    return seed;
+  }
+  const base = seed.slice(0, 28).replace(/[-._]+$/g, "") || "member";
+  for (let suffix = 2; suffix < 10_000; suffix += 1) {
+    const candidate = `${base}-${suffix}`.slice(0, 32);
+    if (!taken.has(candidate)) {
+      return candidate;
+    }
+  }
+  return `${base}-${Math.random().toString(36).slice(2, 6)}`.slice(0, 32);
 }
 
 function normalizeChatText(value: unknown): string | null {
@@ -1298,10 +1361,18 @@ async function ensureThaneCliMember(env: Env, input: {
   role: "owner" | "admin" | "member";
 }): Promise<{ id: string; accountId: string; email: string; handle: string; displayName: string; role: string }> {
   const accountId = await accountIdForEmail(input.email);
-  const handle = publicHandleForAccountId(accountId);
+  const generatedAccountHandle = publicHandleForAccountId(accountId);
   const legacyHandle = normalizeHandleFromEmail(input.email);
   const legacyDisplayName = input.email.split("@")[0]?.trim() || legacyHandle;
   const displayName = input.displayName?.trim() || fallbackDisplayNameForAccountId(accountId);
+  const handle =
+    input.email === "thane@askthane.com"
+      ? "thane"
+      : await uniqueThaneCliHandle(env, {
+          workspaceId: input.workspaceId,
+          desiredHandle: generatedHandleSeed({ email: input.email, displayName: input.displayName ?? null, accountId }),
+          excludeEmail: input.email
+        });
   const now = nowIso();
   const existingMember = await env.DB
     .prepare("SELECT id, joined_at FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = ? LIMIT 1")
@@ -1320,6 +1391,7 @@ async function ensureThaneCliMember(env: Env, input: {
          END,
          handle = CASE
            WHEN thane_cli_workspace_members.handle = ? THEN excluded.handle
+           WHEN thane_cli_workspace_members.handle = ? THEN excluded.handle
            ELSE COALESCE(NULLIF(thane_cli_workspace_members.handle, ''), excluded.handle)
          END,
          role = CASE
@@ -1328,7 +1400,20 @@ async function ensureThaneCliMember(env: Env, input: {
          END,
          updated_at = excluded.updated_at`
     )
-    .bind(makeId("tcm"), input.workspaceId, accountId, input.email, displayName, handle, input.role, now, now, legacyDisplayName, legacyHandle)
+    .bind(
+      makeId("tcm"),
+      input.workspaceId,
+      accountId,
+      input.email,
+      displayName,
+      handle,
+      input.role,
+      now,
+      now,
+      legacyDisplayName,
+      legacyHandle,
+      generatedAccountHandle
+    )
     .run();
   const row = await env.DB
     .prepare(
@@ -2321,17 +2406,33 @@ async function handleThaneCliProfileUpdate(request: Request, env: Env): Promise<
       return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
     }
     if (handle) {
-      const existingRows = await env.DB
-        .prepare(
-          `SELECT id, account_id, email, handle
-           FROM thane_cli_workspace_members
-           WHERE workspace_id = ? AND email != ?`
-        )
-        .bind(workspaceId, email)
-        .all<{ id: string; account_id: string; email: string; handle: string | null }>();
-      const existing = (existingRows.results ?? []).find((candidate) => publicHandleForMember(candidate) === handle);
-      if (existing) {
+      if (isReservedThaneCliHandle(handle) && email !== "thane@askthane.com") {
+        return Response.json({ ok: false, error: "reserved_handle" }, { status: 409 });
+      }
+      const uniqueHandle = await uniqueThaneCliHandle(env, {
+        workspaceId,
+        desiredHandle: handle,
+        excludeEmail: email,
+        allowReserved: email === "thane@askthane.com"
+      });
+      if (uniqueHandle !== handle) {
         return Response.json({ ok: false, error: "handle_taken" }, { status: 409 });
+      }
+    }
+    let workspaceHandle = handle;
+    if (!workspaceHandle && displayName) {
+      const memberHandle = normalizeHandle(member.handle);
+      const generatedAccountHandle = publicHandleForAccountId(member.account_id);
+      const shouldRefreshGeneratedHandle =
+        !memberHandle ||
+        memberHandle === generatedAccountHandle ||
+        isLegacyEmailDerivedIdentity(member.email, memberHandle);
+      if (shouldRefreshGeneratedHandle) {
+        workspaceHandle = await uniqueThaneCliHandle(env, {
+          workspaceId,
+          desiredHandle: generatedHandleSeed({ email: member.email, displayName, accountId: member.account_id }),
+          excludeEmail: email
+        });
       }
     }
     const assignments: string[] = [];
@@ -2340,9 +2441,9 @@ async function handleThaneCliProfileUpdate(request: Request, env: Env): Promise<
       assignments.push("display_name = ?");
       values.push(displayName);
     }
-    if (handle) {
+    if (workspaceHandle) {
       assignments.push("handle = ?");
-      values.push(handle);
+      values.push(workspaceHandle);
     }
     assignments.push("updated_at = ?");
     values.push(nowIso(), workspaceId, email);
@@ -2356,7 +2457,7 @@ async function handleThaneCliProfileUpdate(request: Request, env: Env): Promise<
       workspaceId,
       account: await buildAccount(env, { email }),
       ...(displayName ? { displayName, workspaceDisplayName: displayName } : {}),
-      ...(handle ? { handle, workspaceHandle: handle } : {})
+      ...(workspaceHandle ? { handle: workspaceHandle, workspaceHandle } : {})
     });
   }
   if (!displayName) {
@@ -3327,7 +3428,7 @@ async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<
   const askThaneReply: { messageId?: string; text?: string; reason?: string } =
     nativeRuntimeReply
       ? nativeRuntimeReply
-      : usedSharedNativeRuntime
+      : usedSharedNativeRuntime && !mentionsAskThane
         ? { reason: "handled_by_shared_runtime" }
         : source === "chat"
       ? await maybeRespondWithNativeAskThane(env, {
@@ -3360,6 +3461,21 @@ async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<
       reason: error instanceof Error ? error.message : String(error)
     });
   });
+  if (askThaneReply.messageId) {
+    await broadcastThaneChatEvent(env, {
+      type: "message_created",
+      workspaceId,
+      channelId: channel.id,
+      messageId: askThaneReply.messageId,
+      occurredAt: nowIso()
+    }).catch((error) => {
+      console.warn("thane_chat_ask_thane_reply_broadcast_failed", {
+        workspaceId,
+        channelId: channel.id,
+        reason: error instanceof Error ? error.message : String(error)
+      });
+    });
+  }
   return Response.json({
     ok: true,
     message: {

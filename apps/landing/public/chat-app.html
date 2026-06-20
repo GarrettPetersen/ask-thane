@@ -370,6 +370,34 @@
       .composer-wrap .composer {
         border-top: 0;
       }
+      .mention-suggestions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 8px 12px 0 34px;
+        border-top: 1px solid rgba(122, 255, 159, 0.08);
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .mention-suggestions button {
+        min-height: 28px;
+        padding: 0 8px;
+        border-color: rgba(122, 255, 159, 0.2);
+      }
+      .mention-suggestions.hidden {
+        display: none;
+      }
+      .mention-suggestions button.active {
+        color: var(--bg);
+        background: var(--green);
+        border-color: var(--green);
+      }
+      .mention-suggestions button.active .mention-name {
+        color: rgba(10, 12, 11, 0.72);
+      }
+      .mention-name {
+        color: var(--muted);
+      }
       .composer textarea {
         display: block;
         min-height: 44px;
@@ -420,6 +448,15 @@
       }
       .login-card .brand { border-bottom: 1px solid var(--line); }
       .login-form { padding: 18px; display: grid; gap: 12px; }
+      .setup-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      .setup-grid .row:first-child,
+      .setup-grid .row:last-child {
+        grid-column: 1 / -1;
+      }
       .row { display: grid; gap: 7px; }
       label { color: var(--muted); font-size: 12px; }
       .error { color: var(--danger); min-height: 18px; }
@@ -554,6 +591,8 @@
         .rail, .main { height: auto; }
         .main { min-height: 72vh; }
         .brand { padding: 14px; }
+        .setup-grid { grid-template-columns: 1fr; }
+        .mention-suggestions { padding-left: 12px; }
       }
     </style>
   </head>
@@ -614,9 +653,11 @@
         workspaceProfileDraft: null,
         workspaceHandleDraft: null,
         accountProfileDraft: null,
-        pendingHandle: "",
+        setupRequired: false,
+        setupDraft: { displayName: "", handle: "", workspaceName: "" },
         searchQuery: "",
         draftText: "",
+        mentionIndex: 0,
         sidebarCollapsed: localStorage.getItem("thane.web.sidebarCollapsed") === "true",
         workspaceMenuOpen: localStorage.getItem("thane.web.workspaceMenuOpen") === "true",
         channelMenuOpen: localStorage.getItem("thane.web.channelMenuOpen") === "true",
@@ -713,14 +754,19 @@
         return true;
       }
 
-      async function finishSignIn(account) {
+      async function finishSignIn(account, accountState = null) {
         saveSession(account);
+        state.setupRequired = Boolean(accountState?.isNewAccount);
+        state.setupDraft = {
+          displayName: account?.displayName || "",
+          handle: "",
+          workspaceName: ""
+        };
         if (state.inviteToken) {
           await acceptPendingInvite();
         } else {
           await sync();
         }
-        await applyPendingHandle();
       }
 
       function esc(value) {
@@ -782,6 +828,62 @@
         const channel = currentChannel();
         const ids = new Set(channel?.memberIds || []);
         return (snap.users || []).filter((user) => ids.has(user.id));
+      }
+
+      function activeMentionToken(text) {
+        const match = String(text || "").match(/(^|\s)@([a-zA-Z0-9._-]*)$/);
+        if (!match || match.index === undefined) return null;
+        return {
+          start: match.index + (match[1]?.length || 0),
+          prefix: String(match[2] || "").toLowerCase()
+        };
+      }
+
+      function mentionCandidates() {
+        const token = activeMentionToken(state.draftText);
+        if (!token) return [];
+        const seen = new Set();
+        return (currentSnapshot().users || [])
+          .filter((user) => {
+            const handle = String(user.handle || "").toLowerCase();
+            if (!handle || seen.has(handle)) return false;
+            const label = `${user.displayName || ""} ${handle}`.toLowerCase();
+            const matches = handle.startsWith(token.prefix) || label.includes(token.prefix);
+            if (matches) seen.add(handle);
+            return matches;
+          })
+          .slice(0, 6);
+      }
+
+      function mentionSuggestionHtml() {
+        const users = mentionCandidates();
+        if (!users.length) return "";
+        if (state.mentionIndex >= users.length) state.mentionIndex = 0;
+        return users.map((user, index) => `<button type="button" class="${index === state.mentionIndex ? "active" : ""}" onclick="insertMention(${jsString(user.handle)})">@${esc(user.handle)} <span class="mention-name">${esc(user.displayName || "")}</span></button>`).join("");
+      }
+
+      function renderMentionSuggestions() {
+        const container = document.querySelector("[data-mention-suggestions]");
+        if (!(container instanceof HTMLElement)) return;
+        const html = mentionSuggestionHtml();
+        container.innerHTML = html;
+        container.classList.toggle("hidden", !html);
+      }
+
+      function insertMention(handle) {
+        const token = activeMentionToken(state.draftText);
+        if (!token || !handle) return;
+        state.draftText = `${state.draftText.slice(0, token.start)}@${handle} `;
+        state.mentionIndex = 0;
+        render();
+        requestAnimationFrame(() => {
+          const textarea = document.querySelector(".composer textarea");
+          if (textarea instanceof HTMLTextAreaElement) {
+            textarea.focus();
+            textarea.selectionStart = textarea.value.length;
+            textarea.selectionEnd = textarea.value.length;
+          }
+        });
       }
 
       function renderMemberRows(users, options = {}) {
@@ -941,9 +1043,8 @@
         render();
       }
 
-      async function requestLoginCodeForEmail(email, handle = "") {
+      async function requestLoginCodeForEmail(email) {
         state.email = String(email || "").trim();
-        state.pendingHandle = String(handle || "").trim().replace(/^@/, "");
         if (!state.email) {
           return;
         }
@@ -966,7 +1067,7 @@
       async function startLogin(event) {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
-        await requestLoginCodeForEmail(form.get("email"), form.get("handle"));
+        await requestLoginCodeForEmail(form.get("email"));
       }
 
       async function verifyLogin(event) {
@@ -984,7 +1085,7 @@
             state.mfaChallengeToken = body.mfaChallengeToken;
             state.status = "Enter your authenticator code.";
           } else {
-            await finishSignIn(body.account);
+            await finishSignIn(body.account, body.accountState);
           }
         } catch (error) {
           state.error = error.message;
@@ -1003,7 +1104,7 @@
             method: "POST",
             body: JSON.stringify({ challengeToken: state.mfaChallengeToken, code })
           });
-          await finishSignIn(body.account);
+          await finishSignIn(body.account, body.accountState);
         } catch (error) {
           state.error = error.message;
         } finally {
@@ -1183,6 +1284,35 @@
 
       function updateDraft(value) {
         state.draftText = value;
+        state.mentionIndex = 0;
+        renderMentionSuggestions();
+      }
+
+      function handleComposerKeydown(event) {
+        const users = mentionCandidates();
+        if (users.length) {
+          if (event.key === "Tab" || event.key === "Enter") {
+            event.preventDefault();
+            insertMention(users[state.mentionIndex]?.handle || users[0].handle);
+            return;
+          }
+          if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+            event.preventDefault();
+            state.mentionIndex = (state.mentionIndex + 1) % users.length;
+            renderMentionSuggestions();
+            return;
+          }
+          if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+            event.preventDefault();
+            state.mentionIndex = (state.mentionIndex + users.length - 1) % users.length;
+            renderMentionSuggestions();
+            return;
+          }
+        }
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          event.currentTarget.form?.requestSubmit();
+        }
       }
 
       function updateSearch(value) {
@@ -1290,6 +1420,79 @@
         state.status = `Created workspace ${body.workspace?.slug || rawName}`;
         await sync();
         render();
+      }
+
+      function updateSetupDraft(field, value) {
+        state.setupDraft = { ...state.setupDraft, [field]: value };
+      }
+
+      function needsSetup() {
+        const workspaceCount = state.snapshot?.workspaces?.length ?? 0;
+        return state.setupRequired || workspaceCount === 0;
+      }
+
+      async function completeSetup(event) {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const displayName = String(form.get("displayName") || "").trim();
+        const handle = String(form.get("handle") || "").trim().replace(/^@/, "");
+        const workspaceName = String(form.get("workspaceName") || "").trim();
+        const needsWorkspace = (state.snapshot?.workspaces?.length ?? 0) === 0;
+        if (!displayName) {
+          state.error = "Name is required.";
+          render();
+          return;
+        }
+        if (needsWorkspace && !workspaceName) {
+          state.error = "Workspace name is required.";
+          render();
+          return;
+        }
+        state.busy = true;
+        state.error = "";
+        render();
+        try {
+          const accountProfile = await api("/v1/thane-cli/profile", {
+            method: "POST",
+            body: JSON.stringify({ displayName, scope: "account" })
+          });
+          saveSession({ ...state.session, ...(accountProfile.account || {}), displayName: accountProfile.accountDisplayName || accountProfile.displayName || displayName });
+          if (needsWorkspace) {
+            const body = await api("/v1/thane-cli/workspaces", {
+              method: "POST",
+              body: JSON.stringify({ workspaceName })
+            });
+            state.activeWorkspaceId = body.workspace?.id || state.activeWorkspaceId;
+            state.activeChannelId = "";
+            state.replyToId = "";
+            rememberAccountSelection();
+            await sync();
+          }
+          if (state.activeWorkspaceId) {
+            const workspaceProfile = await api("/v1/thane-cli/profile", {
+              method: "POST",
+              body: JSON.stringify({ displayName, workspaceId: state.activeWorkspaceId, scope: "workspace" })
+            });
+            saveSession({ ...state.session, ...(workspaceProfile.account || {}) });
+            if (workspaceProfile.workspaceHandle) {
+              state.workspaceHandleDraft = workspaceProfile.workspaceHandle;
+            }
+            if (handle) {
+              await updateWorkspaceHandleValue(handle);
+            } else {
+              await sync();
+            }
+          }
+          state.setupRequired = false;
+          state.setupDraft = { displayName: "", handle: "", workspaceName: "" };
+          state.status = "Setup complete.";
+          await sync();
+        } catch (error) {
+          state.error = error.message;
+        } finally {
+          state.busy = false;
+          render();
+        }
       }
 
       async function leaveWorkspace() {
@@ -1568,17 +1771,6 @@
         state.error = "";
         await sync();
         return body;
-      }
-
-      async function applyPendingHandle() {
-        const handle = state.pendingHandle;
-        if (!handle || !state.session?.authToken) return;
-        try {
-          await updateWorkspaceHandleValue(handle);
-          state.pendingHandle = "";
-        } catch (error) {
-          state.error = error.message;
-        }
       }
 
       async function updateWorkspaceHandle(event) {
@@ -1948,11 +2140,43 @@
                   <label>${codeForm ? (state.authStep === "mfa" ? "Authenticator code" : "Email code") : "Email"}</label>
                   <input name="${codeForm ? "code" : "email"}" autocomplete="${codeForm ? "one-time-code" : "email"}" value="${codeForm ? "" : esc(state.email)}" required ${state.busy ? "disabled" : ""} />
                 </div>
-                ${codeForm ? "" : `<div class="row">
-                  <label>Handle</label>
-                  <input name="handle" autocomplete="username" value="${esc(state.pendingHandle)}" placeholder="optional, shown as @handle" ${state.busy ? "disabled" : ""} />
-                </div>`}
                 <button ${state.busy ? "disabled" : ""}>${codeForm ? "Verify" : "Send code"}</button>
+                <p class="error small">${esc(state.error)}</p>
+              </form>
+            </section>
+          </main>`;
+      }
+
+      function renderSetup() {
+        const workspaceCount = state.snapshot?.workspaces?.length ?? 0;
+        const needsWorkspace = workspaceCount === 0;
+        root.innerHTML = `
+          <main class="login">
+            <section class="login-card">
+              <div class="brand">
+                <div class="sig">╭─ THANE CHAT ─╮\n│              │\n╰─ SETUP      ─╯</div>
+                <div class="title"><h1>${needsWorkspace ? "Create your workspace" : "Set up your profile"}</h1><span class="state">setup</span></div>
+                <p class="muted small">${needsWorkspace ? "Name yourself and create the first workspace." : "Name yourself for this workspace."}</p>
+              </div>
+              <form class="login-form" onsubmit="completeSetup(event)">
+                <div class="setup-grid">
+                  <div class="row">
+                    <label>Name</label>
+                    <input name="displayName" autocomplete="name" value="${esc(state.setupDraft.displayName)}" oninput="updateSetupDraft('displayName', this.value)" placeholder="Garrett Petersen" required ${state.busy ? "disabled" : ""} />
+                  </div>
+                  <div class="row">
+                    <label>Custom handle</label>
+                    <input name="handle" autocomplete="username" value="${esc(state.setupDraft.handle)}" oninput="updateSetupDraft('handle', this.value)" placeholder="optional" ${state.busy ? "disabled" : ""} />
+                  </div>
+                  ${needsWorkspace ? `<div class="row">
+                    <label>Workspace name</label>
+                    <input name="workspaceName" value="${esc(state.setupDraft.workspaceName)}" oninput="updateSetupDraft('workspaceName', this.value)" placeholder="Acme Team" required ${state.busy ? "disabled" : ""} />
+                  </div>` : ""}
+                  <div class="row">
+                    <button ${state.busy ? "disabled" : ""}>Continue</button>
+                  </div>
+                </div>
+                <p class="muted small">If you leave handle blank, Thane creates a unique @handle from your name.</p>
                 <p class="error small">${esc(state.error)}</p>
               </form>
             </section>
@@ -2008,6 +2232,7 @@
               .filter((message) => message.text.toLowerCase().includes(searchQuery))
               .slice(-12)
           : [];
+        const mentionUsersHtml = mentionSuggestionHtml();
         const repliesByRoot = new Map();
         for (const message of messages) {
           if (!message.threadRootId) continue;
@@ -2063,9 +2288,10 @@
               <div class="statusbar"><span><strong>${channel?.kind === "dm" ? "@" : "#"}${esc(channel?.name || "general")}</strong> Up messages. Left channels. Right messages.</span><span>${messages.length} msg${messages.length === 1 ? "" : "s"} · ${state.realtimeStatus === "live" ? "live" : "sync 30s"}</span></div>
               <div class="composer-wrap">
                 ${replyTarget ? `<div class="reply-target"><span>replying to ${esc(userDisplayLabel(users.get(replyTarget.authorId)))}: ${esc(replyTarget.text.slice(0, 80))}</span><button onclick="state.replyToId=''; render()">cancel</button></div>` : ""}
+                <div class="mention-suggestions ${mentionUsersHtml ? "" : "hidden"}" data-mention-suggestions>${mentionUsersHtml}</div>
                 <form class="composer" onsubmit="sendMessage(event)">
                   <span class="prompt-symbol">${replyTarget ? "reply>" : ">"}</span>
-                  <textarea name="text" oninput="updateDraft(this.value)" placeholder="${replyTarget ? "Type a reply" : `Type a message for #${esc(channel?.name || "general")}`}">${esc(state.draftText)}</textarea>
+                  <textarea name="text" oninput="updateDraft(this.value)" onkeydown="handleComposerKeydown(event)" placeholder="${replyTarget ? "Type a reply" : `Type a message for #${esc(channel?.name || "general")}`}">${esc(state.draftText)}</textarea>
                   <button>${replyTarget ? "reply" : "send"}</button>
                 </form>
               </div>
@@ -2117,6 +2343,7 @@
 
       function render() {
         if (!state.session?.authToken) renderLogin();
+        else if (needsSetup()) renderSetup();
         else renderApp();
       }
 
@@ -2126,6 +2353,8 @@
       window.chooseWorkspace = chooseWorkspace;
       window.sendMessage = sendMessage;
       window.updateDraft = updateDraft;
+      window.handleComposerKeydown = handleComposerKeydown;
+      window.insertMention = insertMention;
       window.updateSearch = updateSearch;
       window.submitSearch = submitSearch;
       window.openSearchResult = openSearchResult;
@@ -2141,6 +2370,8 @@
       window.cancelLongPress = cancelLongPress;
       window.markTouchMoved = markTouchMoved;
       window.createWorkspace = createWorkspace;
+      window.updateSetupDraft = updateSetupDraft;
+      window.completeSetup = completeSetup;
       window.createChannel = createChannel;
       window.invite = invite;
       window.createInviteLink = createInviteLink;

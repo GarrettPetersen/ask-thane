@@ -52,10 +52,20 @@ describe("chat profile action parity", () => {
     expect(chatAppHtml).toContain("Workspace display name");
     expect(chatAppHtml).toContain("updateWorkspaceHandle");
     expect(chatAppHtml).toContain("Workspace handle");
-    expect(chatAppHtml).toContain("pendingHandle");
+    expect(chatAppHtml).toContain("If you leave handle blank, Thane creates a unique @handle from your name.");
+    expect(chatAppHtml).not.toContain("pendingHandle");
     expect(chatAppHtml).toContain("updateAccountDisplayName");
     expect(chatAppHtml).toContain('scope: "account"');
     expect(chatAppHtml).toContain("Account default name");
+  });
+
+  it("surfaces mention autocomplete in web and terminal chat", () => {
+    expect(chatAppHtml).toContain("function mentionCandidates");
+    expect(chatAppHtml).toContain("mention-suggestions");
+    expect(chatAppHtml).toContain("insertMention");
+
+    expect(terminalChatSource).toContain("trailingMention");
+    expect(terminalChatSource).toContain("Tab completes:");
   });
 
   it("keeps admin member email access visible across web, terminal, and CLI", () => {

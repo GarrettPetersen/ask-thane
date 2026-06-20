@@ -642,6 +642,50 @@ describe("@ask-thane/api-worker", () => {
     expect(update?.args).toEqual(["dr-dad", expect.any(String), "wsp_1", "garrett@example.com"]);
   });
 
+  it("rejects the reserved Thane Chat handle for normal members", async () => {
+    const noRateLimit = vi.fn(async () => null);
+    const member = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("WHERE workspace_id = ? AND email = ?")) {
+        return {
+          id: "member_1",
+          account_id: "acct_1",
+          email: "garrett@example.com",
+          display_name: "Garrett",
+          handle: "garrett",
+          role: "owner"
+        };
+      }
+      return null;
+    });
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn(() => {
+        if (sql.includes("FROM thane_cli_rate_limits")) {
+          return { first: noRateLimit, run };
+        }
+        return { first: member.bind({ sql }), run };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/profile", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("garrett@example.com")}` },
+        body: JSON.stringify({ handle: "thane", workspaceId: "wsp_1", scope: "workspace" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toMatchObject({ ok: false, error: "reserved_handle" });
+  });
+
   it("updates the account default display name without rewriting workspace memberships", async () => {
     const calls: Array<{ sql: string; args: unknown[] }> = [];
     const noRateLimit = vi.fn(async () => null);
@@ -1034,6 +1078,8 @@ describe("@ask-thane/api-worker", () => {
     const workspaceInsert = calls.find((call) => call.sql.includes("INSERT INTO thane_cli_workspaces"));
     expect(workspaceInsert?.args[1]).toBe("acme-team");
     expect(workspaceInsert?.args[2]).toBe("Acme Team");
+    const memberInsert = calls.find((call) => call.sql.includes("INSERT INTO thane_cli_workspace_members"));
+    expect(memberInsert?.args[5]).toBe("owner");
   });
 
   it("creates Thane CLI workspace invite links", async () => {

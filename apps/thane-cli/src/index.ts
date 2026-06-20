@@ -838,12 +838,6 @@ async function main(): Promise<void> {
             await setHostedAccountDisplayName(store, promptedDisplayName);
           }
         }
-        if (!handle && store.hasActiveWorkspace()) {
-          const promptedHandle = await prompts?.ask("Handle (optional, shown as @handle): ");
-          if (promptedHandle?.trim()) {
-            await setHostedWorkspaceHandle(store, promptedHandle);
-          }
-        }
       }
       if (handle && store.hasActiveWorkspace()) {
         await setHostedWorkspaceHandle(store, handle);

@@ -21,7 +21,7 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Accounts",
     command: "thane init [--email <email>] [--name \"...\"] [--handle <handle>]",
-    description: "Sign in or set up Thane Chat. Existing accounts only verify email/MFA; new accounts get profile prompts after auth.",
+    description: "Sign in or set up Thane Chat. Existing accounts only verify email/MFA; new accounts get a name prompt and generated handle after auth.",
     examples: ["thane init", "thane init --handle garrett"]
   },
   {
