@@ -3366,7 +3366,7 @@ async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<
   let passiveTaskCount = 0;
   let nativeRuntimeReply: { messageId?: string; text?: string } | null = null;
   let usedSharedNativeRuntime = false;
-  if (source === "chat" && workspace?.id) {
+  if ((source === "chat" || mentionsAskThane) && workspace?.id) {
     const refs = await ensureNativeAgentRefs(env, {
       workspaceId,
       workspaceSlug: workspace.workspace_slug,

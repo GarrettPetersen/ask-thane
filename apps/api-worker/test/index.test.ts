@@ -1932,6 +1932,75 @@ describe("@ask-thane/api-worker", () => {
     );
   });
 
+  it("routes terminal Ask Thane mentions through the shared bot runtime", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          ok: true,
+          reply: { messageId: "reply_1", text: "Runtime reply." }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members") && sql.includes("email = ?")) {
+        return {
+          id: "tcm_owner",
+          account_id: "acct_owner",
+          email: "owner@example.com",
+          display_name: "Owner",
+          handle: "owner",
+          role: "owner"
+        };
+      }
+      if (sql.includes("SELECT id, workspace_name, workspace_slug")) {
+        return { id: "wsp_1", workspace_name: "Acme", workspace_slug: "acme" };
+      }
+      if (sql.includes("SELECT id, name, kind, visibility FROM thane_cli_channels")) {
+        return { id: "tcc_1", name: "general", kind: "channel", visibility: "public" };
+      }
+      return null;
+    });
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => ({
+        run,
+        first: first.bind({ sql, args }),
+        all: vi.fn(async () => ({ results: [] }))
+      }))
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret",
+      THANE_BOT_INTERNAL_BASE_URL: "https://bot.local",
+      INTERNAL_API_BEARER_TOKEN: "internal-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/messages", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
+        body: JSON.stringify({ workspaceId: "wsp_1", channelId: "tcc_1", text: "hello @thane", source: "terminal" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      askThaneReply: { messageId: "reply_1", text: "Runtime reply." }
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://bot.local/internal/thane-chat/agent-message",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining('"shouldRespond":true')
+      })
+    );
+  });
+
   it("rate limits native Ask Thane mentions before paid model work", async () => {
     const calls: Array<{ sql: string; args: unknown[] }> = [];
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })));
