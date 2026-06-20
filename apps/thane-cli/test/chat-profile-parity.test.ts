@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { cliCommands } from "../src/commands";
-import { renderMembers } from "../src/render";
+import { renderMembers, renderMessages } from "../src/render";
 import { slashCommands, slashCommandsForRole } from "../src/slash-commands";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -90,10 +90,34 @@ describe("chat profile action parity", () => {
       needsArgument: false
     });
 
-    expect(chatAppHtml).toContain("Start MFA (2FA) setup");
+    expect(chatAppHtml).toContain("MFA: ${esc(mfaStatusLabel())}");
+    expect(chatAppHtml).toContain("Set up MFA");
     expect(chatAppHtml).toContain("Scan this QR code with your authenticator app.");
     expect(chatAppHtml).toContain("Google Authenticator");
     expect(chatAppHtml).toContain("qr-card");
+  });
+
+  it("renders workspace join events across web, terminal, and CLI commands", () => {
+    const rendered = renderMessages([
+      {
+        id: "evt_join_mbr_1",
+        workspace: "acme",
+        channel: "general",
+        conversationKind: "channel",
+        author: "Garrett",
+        text: "Garrett joined the workspace.",
+        createdAt: "2026-06-18T00:00:00.000Z",
+        replyCount: 0,
+        reactions: [],
+        mentions: [],
+        mentionsMe: false
+      }
+    ]);
+
+    expect(rendered).toContain("#general * Garrett joined the workspace.");
+    expect(chatAppHtml).toContain("isWorkspaceJoinMessage");
+    expect(chatAppHtml).toContain("message system-event");
+    expect(terminalChatSource).toContain("isWorkspaceJoinMessage");
   });
 
   it("keeps admin-only slash commands out of non-admin terminal menus", () => {

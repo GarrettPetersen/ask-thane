@@ -71,10 +71,17 @@ export function renderMessages(messages: MessageView[]): string {
   return messages.map(renderMessage).join("\n");
 }
 
+function isWorkspaceJoinMessage(message: MessageView): boolean {
+  return message.id.startsWith("evt_join_") || message.id.startsWith("tjoin_");
+}
+
 export function renderMessage(message: MessageView): string {
   const date = new Date(message.createdAt);
   const stamp = Number.isNaN(date.getTime()) ? message.createdAt : date.toLocaleString();
   const conversation = message.conversationKind === "dm" ? `@${message.channel}` : `#${message.channel}`;
+  if (isWorkspaceJoinMessage(message)) {
+    return `[${stamp}] ${conversation} * ${message.text}\n  id: ${message.id}`;
+  }
   const thread = message.replyCount > 0 ? `  thread: ${message.replyCount} replies` : "";
   const reply = message.threadRootId ? `  in-thread:${message.threadRootId}` : "";
   const reactions =

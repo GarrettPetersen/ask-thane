@@ -1250,6 +1250,10 @@ async function ensureThaneCliMember(env: Env, input: {
   const legacyDisplayName = input.email.split("@")[0]?.trim() || legacyHandle;
   const displayName = input.displayName?.trim() || fallbackDisplayNameForAccountId(accountId);
   const now = nowIso();
+  const existingMember = await env.DB
+    .prepare("SELECT id, joined_at FROM thane_cli_workspace_members WHERE workspace_id = ? AND email = ? LIMIT 1")
+    .bind(input.workspaceId, input.email)
+    .first<{ id?: string; joined_at?: string | null }>();
   await env.DB
     .prepare(
       `INSERT INTO thane_cli_workspace_members (
@@ -1275,15 +1279,23 @@ async function ensureThaneCliMember(env: Env, input: {
     .run();
   const row = await env.DB
     .prepare(
-      `SELECT id, account_id, email, display_name, handle, role
+      `SELECT id, account_id, email, display_name, handle, role, joined_at
        FROM thane_cli_workspace_members
        WHERE workspace_id = ? AND email = ?
        LIMIT 1`
     )
     .bind(input.workspaceId, input.email)
-    .first<{ id?: string; account_id?: string; email?: string; display_name?: string | null; handle?: string; role?: string }>();
+    .first<{ id?: string; account_id?: string; email?: string; display_name?: string | null; handle?: string; role?: string; joined_at?: string | null }>();
   if (!row?.id || !row.account_id || !row.email || !row.handle || !row.role) {
     throw new Error("member_upsert_failed");
+  }
+  if (!existingMember?.id && row.email !== "thane@askthane.com") {
+    await recordThaneCliWorkspaceJoinMessage(env, {
+      workspaceId: input.workspaceId,
+      memberId: row.id,
+      displayName: publicDisplayNameForMember({ account_id: row.account_id, email: row.email, display_name: row.display_name, handle: row.handle }),
+      joinedAt: row.joined_at ?? now
+    });
   }
   return {
     id: row.id,
@@ -1352,6 +1364,51 @@ async function ensureThaneCliChannel(
     ...(row.topic ? { topic: row.topic } : {}),
     createdAt: row.created_at
   };
+}
+
+function workspaceJoinMessageId(memberId: string): string {
+  return `tjoin_${memberId}`;
+}
+
+function workspaceJoinMessageText(displayName: string): string {
+  return `${displayName.trim() || "A member"} joined the workspace.`;
+}
+
+async function recordThaneCliWorkspaceJoinMessage(env: Env, input: {
+  workspaceId: string;
+  memberId: string;
+  displayName: string;
+  joinedAt: string;
+}): Promise<void> {
+  const messageId = workspaceJoinMessageId(input.memberId);
+  const existing = await env.DB
+    .prepare("SELECT id FROM thane_cli_chat_messages WHERE id = ? LIMIT 1")
+    .bind(messageId)
+    .first<{ id?: string }>();
+  if (existing?.id) {
+    return;
+  }
+  const channel = await ensureThaneCliChannel(env, input.workspaceId, "general", "Community-wide conversation");
+  await env.DB
+    .prepare(
+      `INSERT INTO thane_cli_chat_messages (
+         id, workspace_id, channel_id, author_member_id, text, source, thread_root_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, 'chat', NULL, ?, ?)`
+    )
+    .bind(messageId, input.workspaceId, channel.id, input.memberId, workspaceJoinMessageText(input.displayName), input.joinedAt, input.joinedAt)
+    .run();
+  await broadcastThaneChatEvent(env, {
+    type: "message_created",
+    workspaceId: input.workspaceId,
+    channelId: channel.id,
+    messageId,
+    occurredAt: input.joinedAt
+  }).catch((error) => {
+    console.warn("thane_chat_join_event_broadcast_failed", {
+      workspaceId: input.workspaceId,
+      reason: error instanceof Error ? error.message : String(error)
+    });
+  });
 }
 
 async function requireThaneCliWorkspaceMember(

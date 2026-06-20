@@ -1195,6 +1195,7 @@ describe("@ask-thane/api-worker", () => {
     ["API invite URL", "https://api.askthane.com/invite/token_123"],
     ["web invite URL", "https://chat.askthane.com/invite/token_123"]
   ])("accepts valid Thane CLI workspace invite links from a %s", async (_label, inviteToken) => {
+    const joinedAt = "2026-06-18T00:00:00.000Z";
     const inviteRow = {
       id: "inv_1",
       workspace_id: "wsp_1",
@@ -1206,26 +1207,66 @@ describe("@ask-thane/api-worker", () => {
       accepted_count: 0,
       max_uses: null
     };
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
     const first = vi.fn(async function (this: { sql?: string }) {
       const sql = this.sql ?? "";
-      if (sql.includes("SELECT id, workspace_id")) {
+      if (sql.includes("SELECT id, workspace_id") && sql.includes("FROM thane_cli_workspace_invites")) {
         return inviteRow;
       }
-      if (sql.includes("FROM thane_cli_workspace_members")) {
+      if (sql.includes("FROM thane_cli_workspace_bans")) {
+        return null;
+      }
+      if (sql.includes("SELECT id, account_id, email, display_name, handle, role") && !sql.includes("joined_at")) {
+        return null;
+      }
+      if (sql.includes("SELECT plan_tier FROM thane_cli_workspaces")) {
+        return { plan_tier: "free" };
+      }
+      if (sql.includes("COUNT(*) AS count FROM thane_cli_workspace_members")) {
+        return { count: 12 };
+      }
+      if (sql.includes("SELECT display_name FROM thane_cli_account_profiles")) {
+        return null;
+      }
+      if (sql.includes("SELECT display_name") && sql.includes("FROM thane_cli_workspace_members")) {
+        return { display_name: "Alex" };
+      }
+      if (sql.includes("SELECT id, joined_at FROM thane_cli_workspace_members")) {
+        return null;
+      }
+      if (sql.includes("SELECT id, account_id, email, display_name, handle, role, joined_at")) {
         return {
           id: "tcm_1",
           account_id: "acct_1",
           email: "alex@example.com",
           display_name: "Alex",
           handle: "alex",
-          role: "member"
+          role: "member",
+          joined_at: joinedAt
+        };
+      }
+      if (sql.includes("SELECT id FROM thane_cli_chat_messages")) {
+        return null;
+      }
+      if (sql.includes("FROM thane_cli_channels") && sql.includes("WHERE workspace_id = ? AND name = ?")) {
+        return {
+          id: "tcc_general",
+          workspace_id: "wsp_1",
+          name: "general",
+          kind: "channel",
+          visibility: "public",
+          topic: "Community-wide conversation",
+          created_at: "2026-06-17T00:00:00.000Z"
         };
       }
       return null;
     });
     const run = vi.fn(async () => ({ meta: { changes: 1 } }));
     const prepare = vi.fn((sql: string) => ({
-      bind: vi.fn(() => ({ run, first: first.bind({ sql }) }))
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        return { run, first: first.bind({ sql }) };
+      })
     }));
     const authEnv = {
       DB: { prepare },
@@ -1254,6 +1295,16 @@ describe("@ask-thane/api-worker", () => {
       }
     });
     expect(prepare).toHaveBeenCalledWith(expect.stringContaining("UPDATE thane_cli_workspace_invites"));
+    const joinMessageInsert = calls.find((call) => call.sql.includes("INSERT INTO thane_cli_chat_messages"));
+    expect(joinMessageInsert?.args).toEqual([
+      "tjoin_tcm_1",
+      "wsp_1",
+      "tcc_general",
+      "tcm_1",
+      "Alex joined the workspace.",
+      joinedAt,
+      joinedAt
+    ]);
   });
 
   it("rejects invite acceptance for new members when a free Thane Chat workspace reaches the limit", async () => {

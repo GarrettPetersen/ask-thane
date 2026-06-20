@@ -66,6 +66,14 @@ function userDisplayLabel(user: ThaneUser | undefined, fallback: string): string
   return user.displayName.trim() || `@${user.handle}`;
 }
 
+function workspaceJoinMessageId(memberId: string): string {
+  return `evt_join_${memberId}`;
+}
+
+function workspaceJoinMessageText(user: ThaneUser | undefined): string {
+  return `${userDisplayLabel(user, "A member")} joined the workspace.`;
+}
+
 function makeLoginCode(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
@@ -1072,6 +1080,56 @@ export class ThaneStore {
     throw new Error("Local verification codes are no longer supported.");
   }
 
+  private ensureGeneralChannel(workspaceId: string, memberUserId?: string, createdAt = nowIso()): ThaneChannel {
+    let channel = this.data.channels.find((candidate) => candidate.workspaceId === workspaceId && candidate.kind === "channel" && candidate.name === "general");
+    if (!channel) {
+      const memberIds = this.data.workspaceMembers
+        .filter((member) => member.workspaceId === workspaceId)
+        .map((member) => member.userId);
+      if (memberUserId && !memberIds.includes(memberUserId)) {
+        memberIds.push(memberUserId);
+      }
+      channel = {
+        id: id("chn"),
+        workspaceId,
+        name: "general",
+        kind: "channel",
+        visibility: "public",
+        memberIds,
+        topic: "Community-wide conversation",
+        createdAt
+      };
+      this.data.channels.push(channel);
+    } else if (memberUserId && !channel.memberIds.includes(memberUserId)) {
+      channel.memberIds.push(memberUserId);
+    }
+    return channel;
+  }
+
+  private recordWorkspaceJoinMessage(member: ThaneWorkspaceMember): void {
+    const account = this.data.accounts.find((candidate) => candidate.id === member.accountId);
+    if (account?.email === "thane@askthane.com") {
+      return;
+    }
+    const messageId = workspaceJoinMessageId(member.id);
+    if (this.data.messages.some((message) => message.id === messageId)) {
+      return;
+    }
+    const user = this.data.users.find((candidate) => candidate.id === member.userId);
+    const channel = this.ensureGeneralChannel(member.workspaceId, member.userId, member.joinedAt);
+    this.data.messages.push({
+      id: messageId,
+      workspaceId: member.workspaceId,
+      channelId: channel.id,
+      authorId: member.userId,
+      text: workspaceJoinMessageText(user),
+      createdAt: member.joinedAt,
+      source: "chat",
+      reactions: [],
+      mentions: []
+    });
+  }
+
   private ensureAccountMembership(account: ThaneAccount, workspaceId: string, role: WorkspaceRole): ThaneWorkspaceMember {
     let user = this.data.users.find((candidate) => candidate.workspaceId === workspaceId && candidate.accountId === account.id);
     if (!user) {
@@ -1088,6 +1146,7 @@ export class ThaneStore {
     let member = this.data.workspaceMembers.find(
       (candidate) => candidate.workspaceId === workspaceId && candidate.accountId === account.id
     );
+    const createdMember = !member;
     if (!member) {
       member = {
         id: id("mbr"),
@@ -1098,6 +1157,9 @@ export class ThaneStore {
         joinedAt: nowIso()
       };
       this.data.workspaceMembers.push(member);
+    }
+    if (createdMember) {
+      this.recordWorkspaceJoinMessage(member);
     }
     if (workspaceId === this.data.activeWorkspaceId && account.id === this.data.currentAccountId) {
       this.data.currentUserId = user.id;
@@ -1164,18 +1226,7 @@ export class ThaneStore {
       this.data.workspaces.push(workspace);
     }
     const member = this.ensureAccountMembership(account, workspace.id, input.role);
-    if (!this.data.channels.some((channel) => channel.workspaceId === workspace.id && channel.kind === "channel" && channel.name === "general")) {
-      this.data.channels.push({
-        id: id("chn"),
-        workspaceId: workspace.id,
-        name: "general",
-        kind: "channel",
-        visibility: "public",
-        memberIds: [member.userId],
-        topic: "Community-wide conversation",
-        createdAt: nowIso()
-      });
-    }
+    this.ensureGeneralChannel(workspace.id, member.userId);
     this.data.activeWorkspaceId = workspace.id;
     this.data.currentUserId = member.userId;
     await saveData(this.data);

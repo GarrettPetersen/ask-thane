@@ -253,6 +253,12 @@
         border-left: 0;
         background: transparent;
       }
+      .message.system-event {
+        color: var(--muted);
+      }
+      .message.system-event .message-meta {
+        color: var(--quiet);
+      }
       .message-meta {
         display: inline;
         color: var(--muted);
@@ -1886,10 +1892,19 @@
         return user?.displayName?.trim() || (user?.handle ? `@${user.handle}` : "unknown");
       }
 
+      function isWorkspaceJoinMessage(message) {
+        return String(message?.id || "").startsWith("evt_join_") || String(message?.id || "").startsWith("tjoin_");
+      }
+
       function renderMessage(message, users, repliesByRoot, isReply = false) {
         const user = users.get(message.authorId);
         const replies = repliesByRoot.get(message.id) || [];
         const stamp = time(message.createdAt);
+        if (isWorkspaceJoinMessage(message)) {
+          return `<article class="message system-event">
+            <span class="message-meta"><span class="msg-marker">  ${esc(stamp)}</span> * </span><span class="message-text">${esc(message.text)}</span>
+          </article>`;
+        }
         const branch = isReply ? `<span class="msg-branch">└─</span> ` : "";
         const author = userDisplayLabel(user);
         const sourceMarker = message.source === "terminal" ? " 🤖" : "";

@@ -263,11 +263,22 @@ function threadedMessages(messages: MessageView[]): MessageView[] {
   return ordered;
 }
 
+function isWorkspaceJoinMessage(message: MessageView): boolean {
+  return message.id.startsWith("evt_join_") || message.id.startsWith("tjoin_");
+}
+
 function renderMessage(message: MessageView, width: number, selected = false): string[] {
   const date = new Date(message.createdAt);
   const time = Number.isNaN(date.getTime())
     ? message.createdAt
     : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (isWorkspaceJoinMessage(message)) {
+    const marker = selected ? `${BOLD}>${RESET} ` : "  ";
+    const prefix = `${marker}${DIM}${time}${RESET} ${DIM}*${RESET} `;
+    const bodyWidth = Math.max(10, width - visibleLength(prefix));
+    const lines = wrap(message.text, bodyWidth);
+    return lines.map((line, index) => (index === 0 ? `${prefix}${DIM}${line}${RESET}` : `${" ".repeat(visibleLength(prefix))}${DIM}${line}${RESET}`));
+  }
   const isReply = Boolean(message.threadRootId);
   const indent = isReply ? "    " : "";
   const marker = selected ? `${BOLD}>${RESET} ` : "  ";
