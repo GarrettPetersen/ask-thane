@@ -1,5 +1,19 @@
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
+
+const publicDir = new URL("../public/", import.meta.url);
+
+function extractMetaContent(html: string, attribute: "name" | "property", value: string): string | null {
+  const escapedValue = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = html.match(new RegExp(`<meta\\s+${attribute}="${escapedValue}"\\s+content="([^"]+)"\\s*/?>`, "i"));
+  return match?.[1] ?? null;
+}
+
+function extractCanonical(html: string): string | null {
+  const match = html.match(/<link\s+rel="canonical"\s+href="([^"]+)"\s*\/?>/i);
+  return match?.[1] ?? null;
+}
 
 function makeDbStub() {
   const run = vi.fn(async () => ({ meta: { changes: 1 } }));
@@ -97,6 +111,44 @@ function makeMetricsDbStub() {
 describe("@ask-thane/landing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("defines social sharing metadata for every public html page", () => {
+    const htmlFiles = readdirSync(publicDir).filter((file) => file.endsWith(".html"));
+
+    expect(htmlFiles.length).toBeGreaterThan(0);
+
+    for (const file of htmlFiles) {
+      const html = readFileSync(new URL(file, publicDir), "utf8");
+      const canonical = extractCanonical(html);
+      const ogImage = extractMetaContent(html, "property", "og:image");
+      const twitterImage = extractMetaContent(html, "name", "twitter:image");
+
+      expect(canonical, `${file} canonical`).toMatch(/^https:\/\/(?:askthane\.com|chat\.askthane\.com)\//);
+      expect(extractMetaContent(html, "property", "og:type"), `${file} og:type`).toBe("website");
+      expect(extractMetaContent(html, "property", "og:site_name"), `${file} og:site_name`).toBe("Thane");
+      expect(extractMetaContent(html, "property", "og:title"), `${file} og:title`).toBeTruthy();
+      expect(extractMetaContent(html, "property", "og:description"), `${file} og:description`).toBeTruthy();
+      expect(extractMetaContent(html, "property", "og:url"), `${file} og:url`).toBe(canonical);
+      expect(ogImage, `${file} og:image`).toMatch(/^https:\/\/askthane\.com\/social\/[-a-z]+\.png$/);
+      expect(extractMetaContent(html, "property", "og:image:secure_url"), `${file} secure image`).toBe(ogImage);
+      expect(extractMetaContent(html, "property", "og:image:type"), `${file} image type`).toBe("image/png");
+      expect(extractMetaContent(html, "property", "og:image:width"), `${file} image width`).toBe("1200");
+      expect(extractMetaContent(html, "property", "og:image:height"), `${file} image height`).toBe("630");
+      expect(extractMetaContent(html, "property", "og:image:alt"), `${file} image alt`).toBeTruthy();
+      expect(extractMetaContent(html, "name", "twitter:card"), `${file} twitter card`).toBe("summary_large_image");
+      expect(extractMetaContent(html, "name", "twitter:title"), `${file} twitter title`).toBeTruthy();
+      expect(extractMetaContent(html, "name", "twitter:description"), `${file} twitter description`).toBeTruthy();
+      expect(twitterImage, `${file} twitter image`).toBe(ogImage);
+      expect(extractMetaContent(html, "name", "twitter:image:alt"), `${file} twitter image alt`).toBeTruthy();
+
+      const imagePath = new URL(new URL(ogImage ?? "").pathname.slice(1), publicDir);
+      expect(existsSync(imagePath), `${file} image exists`).toBe(true);
+      const png = readFileSync(imagePath);
+      expect(png.subarray(1, 4).toString("ascii"), `${file} png signature`).toBe("PNG");
+      expect(png.readUInt32BE(16), `${file} png width`).toBe(1200);
+      expect(png.readUInt32BE(20), `${file} png height`).toBe(630);
+    }
   });
 
   it("serves health", async () => {

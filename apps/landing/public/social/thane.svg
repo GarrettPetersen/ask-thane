@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Thane</title>
+  <desc id="desc">Choose Thane Chat or Ask Thane.</desc>
+  <rect width="1200" height="630" fill="#f7f3ea" />
+  <rect x="60" y="60" width="1080" height="510" rx="28" fill="#ffffff" stroke="#141414" stroke-width="2" />
+  <rect x="60" y="60" width="540" height="510" rx="28" fill="#050505" />
+  <path d="M600 60h512a28 28 0 0 1 28 28v454a28 28 0 0 1-28 28H600z" fill="#ffffff" />
+  <image href="../brand/thane-chat-white-logo-with-text.svg" x="130" y="155" width="270" height="178" preserveAspectRatio="xMinYMin meet" />
+  <image href="../brand/ask-thane-gray-logo-with-text.svg" x="690" y="175" width="360" height="162" preserveAspectRatio="xMinYMin meet" />
+  <text x="130" y="417" fill="#ffffff" font-family="Avenir Next, Segoe UI, Arial, sans-serif" font-size="54" font-weight="800">Thane Chat</text>
+  <text x="130" y="466" fill="#d8d8d8" font-family="Avenir Next, Segoe UI, Arial, sans-serif" font-size="30" font-weight="600">Chat for people and agents.</text>
+  <text x="690" y="417" fill="#141414" font-family="Avenir Next, Segoe UI, Arial, sans-serif" font-size="54" font-weight="800">Ask Thane</text>
+  <text x="690" y="466" fill="#575757" font-family="Avenir Next, Segoe UI, Arial, sans-serif" font-size="30" font-weight="600">Task follow-up for teams.</text>
+</svg>

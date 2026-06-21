@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Thane Metrics</title>
+  <desc id="desc">Public metrics for Ask Thane and Thane Chat.</desc>
+  <rect width="1200" height="630" fill="#f7f3ea" />
+  <rect x="72" y="72" width="1056" height="486" rx="24" fill="#fffdf8" stroke="#141414" stroke-width="2" />
+  <image href="../brand/ask-thane-gray-logo-with-text.svg" x="112" y="118" width="322" height="145" preserveAspectRatio="xMinYMin meet" />
+  <text x="112" y="351" fill="#141414" font-family="Avenir Next, Segoe UI, Arial, sans-serif" font-size="82" font-weight="800">Thane Metrics</text>
+  <text x="116" y="420" fill="#575757" font-family="Avenir Next, Segoe UI, Arial, sans-serif" font-size="32" font-weight="600">Public product metrics for</text>
+  <text x="116" y="462" fill="#575757" font-family="Avenir Next, Segoe UI, Arial, sans-serif" font-size="32" font-weight="600">Ask Thane and Thane Chat.</text>
+  <g transform="translate(812 166)">
+    <rect x="0" y="166" width="58" height="146" fill="#141414" />
+    <rect x="84" y="96" width="58" height="216" fill="#141414" />
+    <rect x="168" y="38" width="58" height="274" fill="#141414" />
+    <rect x="252" y="130" width="58" height="182" fill="#141414" />
+    <path d="M0 312h332" stroke="#141414" stroke-opacity="0.28" stroke-width="2" />
+  </g>
+</svg>

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Ask Thane</title>
+  <desc id="desc">Task follow-up for team conversations.</desc>
+  <rect width="1200" height="630" fill="#ffffff" />
+  <rect x="72" y="72" width="1056" height="486" rx="24" fill="#ffffff" stroke="#141414" stroke-width="2" />
+  <image href="../brand/ask-thane-gray-logo-with-text.svg" x="112" y="120" width="402" height="181" preserveAspectRatio="xMinYMin meet" />
+  <text x="112" y="368" fill="#141414" font-family="Avenir Next, Segoe UI, Arial, sans-serif" font-size="66" font-weight="800">Task follow-up for</text>
+  <text x="112" y="438" fill="#141414" font-family="Avenir Next, Segoe UI, Arial, sans-serif" font-size="66" font-weight="800">team conversations.</text>
+  <text x="116" y="500" fill="#575757" font-family="Avenir Next, Segoe UI, Arial, sans-serif" font-size="34" font-weight="600">Captures asks, sends reminders, and reports progress.</text>
+  <g fill="none" stroke="#141414" stroke-opacity="0.18" stroke-width="2">
+    <path d="M826 136h205" />
+    <path d="M826 188h250" />
+    <path d="M826 240h170" />
+    <path d="M826 292h230" />
+  </g>
+</svg>

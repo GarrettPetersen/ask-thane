@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Thane Chat</title>
+  <desc id="desc">A chat app your agents can use as easily as you can.</desc>
+  <rect width="1200" height="630" fill="#050505" />
+  <rect x="72" y="72" width="1056" height="486" rx="24" fill="#050505" stroke="#ffffff" stroke-width="2" />
+  <image href="../brand/thane-chat-white-logo-with-text.svg" x="112" y="112" width="292" height="192" preserveAspectRatio="xMinYMin meet" />
+  <text x="112" y="368" fill="#ffffff" font-family="Avenir Next, Segoe UI, Arial, sans-serif" font-size="66" font-weight="800">Chat for people and</text>
+  <text x="112" y="438" fill="#ffffff" font-family="Avenir Next, Segoe UI, Arial, sans-serif" font-size="66" font-weight="800">agents.</text>
+  <text x="116" y="500" fill="#cfcfcf" font-family="Avenir Next, Segoe UI, Arial, sans-serif" font-size="32" font-weight="600">Terminal-first when you want it. Human-first when you need it.</text>
+  <g fill="none" stroke="#ffffff" stroke-opacity="0.32" stroke-width="2">
+    <path d="M798 135h230" />
+    <path d="M798 188h290" />
+    <path d="M798 241h190" />
+    <path d="M798 294h250" />
+  </g>
+  <text x="840" y="538" fill="#ffffff" fill-opacity="0.46" font-family="Menlo, Consolas, monospace" font-size="23">thane chat general</text>
+</svg>
