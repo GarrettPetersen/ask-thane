@@ -763,6 +763,10 @@
         cliInstallOpen: false,
         settingsMenuOpen: false,
         settingsMenuScrollTop: 0,
+        webhooks: [],
+        webhooksLoadedWorkspaceId: "",
+        webhooksLoading: false,
+        webhookResult: null,
         realtimeSocket: null,
         realtimeWorkspaceId: "",
         realtimeReconnectTimer: null,
@@ -2012,6 +2016,93 @@
         }
       }
 
+      async function loadWebhooks(force = false) {
+        const workspace = state.snapshot?.workspaces?.find((item) => item.id === state.activeWorkspaceId);
+        if (!workspace || !canAdminWorkspace()) return;
+        if (!force && state.webhooksLoadedWorkspaceId === workspace.id) return;
+        state.webhooksLoading = true;
+        try {
+          const body = await api(`/v1/thane-cli/webhooks?workspaceId=${encodeURIComponent(workspace.id)}`, { method: "GET" });
+          state.webhooks = body.webhooks || [];
+          state.webhooksLoadedWorkspaceId = workspace.id;
+          state.error = "";
+        } catch (error) {
+          state.error = `Webhooks failed: ${error.message}`;
+        } finally {
+          state.webhooksLoading = false;
+          render();
+        }
+      }
+
+      async function createWebhook(event) {
+        event.preventDefault();
+        const workspace = state.snapshot?.workspaces?.find((item) => item.id === state.activeWorkspaceId);
+        if (!workspace) return;
+        const form = new FormData(event.currentTarget);
+        const name = String(form.get("name") || "").trim();
+        const url = String(form.get("url") || "").trim();
+        if (!name || !url) return;
+        try {
+          const body = await api("/v1/thane-cli/webhooks", {
+            method: "POST",
+            body: JSON.stringify({
+              workspaceId: workspace.id,
+              name,
+              url,
+              eventTypes: ["message.created"]
+            })
+          });
+          state.webhookResult = body;
+          state.status = `Webhook bot @${body.webhook?.botHandle || body.webhook?.name || name} created`;
+          state.error = "";
+          event.currentTarget.reset();
+          await loadWebhooks(true);
+        } catch (error) {
+          state.error = error.message;
+          render();
+        }
+      }
+
+      async function disableWebhook(webhook) {
+        const workspace = state.snapshot?.workspaces?.find((item) => item.id === state.activeWorkspaceId);
+        if (!workspace || !webhook) return;
+        try {
+          await api("/v1/thane-cli/webhooks/disable", {
+            method: "POST",
+            body: JSON.stringify({ workspaceId: workspace.id, webhook })
+          });
+          state.status = `Webhook ${webhook} disabled`;
+          state.error = "";
+          await loadWebhooks(true);
+        } catch (error) {
+          state.error = error.message;
+          render();
+        }
+      }
+
+      async function setWebhookChannel(webhook, action) {
+        const workspace = state.snapshot?.workspaces?.find((item) => item.id === state.activeWorkspaceId);
+        const channel = currentChannel();
+        if (!workspace || !channel || channel.kind !== "channel" || !webhook) return;
+        try {
+          const body = await api(`/v1/thane-cli/webhooks/channel-members/${action}`, {
+            method: "POST",
+            body: JSON.stringify({
+              workspaceId: workspace.id,
+              webhook,
+              channelId: channel.id
+            })
+          });
+          state.status = `${action === "add" ? "Added" : "Removed"} @${body.webhook?.botHandle || body.webhook?.name || webhook} ${action === "add" ? "to" : "from"} #${body.channelName || channel.name}`;
+          state.error = "";
+          await sync();
+          await loadWebhooks(true);
+        } catch (error) {
+          state.error = error.message;
+          render();
+        }
+      }
+
       async function openBilling(target) {
         const workspace = state.snapshot?.workspaces?.find((item) => item.id === state.activeWorkspaceId);
         if (!workspace || state.billingBusy) return;
@@ -2276,6 +2367,7 @@
         state.settingsMenuScrollTop = 0;
         render();
         void refreshMfaStatus();
+        if (canAdminWorkspace()) void loadWebhooks();
       }
 
       function closeSettingsMenu() {
@@ -2368,6 +2460,9 @@
         const canStartMfaSetup = !state.mfaStatusLoading && state.mfaStatus !== "enabled" && !state.mfaSetup;
         const canDisableMfa = !state.mfaStatusLoading && state.mfaStatus === "enabled";
         const pingPreference = currentNotificationPreference();
+        const activeChannel = currentChannel();
+        const canManageWebhookChannel = activeChannel?.kind === "channel";
+        const webhooks = state.webhooksLoadedWorkspaceId === workspace?.id ? state.webhooks : [];
         return `
           <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="settings-menu-title" onclick="if(event.target===this) closeSettingsMenu()">
             <section class="modal" data-settings-modal onscroll="state.settingsMenuScrollTop=this.scrollTop">
@@ -2485,6 +2580,33 @@
                       <button onclick="setAskThaneEnabled(${askThane?.enabled ? "false" : "true"})">${askThane?.enabled ? "Disable" : "Enable"} Ask Thane</button>
                     ` : `<div class="muted small">admin required</div>`}
                   </div>
+                </section>
+                <section class="settings-group">
+                  <h3>Webhook bots</h3>
+                  ${isAdmin ? `
+                    <form class="list" onsubmit="createWebhook(event)">
+                      <input name="name" placeholder="build-bot" />
+                      <input name="url" type="url" placeholder="https://example.com/thane/events" />
+                      <button>Create webhook bot</button>
+                    </form>
+                    ${state.webhookResult ? `<div class="kv">
+                      <div>bot: @${esc(state.webhookResult.webhook?.botHandle || state.webhookResult.webhook?.name || "bot")}</div>
+                      <div class="cmdline">token: ${esc(state.webhookResult.token || "")}</div>
+                      <div class="cmdline">signing secret: ${esc(state.webhookResult.signingSecret || "")}</div>
+                      <button onclick="copyText(${jsAttr(state.webhookResult.token || "")}, 'Webhook token')">Copy token</button>
+                      <button onclick="copyText(${jsAttr(state.webhookResult.signingSecret || "")}, 'Signing secret')">Copy signing secret</button>
+                    </div>` : ""}
+                    <div class="list">
+                      ${state.webhooksLoading ? `<div class="muted small">loading webhooks</div>` : webhooks.map((webhook) => {
+                        const ref = webhook.id || webhook.name;
+                        return `<div class="item member-row">
+                          <span class="member-label">${esc(webhook.name || webhook.id)} @${esc(webhook.botHandle || webhook.botUserId || "bot")} (${esc(webhook.status || "active")})</span>
+                          ${canManageWebhookChannel ? `<button onclick="setWebhookChannel(${jsAttr(ref)}, 'add')">add #${esc(activeChannel.name)}</button><button onclick="setWebhookChannel(${jsAttr(ref)}, 'remove')">remove #${esc(activeChannel.name)}</button>` : ""}
+                          <button onclick="disableWebhook(${jsAttr(ref)})">disable</button>
+                        </div>`;
+                      }).join("") || `<div class="muted small">No webhook bots</div>`}
+                    </div>
+                  ` : `<div class="muted small">admin required</div>`}
                 </section>
                 <section class="settings-group">
                   <h3>Billing</h3>
@@ -2786,6 +2908,9 @@
       window.createChannel = createChannel;
       window.invite = invite;
       window.createInviteLink = createInviteLink;
+      window.createWebhook = createWebhook;
+      window.disableWebhook = disableWebhook;
+      window.setWebhookChannel = setWebhookChannel;
       window.openBilling = openBilling;
       window.setAskThaneEnabled = setAskThaneEnabled;
       window.updateWorkspaceDisplayName = updateWorkspaceDisplayName;

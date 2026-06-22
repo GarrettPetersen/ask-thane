@@ -118,6 +118,11 @@ interface ThaneCliMessageCreatePayload {
   threadRootId?: unknown;
 }
 
+interface ThaneCliDmOpenPayload {
+  workspaceId?: unknown;
+  target?: unknown;
+}
+
 type ThaneCliMessageOrigin = "chat" | "terminal" | "webhook";
 
 interface ThaneCliAskThanePayload {
@@ -140,6 +145,13 @@ interface ThaneCliWebhookCreatePayload {
 interface ThaneCliWebhookDisablePayload {
   workspaceId?: unknown;
   webhook?: unknown;
+}
+
+interface ThaneCliWebhookChannelMembershipPayload {
+  workspaceId?: unknown;
+  webhook?: unknown;
+  channelId?: unknown;
+  channelName?: unknown;
 }
 
 interface ThaneCliWebhookMessagePayload {
@@ -307,6 +319,8 @@ interface ThaneCliWebhookRow {
   created_at: string;
   updated_at: string;
   last_delivered_at: string | null;
+  bot_handle?: string | null;
+  bot_display_name?: string | null;
 }
 
 type ThaneCliConversationKind = "channel" | "dm";
@@ -1737,10 +1751,10 @@ async function ensureThaneCliUserDmChannel(env: Env, input: {
   workspaceId: string;
   member: { id: string; account_id?: string | null; email?: string | null; handle?: string | null };
   targetMember: { id: string; account_id?: string | null; email?: string | null; handle?: string | null };
-}): Promise<{ id: string; name: string; kind: "dm"; visibility: "private" }> {
+}): Promise<{ id: string; name: string; kind: "dm"; visibility: "private"; createdAt: string }> {
   const existing = await env.DB
     .prepare(
-      `SELECT c.id, c.name, c.kind, c.visibility
+      `SELECT c.id, c.name, c.kind, c.visibility, c.created_at
        FROM thane_cli_channels c
        JOIN thane_cli_channel_members current_member ON current_member.channel_id = c.id
        JOIN thane_cli_channel_members target_member ON target_member.channel_id = c.id
@@ -1754,9 +1768,9 @@ async function ensureThaneCliUserDmChannel(env: Env, input: {
        LIMIT 1`
     )
     .bind(input.workspaceId, input.member.id, input.targetMember.id)
-    .first<{ id?: string; name?: string; kind?: ThaneCliConversationKind; visibility?: ThaneCliConversationVisibility }>();
-  if (existing?.id && existing.name && existing.kind === "dm" && existing.visibility === "private") {
-    return { id: existing.id, name: existing.name, kind: "dm", visibility: "private" };
+    .first<{ id?: string; name?: string; kind?: ThaneCliConversationKind; visibility?: ThaneCliConversationVisibility; created_at?: string }>();
+  if (existing?.id && existing.name && existing.kind === "dm" && existing.visibility === "private" && existing.created_at) {
+    return { id: existing.id, name: existing.name, kind: "dm", visibility: "private", createdAt: existing.created_at };
   }
 
   const handles = [publicHandleForMember(input.member), publicHandleForMember(input.targetMember)].sort();
@@ -1774,10 +1788,10 @@ async function ensureThaneCliUserDmChannel(env: Env, input: {
     .bind(makeId("tcc"), input.workspaceId, name, now, now)
     .run();
   const row = await env.DB
-    .prepare("SELECT id, name, kind, visibility FROM thane_cli_channels WHERE workspace_id = ? AND name = ? LIMIT 1")
+    .prepare("SELECT id, name, kind, visibility, created_at FROM thane_cli_channels WHERE workspace_id = ? AND name = ? LIMIT 1")
     .bind(input.workspaceId, name)
-    .first<{ id?: string; name?: string; kind?: ThaneCliConversationKind; visibility?: ThaneCliConversationVisibility }>();
-  if (!row?.id || row.kind !== "dm" || row.visibility !== "private" || !row.name) {
+    .first<{ id?: string; name?: string; kind?: ThaneCliConversationKind; visibility?: ThaneCliConversationVisibility; created_at?: string }>();
+  if (!row?.id || row.kind !== "dm" || row.visibility !== "private" || !row.name || !row.created_at) {
     throw new Error("user_dm_channel_upsert_failed");
   }
   for (const memberId of [input.member.id, input.targetMember.id]) {
@@ -1792,7 +1806,7 @@ async function ensureThaneCliUserDmChannel(env: Env, input: {
       .bind(makeId("tccm"), row.id, memberId, now)
       .run();
   }
-  return { id: row.id, name: row.name, kind: "dm", visibility: "private" };
+  return { id: row.id, name: row.name, kind: "dm", visibility: "private", createdAt: row.created_at };
 }
 
 async function canThaneCliMemberUseChannel(env: Env, input: {
@@ -2067,6 +2081,8 @@ function renderThaneCliWebhook(row: ThaneCliWebhookRow) {
     url: row.target_url,
     eventTypes: parseWebhookEventTypes(row.event_types),
     botUserId: row.bot_member_id,
+    ...(row.bot_handle ? { botHandle: publicHandleForMember({ handle: row.bot_handle }) } : {}),
+    ...(row.bot_display_name ? { botDisplayName: row.bot_display_name } : {}),
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -3489,6 +3505,59 @@ async function handleThaneCliChannelMemberRemove(request: Request, env: Env): Pr
   return Response.json({ ok: true, channelId: channel.id, memberId: targetMember.id, removed: true });
 }
 
+async function handleThaneCliDmOpen(request: Request, env: Env): Promise<Response> {
+  const email = await requireAuthEmail(request, env);
+  if (!email) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  const payload = await parseJsonObject<ThaneCliDmOpenPayload>(request);
+  const workspaceId = typeof payload?.workspaceId === "string" && payload.workspaceId.trim() ? payload.workspaceId.trim() : null;
+  const target = typeof payload?.target === "string" && payload.target.trim() ? payload.target.trim() : null;
+  if (!workspaceId || !target) {
+    return Response.json({ ok: false, error: "workspace_id_and_target_required" }, { status: 400 });
+  }
+  const member = await requireThaneCliWorkspaceMember(env, workspaceId, email);
+  if (!member) {
+    return Response.json({ ok: false, error: "workspace_not_found" }, { status: 404 });
+  }
+  const rateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: "dm_open",
+    workspaceId,
+    memberId: member.id,
+    email: member.email,
+    memberLimit: 120,
+    workspaceLimit: 1_000,
+    windowSeconds: 60 * 60
+  });
+  if (rateLimited) {
+    return rateLimited;
+  }
+  const targetMember = await resolveThaneCliWorkspaceMember(env, { workspaceId, target });
+  if (!targetMember) {
+    return Response.json({ ok: false, error: "member_not_found" }, { status: 404 });
+  }
+  if (targetMember.id === member.id) {
+    return Response.json({ ok: false, error: "cannot_dm_self" }, { status: 400 });
+  }
+  const channel = await ensureThaneCliUserDmChannel(env, {
+    workspaceId,
+    member,
+    targetMember
+  });
+  return Response.json({
+    ok: true,
+    channel: {
+      id: channel.id,
+      workspaceId,
+      name: publicHandleForMember(targetMember),
+      kind: channel.kind,
+      visibility: channel.visibility,
+      memberIds: [member.id, targetMember.id].sort(),
+      createdAt: channel.createdAt
+    }
+  });
+}
+
 async function handleThaneCliMessageCreate(request: Request, env: Env): Promise<Response> {
   const email = await requireAuthEmail(request, env);
   if (!email) {
@@ -4255,11 +4324,14 @@ async function handleThaneCliWebhookList(request: Request, env: Env): Promise<Re
   try {
     const rows = await env.DB
       .prepare(
-        `SELECT id, workspace_id, name, target_url, event_types, signing_secret, token_hash, bot_member_id,
-                created_by_member_id, status, created_at, updated_at, last_delivered_at
-         FROM thane_cli_webhooks
-         WHERE workspace_id = ?
-         ORDER BY created_at ASC`
+        `SELECT webhook.id, webhook.workspace_id, webhook.name, webhook.target_url, webhook.event_types,
+                webhook.signing_secret, webhook.token_hash, webhook.bot_member_id, webhook.created_by_member_id,
+                webhook.status, webhook.created_at, webhook.updated_at, webhook.last_delivered_at,
+                member.handle AS bot_handle, member.display_name AS bot_display_name
+         FROM thane_cli_webhooks webhook
+         LEFT JOIN thane_cli_workspace_members member ON member.workspace_id = webhook.workspace_id AND member.id = webhook.bot_member_id
+         WHERE webhook.workspace_id = ?
+         ORDER BY webhook.created_at ASC`
       )
       .bind(workspaceId)
       .all<ThaneCliWebhookRow>();
@@ -4325,10 +4397,13 @@ async function handleThaneCliWebhookCreate(request: Request, env: Env): Promise<
     .run();
   const row = await env.DB
     .prepare(
-      `SELECT id, workspace_id, name, target_url, event_types, signing_secret, token_hash, bot_member_id,
-              created_by_member_id, status, created_at, updated_at, last_delivered_at
-       FROM thane_cli_webhooks
-       WHERE id = ?
+      `SELECT webhook.id, webhook.workspace_id, webhook.name, webhook.target_url, webhook.event_types,
+              webhook.signing_secret, webhook.token_hash, webhook.bot_member_id, webhook.created_by_member_id,
+              webhook.status, webhook.created_at, webhook.updated_at, webhook.last_delivered_at,
+              member.handle AS bot_handle, member.display_name AS bot_display_name
+       FROM thane_cli_webhooks webhook
+       LEFT JOIN thane_cli_workspace_members member ON member.workspace_id = webhook.workspace_id AND member.id = webhook.bot_member_id
+       WHERE webhook.id = ?
        LIMIT 1`
     )
     .bind(id)
@@ -4345,6 +4420,8 @@ async function handleThaneCliWebhookCreate(request: Request, env: Env): Promise<
       url: targetUrl,
       eventTypes,
       botUserId: bot.id,
+      botHandle: bot.handle,
+      botDisplayName: bot.displayName,
       status: "active",
       createdAt: now,
       updatedAt: now
@@ -4389,6 +4466,85 @@ async function handleThaneCliWebhookDisable(request: Request, env: Env): Promise
   return Response.json({
     ok: true,
     webhook: renderThaneCliWebhook({ ...row, status: "disabled", updated_at: now })
+  });
+}
+
+async function handleThaneCliWebhookChannelMembership(request: Request, env: Env, action: "add" | "remove"): Promise<Response> {
+  const payload = await parseJsonObject<ThaneCliWebhookChannelMembershipPayload>(request);
+  const workspaceId = typeof payload?.workspaceId === "string" && payload.workspaceId.trim() ? payload.workspaceId.trim() : null;
+  const webhookRef = typeof payload?.webhook === "string" && payload.webhook.trim() ? payload.webhook.trim() : null;
+  const channelId = typeof payload?.channelId === "string" && payload.channelId.trim() ? payload.channelId.trim() : null;
+  const channelName = normalizeChannelName(payload?.channelName);
+  if (!workspaceId || !webhookRef || (!channelId && !channelName)) {
+    return Response.json({ ok: false, error: "workspace_id_webhook_and_channel_required" }, { status: 400 });
+  }
+  const auth = await requireWebhookAdmin(request, env, workspaceId);
+  if (auth instanceof Response) {
+    return auth;
+  }
+  const rateLimited = await enforceWorkspaceActionRateLimits(env, {
+    action: `webhook_channel_${action}`,
+    workspaceId,
+    memberId: auth.member.id,
+    email: auth.email,
+    memberLimit: 60,
+    workspaceLimit: 500,
+    windowSeconds: 60 * 60
+  });
+  if (rateLimited) {
+    return rateLimited;
+  }
+  const webhook = await env.DB
+    .prepare(
+      `SELECT webhook.id, webhook.workspace_id, webhook.name, webhook.target_url, webhook.event_types,
+              webhook.signing_secret, webhook.token_hash, webhook.bot_member_id, webhook.created_by_member_id,
+              webhook.status, webhook.created_at, webhook.updated_at, webhook.last_delivered_at,
+              member.handle AS bot_handle, member.display_name AS bot_display_name
+       FROM thane_cli_webhooks webhook
+       LEFT JOIN thane_cli_workspace_members member ON member.workspace_id = webhook.workspace_id AND member.id = webhook.bot_member_id
+       WHERE webhook.workspace_id = ? AND (webhook.id = ? OR webhook.name = ?) AND webhook.status = 'active'
+       LIMIT 1`
+    )
+    .bind(workspaceId, webhookRef, webhookRef)
+    .first<ThaneCliWebhookRow>();
+  if (!webhook?.id) {
+    return Response.json({ ok: false, error: "webhook_not_found" }, { status: 404 });
+  }
+  const channel = await resolveThaneCliChannel(env, { workspaceId, channelId, channelName });
+  if (!channel?.id || channel.kind !== "channel") {
+    return Response.json({ ok: false, error: "channel_not_found" }, { status: 404 });
+  }
+  const now = nowIso();
+  if (action === "add") {
+    await env.DB
+      .prepare(
+        `INSERT INTO thane_cli_channel_members (id, channel_id, member_id, joined_at, left_at)
+         VALUES (?, ?, ?, ?, NULL)
+         ON CONFLICT(channel_id, member_id) DO UPDATE SET
+           left_at = NULL,
+           joined_at = excluded.joined_at`
+      )
+      .bind(makeId("tccm"), channel.id, webhook.bot_member_id, now)
+      .run();
+  } else {
+    await env.DB
+      .prepare(
+        `INSERT INTO thane_cli_channel_members (id, channel_id, member_id, joined_at, left_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(channel_id, member_id) DO UPDATE SET
+           left_at = excluded.left_at`
+      )
+      .bind(makeId("tccm"), channel.id, webhook.bot_member_id, now, now)
+      .run();
+  }
+  return Response.json({
+    ok: true,
+    webhook: renderThaneCliWebhook(webhook),
+    channelId: channel.id,
+    channelName: channel.name,
+    memberId: webhook.bot_member_id,
+    added: action === "add",
+    removed: action === "remove"
   });
 }
 
@@ -5011,6 +5167,12 @@ async function handleThaneCliRequest(request: Request, env: Env): Promise<Respon
   if (url.pathname === "/v1/thane-cli/webhooks/disable" && request.method === "POST") {
     return handleThaneCliWebhookDisable(request, env);
   }
+  if (url.pathname === "/v1/thane-cli/webhooks/channel-members/add" && request.method === "POST") {
+    return handleThaneCliWebhookChannelMembership(request, env, "add");
+  }
+  if (url.pathname === "/v1/thane-cli/webhooks/channel-members/remove" && request.method === "POST") {
+    return handleThaneCliWebhookChannelMembership(request, env, "remove");
+  }
   if (url.pathname === "/v1/thane-cli/workspaces" && request.method === "POST") {
     return handleThaneCliWorkspaceEnsure(request, env);
   }
@@ -5049,6 +5211,9 @@ async function handleThaneCliRequest(request: Request, env: Env): Promise<Respon
   }
   if (url.pathname === "/v1/thane-cli/channel-members/remove" && request.method === "POST") {
     return handleThaneCliChannelMemberRemove(request, env);
+  }
+  if (url.pathname === "/v1/thane-cli/dms/open" && request.method === "POST") {
+    return handleThaneCliDmOpen(request, env);
   }
   if (url.pathname === "/v1/thane-cli/messages" && request.method === "POST") {
     return handleThaneCliMessageCreate(request, env);

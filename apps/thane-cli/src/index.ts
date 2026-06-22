@@ -18,6 +18,7 @@ import {
   joinHostedChannel,
   leaveHostedChannel,
   leaveHostedWorkspace,
+  openHostedDm,
   reactHostedMessage,
   removeHostedChannelMember,
   removeHostedWorkspaceMember,
@@ -454,6 +455,8 @@ Integrations:
   thane webhooks list [--json]
   thane webhooks create <name> <https-url> [--event message.created] [--json]
   thane webhooks disable <id-or-name> [--json]
+  thane webhooks channel-add <id-or-name> <channel> [--json]
+  thane webhooks channel-remove <id-or-name> <channel> [--json]
   thane webhooks docs
 
 Notifications:
@@ -605,6 +608,10 @@ Create a team webhook:
 
 thane webhooks create my-app https://example.com/thane/events --json
 
+Add the bot to a private channel:
+
+thane webhooks channel-add my-app private-builds
+
 The create response includes:
 
 {
@@ -691,6 +698,7 @@ Security notes:
 - Webhook reads, messages, and reactions are permission-checked and rate-limited per app identity and team.
 
 Webhook tokens are shown once. Use \`thane webhooks list --json\` for IDs and status.
+Webhook bots receive public-channel events automatically. Add them to private channels when they should read or post there.
 `;
 }
 
@@ -1172,7 +1180,7 @@ async function main(): Promise<void> {
         ? printJson(response)
         : process.stdout.write(
             response.webhooks.length
-              ? `${response.webhooks.map((webhook) => `${webhook.id} ${webhook.name} ${webhook.status} ${webhook.url}`).join("\n")}\n`
+              ? `${response.webhooks.map((webhook) => `${webhook.id} ${webhook.name} ${webhook.status} @${webhook.botHandle ?? webhook.botUserId ?? "bot"} ${webhook.url}`).join("\n")}\n`
               : "no webhooks\n"
           );
       return;
@@ -1199,14 +1207,42 @@ async function main(): Promise<void> {
         printJson(response);
       } else {
         process.stdout.write(
-          `webhook created: ${response.webhook.id}\n` +
+            `webhook created: ${response.webhook.id}\n` +
+            `bot handle: @${response.webhook.botHandle ?? response.webhook.botUserId ?? response.webhook.name}\n` +
             `token: ${response.token}\n` +
             `signing secret: ${response.signingSecret}\n` +
             `post messages: ${response.postMessageEndpoint}\n` +
             (response.postReactionEndpoint ? `post reactions: ${response.postReactionEndpoint}\n` : "") +
+            `add to a private channel: thane webhooks channel-add ${response.webhook.id} <channel>\n` +
             "These credentials are shown once. Store them in the external app.\n"
         );
       }
+      return;
+    }
+    if (second === "channel-add" || second === "channel-remove") {
+      const webhook = args.positionals[2];
+      const channelName = args.positionals[3];
+      if (!webhook || !channelName) {
+        throw new Error(`Usage: thane webhooks ${second} <id-or-name> <channel>`);
+      }
+      const endpoint = second === "channel-add"
+        ? "/v1/thane-cli/webhooks/channel-members/add"
+        : "/v1/thane-cli/webhooks/channel-members/remove";
+      const response = await postThaneApiWithAuth<{
+        webhook: Record<string, unknown>;
+        channelName: string;
+        added?: boolean;
+        removed?: boolean;
+      }>(endpoint, token, {
+        workspaceId,
+        webhook,
+        channelName
+      });
+      wantsJson(args)
+        ? printJson(response)
+        : process.stdout.write(
+            `${second === "channel-add" ? "added" : "removed"} @${response.webhook.botHandle ?? response.webhook.name ?? webhook} ${second === "channel-add" ? "to" : "from"} #${response.channelName}\n`
+          );
       return;
     }
     if (second === "disable") {
@@ -1221,7 +1257,7 @@ async function main(): Promise<void> {
       wantsJson(args) ? printJson(response) : process.stdout.write(`disabled webhook ${response.webhook.id}\n`);
       return;
     }
-    throw new Error("Usage: thane webhooks <list|create|disable|docs>");
+    throw new Error("Usage: thane webhooks <list|create|disable|channel-add|channel-remove|docs>");
   }
 
   if (command === "notify" && second === "location") {
@@ -1730,7 +1766,18 @@ async function main(): Promise<void> {
     return;
   }
 
-  if ((command === "dm-recent" || command === "dm") && second) {
+  if (command === "dm" && second) {
+    if (hasHostedChat(store)) {
+      requireHostedAuthToken(store);
+      await openHostedDm(store, { target: second });
+      store = await ThaneStore.open();
+    }
+    const messages = store.recentDm(second, flagNumber(args, "limit", 20), parseSince(flagString(args, "since")));
+    wantsJson(args) ? printJson({ messages }) : process.stdout.write(`${renderMessages(messages)}\n`);
+    return;
+  }
+
+  if (command === "dm-recent" && second) {
     await syncBeforeRead();
     const messages = store.recentDm(second, flagNumber(args, "limit", 20), parseSince(flagString(args, "since")));
     wantsJson(args) ? printJson({ messages }) : process.stdout.write(`${renderMessages(messages)}\n`);

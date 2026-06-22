@@ -2277,7 +2277,7 @@ describe("@ask-thane/api-worker", () => {
 
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.webhook).toMatchObject({ name: "Build Bot", url: "https://example.com/thane/events", status: "active" });
+    expect(body.webhook).toMatchObject({ name: "Build Bot", url: "https://example.com/thane/events", status: "active", botHandle: "build-bot" });
     expect(body.token).toMatch(/^twk_/);
     expect(body.signingSecret).toMatch(/^whsec_/);
     expect(body.postMessageEndpoint).toBe("https://api.local/v1/thane-cli/webhooks/messages");
@@ -2286,6 +2286,80 @@ describe("@ask-thane/api-worker", () => {
     expect(webhookInsert?.args[3]).toBe("https://example.com/thane/events");
     expect(webhookInsert?.args[4]).toBe(JSON.stringify(["message.created"]));
     expect(webhookInsert?.args[7]).toBe("tcm_webhook");
+  });
+
+  it("adds webhook bot members to channels for team admins", async () => {
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members") && sql.includes("email = ?")) {
+        return {
+          id: "tcm_owner",
+          account_id: "acct_owner",
+          email: "owner@example.com",
+          display_name: "Owner",
+          handle: "owner",
+          role: "owner"
+        };
+      }
+      if (sql.includes("FROM thane_cli_webhooks webhook")) {
+        return {
+          id: "twh_1",
+          workspace_id: "wsp_1",
+          name: "Build Bot",
+          target_url: "https://example.com/thane/events",
+          event_types: JSON.stringify(["message.created"]),
+          signing_secret: "whsec_test",
+          token_hash: "hash",
+          bot_member_id: "tcm_webhook",
+          created_by_member_id: "tcm_owner",
+          status: "active",
+          created_at: "2026-06-19T00:00:00.000Z",
+          updated_at: "2026-06-19T00:00:00.000Z",
+          last_delivered_at: null,
+          bot_handle: "build-bot",
+          bot_display_name: "Build Bot"
+        };
+      }
+      if (sql.includes("SELECT id, name, kind, visibility FROM thane_cli_channels")) {
+        return { id: "tcc_private", name: "private-builds", kind: "channel", visibility: "private" };
+      }
+      return null;
+    });
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        return { first: first.bind({ sql, args }), run };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/webhooks/channel-members/add", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
+        body: JSON.stringify({ workspaceId: "wsp_1", webhook: "Build Bot", channelName: "private-builds" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      webhook: { id: "twh_1", botHandle: "build-bot" },
+      channelId: "tcc_private",
+      channelName: "private-builds",
+      memberId: "tcm_webhook",
+      added: true
+    });
+    const membershipWrite = calls.find((call) => call.sql.includes("INSERT INTO thane_cli_channel_members"));
+    expect(membershipWrite?.args[1]).toBe("tcc_private");
+    expect(membershipWrite?.args[2]).toBe("tcm_webhook");
   });
 
   it("lets active webhook app tokens post messages as external app members", async () => {
@@ -2511,8 +2585,14 @@ describe("@ask-thane/api-worker", () => {
       if (sql.includes("FROM thane_cli_channels c")) {
         return null;
       }
-      if (sql.includes("SELECT id, name, kind, visibility FROM thane_cli_channels") && sql.includes("name = ?")) {
-        return { id: "tcc_dm", name: "dm-garrett-owner", kind: "dm", visibility: "private" };
+      if (sql.includes("SELECT id, name, kind, visibility, created_at FROM thane_cli_channels") && sql.includes("name = ?")) {
+        return {
+          id: "tcc_dm",
+          name: "dm-garrett-owner",
+          kind: "dm",
+          visibility: "private",
+          created_at: "2026-06-22T12:00:00.000Z"
+        };
       }
       if (sql.includes("FROM thane_cli_channel_members")) {
         return { left_at: null };
@@ -2572,6 +2652,93 @@ describe("@ask-thane/api-worker", () => {
     expect(insertedMessages[0]?.args[2]).toBe("tcc_dm");
     expect(insertedMessages[0]?.args[3]).toBe("tcm_owner");
     expect(insertedMessages[0]?.args[4]).toBe("Can you review this?");
+  });
+
+  it("lets signed-in members open hosted DMs without sending a message", async () => {
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const insertedMessages: Array<{ args: unknown[] }> = [];
+    const first = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members") && sql.includes("id = ? OR email = ? OR handle = ?")) {
+        return {
+          id: "tcm_thane",
+          account_id: "acct_thane",
+          email: "thane@askthane.com",
+          display_name: "Ask Thane",
+          handle: "thane",
+          role: "member"
+        };
+      }
+      if (sql.includes("FROM thane_cli_workspace_members") && sql.includes("email = ?")) {
+        return {
+          id: "tcm_owner",
+          account_id: "acct_owner",
+          email: "owner@example.com",
+          display_name: "Owner",
+          handle: "owner",
+          role: "owner"
+        };
+      }
+      if (sql.includes("FROM thane_cli_channels c")) {
+        return null;
+      }
+      if (sql.includes("SELECT id, name, kind, visibility, created_at FROM thane_cli_channels") && sql.includes("name = ?")) {
+        return {
+          id: "tcc_dm",
+          name: "dm-owner-thane",
+          kind: "dm",
+          visibility: "private",
+          created_at: "2026-06-22T12:00:00.000Z"
+        };
+      }
+      return null;
+    });
+    const run = vi.fn(async function (this: { sql?: string; args?: unknown[] }) {
+      if ((this.sql ?? "").includes("INSERT INTO thane_cli_chat_messages")) {
+        insertedMessages.push({ args: this.args ?? [] });
+      }
+      return { meta: { changes: 1 } };
+    });
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        return {
+          run: run.bind({ sql, args }),
+          first: first.bind({ sql, args })
+        };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/dms/open", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
+        body: JSON.stringify({ workspaceId: "wsp_1", target: "thane" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      channel: {
+        id: "tcc_dm",
+        workspaceId: "wsp_1",
+        name: "thane",
+        kind: "dm",
+        visibility: "private",
+        memberIds: ["tcm_owner", "tcm_thane"],
+        createdAt: "2026-06-22T12:00:00.000Z"
+      }
+    });
+    expect(calls.some((call) => call.sql.includes("INSERT INTO thane_cli_channels"))).toBe(true);
+    expect(calls.filter((call) => call.sql.includes("INSERT INTO thane_cli_channel_members"))).toHaveLength(2);
+    expect(insertedMessages).toHaveLength(0);
   });
 
   it("lets active webhook apps react through the hosted reaction endpoint", async () => {

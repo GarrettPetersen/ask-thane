@@ -374,6 +374,18 @@ export const cliCommands: CliCommand[] = [
   },
   {
     category: "Integrations",
+    command: "thane webhooks channel-add <id-or-name> <channel> [--json]",
+    description: "Add a webhook bot member to a channel, especially private channels.",
+    examples: ["thane webhooks channel-add build-bot private-builds"]
+  },
+  {
+    category: "Integrations",
+    command: "thane webhooks channel-remove <id-or-name> <channel> [--json]",
+    description: "Remove a webhook bot member from a channel.",
+    examples: ["thane webhooks channel-remove build-bot private-builds"]
+  },
+  {
+    category: "Integrations",
     command: "thane webhooks docs",
     description: "Print webhook payload, signature, history, message, DM, and reaction examples.",
     examples: ["thane webhooks docs"]

@@ -11,6 +11,7 @@ import {
   leaveHostedChannel,
   leaveHostedWorkspace,
   markHostedRead,
+  openHostedDm,
   reactHostedMessage,
   removeHostedChannelMember,
   removeHostedWorkspaceMember,
@@ -541,6 +542,60 @@ async function createWorkspaceInviteLink(store: ThaneStore, role: "admin" | "mem
   }
   const webUrl = response.invite.webUrl ?? response.invite.url;
   return `web: ${webUrl}\ncli: ${response.invite.url} (${response.invite.role}, expires ${response.invite.expiresAt})`;
+}
+
+async function listWorkspaceWebhooks(store: ThaneStore): Promise<Array<Record<string, unknown>>> {
+  store.requireWorkspaceAdmin();
+  const token = requireHostedAuthToken(store);
+  const response = await getThaneApiWithAuth<{ webhooks: Array<Record<string, unknown>> }>(
+    `/v1/thane-cli/webhooks?workspaceId=${encodeURIComponent(store.activeWorkspace.id)}`,
+    token
+  );
+  return response.webhooks;
+}
+
+async function createWorkspaceWebhook(store: ThaneStore, input: { name: string; url: string }): Promise<{
+  webhook: Record<string, unknown>;
+  token: string;
+  signingSecret: string;
+  postMessageEndpoint: string;
+  postReactionEndpoint?: string;
+}> {
+  store.requireWorkspaceAdmin();
+  const token = requireHostedAuthToken(store);
+  return postThaneApiWithAuth("/v1/thane-cli/webhooks", token, {
+    workspaceId: store.activeWorkspace.id,
+    name: input.name,
+    url: input.url,
+    eventTypes: ["message.created"]
+  });
+}
+
+async function disableWorkspaceWebhook(store: ThaneStore, webhook: string): Promise<Record<string, unknown>> {
+  store.requireWorkspaceAdmin();
+  const token = requireHostedAuthToken(store);
+  const response = await postThaneApiWithAuth<{ webhook: Record<string, unknown> }>("/v1/thane-cli/webhooks/disable", token, {
+    workspaceId: store.activeWorkspace.id,
+    webhook
+  });
+  return response.webhook;
+}
+
+async function setWorkspaceWebhookChannel(store: ThaneStore, input: {
+  webhook: string;
+  channelName: string;
+  action: "add" | "remove";
+}): Promise<{ webhook: Record<string, unknown>; channelName: string }> {
+  store.requireWorkspaceAdmin();
+  const token = requireHostedAuthToken(store);
+  const endpoint = input.action === "add"
+    ? "/v1/thane-cli/webhooks/channel-members/add"
+    : "/v1/thane-cli/webhooks/channel-members/remove";
+  return postThaneApiWithAuth(endpoint, token, {
+    workspaceId: store.activeWorkspace.id,
+    webhook: input.webhook,
+    channelName: input.channelName
+  });
 }
 
 async function updateDisplayName(store: ThaneStore, displayName: string): Promise<string> {
@@ -1166,20 +1221,72 @@ export async function runChat(initialChannel = "general"): Promise<void> {
       return;
     }
     if (trimmed === "/webhooks") {
+      const webhooks = await listWorkspaceWebhooks(store);
       sidePanelLines = [
         `${BOLD}Webhooks${RESET}`,
         "",
-        "Use the scriptable CLI for webhook setup:",
-        "thane webhooks docs",
-        "thane webhooks create <name> <https-url> --json",
-        "thane webhooks list --json",
-        "thane webhooks disable <id-or-name>"
+        ...(webhooks.length
+          ? webhooks.map((webhook) => `${webhook.id} ${webhook.name} ${webhook.status} @${webhook.botHandle ?? webhook.botUserId ?? "bot"}`)
+          : ["No webhooks yet."]),
+        "",
+        "/webhook-create <name> <https-url>",
+        "/webhook-disable <id-or-name>",
+        "/webhook-channel-add <id-or-name> <channel>",
+        "/webhook-channel-remove <id-or-name> <channel>"
       ];
       showHelp = false;
       showMenu = false;
       workspacePickerOpen = false;
       showReactionPicker = false;
-      status = "Webhook setup commands";
+      status = "Webhook bots";
+      return;
+    }
+    if (trimmed.startsWith("/webhook-create ")) {
+      const match = trimmed.match(/^\/webhook-create\s+(\S+)\s+(\S+)$/);
+      if (!match?.[1] || !match[2]) {
+        status = "Usage: /webhook-create <name> <https-url>";
+        return;
+      }
+      const response = await createWorkspaceWebhook(store, { name: match[1], url: match[2] });
+      sidePanelLines = [
+        `${BOLD}Webhook Created${RESET}`,
+        "",
+        `${response.webhook.id} ${response.webhook.name} @${response.webhook.botHandle ?? response.webhook.botUserId ?? "bot"}`,
+        "",
+        `token: ${response.token}`,
+        `signing secret: ${response.signingSecret}`,
+        `post messages: ${response.postMessageEndpoint}`,
+        ...(response.postReactionEndpoint ? [`post reactions: ${response.postReactionEndpoint}`] : []),
+        "",
+        `/webhook-channel-add ${response.webhook.id} <channel>`
+      ];
+      showHelp = false;
+      showMenu = false;
+      workspacePickerOpen = false;
+      showReactionPicker = false;
+      status = "Webhook created. Credentials shown once.";
+      return;
+    }
+    if (trimmed.startsWith("/webhook-disable ")) {
+      const webhook = trimmed.slice("/webhook-disable ".length).trim();
+      if (!webhook) {
+        status = "Usage: /webhook-disable <id-or-name>";
+        return;
+      }
+      const disabled = await disableWorkspaceWebhook(store, webhook);
+      status = `Disabled webhook ${disabled.id ?? webhook}`;
+      return;
+    }
+    if (trimmed.startsWith("/webhook-channel-add ") || trimmed.startsWith("/webhook-channel-remove ")) {
+      const action = trimmed.startsWith("/webhook-channel-add ") ? "add" : "remove";
+      const prefix = action === "add" ? "/webhook-channel-add " : "/webhook-channel-remove ";
+      const [webhook = "", channelName = ""] = trimmed.slice(prefix.length).trim().split(/\s+/);
+      if (!webhook || !channelName) {
+        status = `Usage: ${prefix.trim()} <id-or-name> <channel>`;
+        return;
+      }
+      const response = await setWorkspaceWebhookChannel(store, { webhook, channelName, action });
+      status = `${action === "add" ? "Added" : "Removed"} @${response.webhook.botHandle ?? response.webhook.name ?? webhook} ${action === "add" ? "to" : "from"} #${response.channelName}`;
       return;
     }
     if (trimmed === "/help" || trimmed === "/commands") {
@@ -1460,7 +1567,16 @@ export async function runChat(initialChannel = "general"): Promise<void> {
         activeChannel = store.findChannel(sent.channelId) ?? activeChannel;
         status = `Sent DM to @${target.replace(/^@/, "")}`;
       } else {
-        activeChannel = await selectConversation(store, `@${target}`);
+        const normalizedTarget = target.replace(/^@/, "");
+        const existingDm = store.listDms().find((candidate) => candidate.name === normalizedTarget.toLowerCase());
+        if (existingDm) {
+          activeChannel = existingDm;
+        } else {
+          requireHostedAuthToken(store);
+          const channel = await openHostedDm(store, { target: normalizedTarget });
+          store = await ThaneStore.open();
+          activeChannel = store.findChannel(channel.id) ?? (await selectConversation(store, `@${normalizedTarget}`));
+        }
         status = `Opened ${channelLabel(activeChannel, store)}`;
       }
       await markConversationRead(activeChannel.id);

@@ -384,6 +384,15 @@ export async function sendHostedDm(
   return response.message;
 }
 
+export async function openHostedDm(store: ThaneStore, input: { target: string }): Promise<ThaneChannel> {
+  const response = await postHosted<{ ok: true; channel: ThaneChannel }>(store, "/v1/thane-cli/dms/open", {
+    workspaceId: store.activeWorkspace.id,
+    target: input.target
+  });
+  await syncHostedStore(store).catch(() => false);
+  return response.channel;
+}
+
 export async function reactHostedMessage(store: ThaneStore, input: { messageId: string; emoji: string }): Promise<void> {
   await postHosted(store, "/v1/thane-cli/reactions", {
     workspaceId: store.activeWorkspace.id,

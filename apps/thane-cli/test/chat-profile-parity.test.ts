@@ -156,6 +156,27 @@ describe("chat profile action parity", () => {
     expect(findCliCommand("thane unread [--json]")?.description).toContain("unread");
   });
 
+  it("can open hosted DMs across web, terminal, and CLI", () => {
+    expect(hostedSource).toContain("openHostedDm");
+    expect(cliIndexSource).toContain("await openHostedDm(store, { target: second })");
+    expect(terminalChatSource).toContain("await openHostedDm(store, { target: normalizedTarget })");
+    expect(chatAppHtml).toContain("openDmComposer");
+  });
+
+  it("exposes webhook bot membership controls across web, terminal, and CLI", () => {
+    expect(findCliCommand("thane webhooks channel-add <id-or-name> <channel> [--json]")?.description).toContain("webhook bot");
+    expect(findCliCommand("thane webhooks channel-remove <id-or-name> <channel> [--json]")?.description).toContain("webhook bot");
+    expect(findSlashCommand("/webhook-channel-add")).toMatchObject({
+      usage: "/webhook-channel-add <id-or-name> <channel>",
+      adminOnly: true
+    });
+    expect(terminalChatSource).toContain("/webhook-create <name> <https-url>");
+    expect(terminalChatSource).toContain("setWorkspaceWebhookChannel");
+    expect(chatAppHtml).toContain("Webhook bots");
+    expect(chatAppHtml).toContain("setWebhookChannel");
+    expect(chatAppHtml).toContain("Create webhook bot");
+  });
+
   it("keeps admin-only slash commands out of non-admin terminal menus", () => {
     const adminCommands = slashCommandsForRole({ isAdmin: true }).map((command) => command.name);
     const memberCommands = slashCommandsForRole({ isAdmin: false }).map((command) => command.name);
