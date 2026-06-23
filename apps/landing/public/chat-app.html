@@ -686,9 +686,6 @@
           min-height: 30px;
           min-width: 32px;
         }
-        .action-label {
-          display: inline;
-        }
       }
     </style>
   </head>
@@ -2721,7 +2718,7 @@
         const dmAction = user ? `openDmComposer(${jsAttr(userDmTarget(user))})` : "";
         return `<article class="message ${isReply ? "reply" : ""} ${message.pending ? "pending" : ""} ${message.failed ? "failed" : ""} ${menuOpen ? "show-reactions" : ""}" ontouchstart="${canActOnMessage ? `startLongPress(event, ${jsAttr(message.id)})` : ""}" ontouchmove="markTouchMoved()" ontouchend="cancelLongPress()" ontouchcancel="cancelLongPress()" oncontextmenu="${canActOnMessage ? `openReactionMenu(event, ${jsAttr(message.id)})` : "event.preventDefault()"}">
           <span class="message-meta">${branch}<span class="msg-marker">  ${esc(stamp)}</span> <span class="message-author">${esc(author)}${sourceMarker}</span>${deliveryText}: </span><span class="message-text">${esc(message.text)}</span>${replies.length && !isReply ? `<span class="thread-count"> (${replies.length} repl${replies.length === 1 ? "y" : "ies"})</span>` : ""}${reactionHtml ? `<span class="message-reactions">${reactionHtml}</span>` : ""}
-          ${canActOnMessage ? `<span class="message-actions"><button type="button" class="message-action" title="React" ${mobileAction(reactAction)} onclick="${reactAction}"><span aria-hidden="true">+</span><span class="action-label">react</span></button>${!isReply ? `<button type="button" class="message-action" title="Reply" ${mobileAction(replyAction)} onclick="event.stopPropagation(); ${replyAction}"><span aria-hidden="true">↵</span><span class="action-label">reply</span></button>` : ""}${canDmAuthor ? `<button type="button" class="message-action" title="DM ${esc(author)}" ${mobileAction(dmAction)} onclick="event.stopPropagation(); ${dmAction}"><span aria-hidden="true">@</span><span class="action-label">DM</span></button>` : ""}</span>` : ""}
+          ${canActOnMessage ? `<span class="message-actions"><button type="button" class="message-action" title="React" aria-label="React" ${mobileAction(reactAction)} onclick="${reactAction}"><span aria-hidden="true">+</span><span class="action-label">react</span></button>${!isReply ? `<button type="button" class="message-action" title="Reply" aria-label="Reply" ${mobileAction(replyAction)} onclick="event.stopPropagation(); ${replyAction}"><span aria-hidden="true">↵</span><span class="action-label">reply</span></button>` : ""}${canDmAuthor ? `<button type="button" class="message-action" title="DM ${esc(author)}" aria-label="DM ${esc(author)}" ${mobileAction(dmAction)} onclick="event.stopPropagation(); ${dmAction}"><span aria-hidden="true">@</span><span class="action-label">DM</span></button>` : ""}</span>` : ""}
           ${menuOpen && canActOnMessage ? `<span class="reaction-menu" ${actionTapGuard}>${quickReactions.map((emoji) => {
             const emojiAction = `reactTo(${jsAttr(message.id)}, ${jsAttr(emoji)})`;
             return `<button type="button" ${mobileAction(emojiAction)} onclick="event.stopPropagation(); ${emojiAction}">${esc(emoji)}</button>`;
