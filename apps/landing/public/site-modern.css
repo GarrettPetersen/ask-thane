@@ -78,6 +78,102 @@ body.chat-install-page header {
   border-bottom-color: var(--mono-line-dark);
 }
 
+body > header,
+.home-page header {
+  display: flex !important;
+  align-items: center;
+  gap: 14px;
+}
+
+.thane-chat-shortcut {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  margin-left: auto;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  text-decoration: none;
+}
+
+nav .thane-chat-shortcut,
+.nav .thane-chat-shortcut,
+.top-links .thane-chat-shortcut {
+  margin-left: 0;
+}
+
+.thane-chat-shortcut:hover {
+  background: var(--mono-black);
+  color: var(--mono-white) !important;
+  transform: translateY(-1px);
+}
+
+.thane-chat-shortcut.floating {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 1000;
+  margin-left: 0;
+  background: var(--mono-white);
+  color: var(--mono-black);
+}
+
+body.product-chat .thane-chat-shortcut:hover,
+body.chat-install-page .thane-chat-shortcut:hover {
+  background: var(--mono-white);
+  color: var(--mono-black) !important;
+}
+
+.thane-chat-shortcut-icon {
+  position: relative;
+  width: 19px;
+  height: 14px;
+  border: 2px solid currentColor;
+}
+
+.thane-chat-shortcut-icon::after {
+  content: "";
+  position: absolute;
+  right: 2px;
+  bottom: -7px;
+  width: 7px;
+  height: 7px;
+  border-left: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  background: inherit;
+  transform: skewY(-36deg);
+}
+
+.thane-chat-shortcut-badge {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border: 2px solid var(--mono-white);
+  border-radius: 999px;
+  background: #d91f2f;
+  color: var(--mono-white);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 16px;
+  text-align: center;
+}
+
+body.product-chat .thane-chat-shortcut-badge,
+body.chat-install-page .thane-chat-shortcut-badge {
+  border-color: var(--mono-black);
+}
+
+.thane-chat-shortcut-badge[hidden] {
+  display: none;
+}
+
 .brand-mark,
 .brand img,
 .product-logo {
@@ -433,6 +529,11 @@ nav a {
   .button,
   button {
     width: fit-content;
+  }
+
+  .thane-chat-shortcut {
+    width: 36px;
+    height: 36px;
   }
 
   .button + .button {

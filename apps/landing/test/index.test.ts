@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 
 const publicDir = new URL("../public/", import.meta.url);
+const utilityHtmlFiles = new Set(["chat-app.html", "chat-session-bridge.html"]);
+
+function websiteHtmlFiles(): string[] {
+  return readdirSync(publicDir).filter((file) => file.endsWith(".html") && !utilityHtmlFiles.has(file));
+}
 
 function extractMetaContent(html: string, attribute: "name" | "property", value: string): string | null {
   const escapedValue = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -114,7 +119,7 @@ describe("@ask-thane/landing", () => {
   });
 
   it("defines social sharing metadata for every public html page", () => {
-    const htmlFiles = readdirSync(publicDir).filter((file) => file.endsWith(".html"));
+    const htmlFiles = websiteHtmlFiles();
 
     expect(htmlFiles.length).toBeGreaterThan(0);
 
@@ -149,6 +154,22 @@ describe("@ask-thane/landing", () => {
       expect(png.readUInt32BE(16), `${file} png width`).toBe(1200);
       expect(png.readUInt32BE(20), `${file} png height`).toBe(630);
     }
+  });
+
+  it("loads the Thane Chat shortcut on every public website page", () => {
+    const htmlFiles = websiteHtmlFiles();
+
+    expect(htmlFiles.length).toBeGreaterThan(0);
+
+    for (const file of htmlFiles) {
+      const html = readFileSync(new URL(file, publicDir), "utf8");
+      expect(html, `${file} chat shortcut`).toContain('<script src="/chat-shortcut.js" defer></script>');
+    }
+
+    expect(readFileSync(new URL("chat-app.html", publicDir), "utf8")).not.toContain("/chat-shortcut.js");
+    expect(readFileSync(new URL("chat-session-bridge.html", publicDir), "utf8")).not.toContain("/chat-shortcut.js");
+    expect(existsSync(new URL("chat-shortcut.js", publicDir))).toBe(true);
+    expect(existsSync(new URL("chat-session-bridge.html", publicDir))).toBe(true);
   });
 
   it("serves health", async () => {

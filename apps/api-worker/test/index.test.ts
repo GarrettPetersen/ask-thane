@@ -1028,6 +1028,79 @@ describe("@ask-thane/api-worker", () => {
     });
   });
 
+  it("returns a lightweight unread summary for Thane Chat badges", async () => {
+    const all = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members m")) {
+        return {
+          results: [
+            {
+              id: "wsp_1",
+              workspace_slug: "acme",
+              member_id: "tcm_1"
+            },
+            {
+              id: "wsp_2",
+              workspace_slug: "ops",
+              member_id: "tcm_2"
+            }
+          ]
+        };
+      }
+      if (sql.includes("COUNT(msg.id) AS unread_count")) {
+        return {
+          results: [
+            {
+              workspace_id: "wsp_1",
+              channel_id: "tcc_1",
+              unread_count: 2,
+              mention_count: 0
+            },
+            {
+              workspace_id: "wsp_2",
+              channel_id: "tcc_2",
+              unread_count: 3,
+              mention_count: 1
+            }
+          ]
+        };
+      }
+      return { results: [] };
+    });
+    const noRateLimit = vi.fn(async () => null);
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn(() => {
+        if (sql.includes("thane_cli_rate_limits")) {
+          return { first: noRateLimit, run };
+        }
+        return { all: all.bind({ sql }) };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/unread-summary", {
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` }
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      unreadCount: 5,
+      mentionCount: 1,
+      workspaceUnreadCounts: [
+        { workspaceId: "wsp_1", slug: "acme", unreadCount: 2, mentionCount: 0 },
+        { workspaceId: "wsp_2", slug: "ops", unreadCount: 3, mentionCount: 1 }
+      ]
+    });
+  });
+
   it("syncs newly created DMs to recipients with unread counts", async () => {
     const first = vi.fn(async function (this: { sql?: string }) {
       const sql = this.sql ?? "";

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Thane Chat session bridge</title>
+  </head>
+  <body>
+    <script>
+      (() => {
+        const API = "https://api.askthane.com";
+        const storageKey = "thane.web.session";
+        const allowedOrigins = new Set([
+          "https://askthane.com",
+          "https://www.askthane.com",
+          "http://localhost:8787",
+          "http://127.0.0.1:8787",
+          "http://localhost:4173",
+          "http://127.0.0.1:4173"
+        ]);
+
+        function session() {
+          try {
+            return JSON.parse(localStorage.getItem(storageKey) || "null");
+          } catch (_error) {
+            return null;
+          }
+        }
+
+        async function unreadSummary(authToken) {
+          const res = await fetch(`${API}/v1/thane-cli/unread-summary`, {
+            headers: { authorization: `Bearer ${authToken}` }
+          });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok || body.ok === false) throw new Error(body.error || `HTTP ${res.status}`);
+          return Math.max(0, Number(body.unreadCount || 0));
+        }
+
+        window.addEventListener("message", async (event) => {
+          if (!allowedOrigins.has(event.origin) || event.data?.type !== "thane-chat:unread-request") return;
+          const currentSession = session();
+          if (!currentSession?.authToken) {
+            event.source?.postMessage({ type: "thane-chat:unread-response", signedIn: false, unreadCount: 0 }, event.origin);
+            return;
+          }
+          try {
+            const unreadCount = await unreadSummary(currentSession.authToken);
+            event.source?.postMessage({ type: "thane-chat:unread-response", signedIn: true, unreadCount }, event.origin);
+          } catch (_error) {
+            event.source?.postMessage({ type: "thane-chat:unread-response", signedIn: true, unreadCount: 0 }, event.origin);
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>
