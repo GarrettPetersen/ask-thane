@@ -406,9 +406,12 @@
         align-items: center;
       }
       .reaction-custom input {
-        width: 48px;
+        width: 62px;
         min-height: 26px;
         padding: 2px 5px;
+      }
+      .reaction-custom input:invalid {
+        border-color: #f97373;
       }
       .msg-marker {
         color: var(--muted);
@@ -1675,35 +1678,50 @@
       }
 
       async function reactTo(messageId, emoji) {
-        if (!messageId || !emoji) return;
+        const normalizedEmoji = normalizeReactionEmoji(emoji);
+        if (!messageId || !normalizedEmoji) return;
         state.reactionMenuMessageId = "";
         await api("/v1/thane-cli/reactions", {
           method: "POST",
-          body: JSON.stringify({ workspaceId: state.activeWorkspaceId, messageId, emoji })
+          body: JSON.stringify({ workspaceId: state.activeWorkspaceId, messageId, emoji: normalizedEmoji })
         });
         await sync();
         render();
       }
 
-      async function customReaction(event, messageId) {
-        event.preventDefault();
-        const input = event.currentTarget.querySelector("input");
+      async function customReactionInput(event, messageId) {
+        if (event?.isComposing) return;
+        const input = event.currentTarget;
         const emoji = normalizeReactionEmoji(input?.value);
+        input?.setCustomValidity("");
+        input?.removeAttribute("aria-invalid");
+        if (!String(input?.value || "").trim()) return;
         if (!emoji) {
+          input?.setAttribute("aria-invalid", "true");
           input?.setCustomValidity("Use a single emoji.");
           input?.reportValidity();
           return;
         }
-        input?.setCustomValidity("");
-        event.currentTarget.reset();
+        input.disabled = true;
         await reactTo(messageId, emoji);
+      }
+
+      function focusReactionInput() {
+        const input = document.querySelector(".reaction-custom input");
+        try {
+          input?.focus?.({ preventScroll: true });
+        } catch {
+          input?.focus?.();
+        }
       }
 
       function openReactionMenu(event, messageId) {
         event?.preventDefault?.();
         event?.stopPropagation?.();
-        state.reactionMenuMessageId = state.reactionMenuMessageId === messageId ? "" : messageId;
+        const opening = state.reactionMenuMessageId !== messageId;
+        state.reactionMenuMessageId = opening ? messageId : "";
         render();
+        if (opening) focusReactionInput();
       }
 
       function closeReactionMenu() {
@@ -2742,7 +2760,7 @@
           ${menuOpen && canActOnMessage ? `<span class="reaction-menu" ${actionTapGuard}>${quickReactions.map((emoji) => {
             const emojiAction = `reactTo(${jsAttr(message.id)}, ${jsAttr(emoji)})`;
             return `<button type="button" ${mobileAction(emojiAction)} onclick="event.stopPropagation(); ${emojiAction}">${esc(emoji)}</button>`;
-          }).join("")}<form class="reaction-custom" onsubmit="customReaction(event, ${jsAttr(message.id)})"><input name="emoji" maxlength="40" placeholder="emoji" aria-label="Custom reaction emoji"/><button>ok</button></form><button type="button" title="Close" ${mobileAction("closeReactionMenu()")} onclick="closeReactionMenu()">x</button></span>` : ""}
+          }).join("")}<span class="reaction-custom"><input name="emoji" maxlength="40" placeholder="emoji" aria-label="Custom reaction emoji" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" oninput="customReactionInput(event, ${jsAttr(message.id)})" oncompositionend="customReactionInput(event, ${jsAttr(message.id)})" onkeydown="if (event.key === 'Escape') { event.preventDefault(); closeReactionMenu(); }"/></span><button type="button" title="Close" ${mobileAction("closeReactionMenu()")} onclick="closeReactionMenu()">x</button></span>` : ""}
           ${!isReply && replies.length ? replies.map((reply) => renderMessage(reply, users, repliesByRoot, true)).join("") : ""}
         </article>`;
       }
@@ -2913,7 +2931,7 @@
       window.updateDmDraft = updateDmDraft;
       window.sendDm = sendDm;
       window.reactTo = reactTo;
-      window.customReaction = customReaction;
+      window.customReactionInput = customReactionInput;
       window.openReactionMenu = openReactionMenu;
       window.closeReactionMenu = closeReactionMenu;
       window.startLongPress = startLongPress;

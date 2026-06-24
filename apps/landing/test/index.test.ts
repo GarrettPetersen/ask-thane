@@ -173,6 +173,18 @@ describe("@ask-thane/landing", () => {
     expect(existsSync(new URL("chat-session-bridge.html", publicDir))).toBe(true);
   });
 
+  it("keeps web custom reactions one-click and frontend validated", () => {
+    const html = readFileSync(new URL("chat-app.html", publicDir), "utf8");
+
+    expect(html).toContain("function isSingleReactionEmoji");
+    expect(html).toContain("function customReactionInput");
+    expect(html).toContain("normalizeReactionEmoji(emoji)");
+    expect(html).toContain("oninput=\"customReactionInput");
+    expect(html).toContain("input?.reportValidity()");
+    expect(html).not.toContain("onsubmit=\"customReaction");
+    expect(html).not.toContain("<button>ok</button>");
+  });
+
   it("serves health", async () => {
     const env = {
       DB: makeDbStub(),
