@@ -20,6 +20,11 @@ function extractCanonical(html: string): string | null {
   return match?.[1] ?? null;
 }
 
+function extractSvgIcon(html: string): string | null {
+  const match = html.match(/<link\s+rel="icon"\s+type="image\/svg\+xml"\s+href="([^"]+)"\s*\/?>/i);
+  return match?.[1] ?? null;
+}
+
 function makeDbStub() {
   const run = vi.fn(async () => ({ meta: { changes: 1 } }));
   const bind = vi.fn(() => ({ run }));
@@ -171,6 +176,39 @@ describe("@ask-thane/landing", () => {
     expect(existsSync(new URL("chat-shortcut.js", publicDir))).toBe(true);
     expect(readFileSync(new URL("chat-shortcut.js", publicDir), "utf8")).toContain('<svg class="thane-chat-shortcut-icon"');
     expect(existsSync(new URL("chat-session-bridge.html", publicDir))).toBe(true);
+  });
+
+  it("uses distinct favicons for Ask Thane, Thane Chat landing, and Thane Chat app", () => {
+    const askThanePages = [
+      "index.html",
+      "install.html",
+      "ask-thane.html",
+      "ask-thane-install.html",
+      "privacy.html",
+      "terms.html",
+      "acceptable-use.html",
+      "subprocessors.html",
+      "dashboard.html"
+    ];
+    const chatLandingPages = ["chat.html", "chat-install.html"];
+    const expectedIcons = new Map([
+      ["/favicon-ask-thane.svg", "#141414"],
+      ["/favicon-chat.svg", "#f7f3ea"],
+      ["/favicon-chat-app.svg", "#7aff9f"]
+    ]);
+
+    for (const [iconPath, expectedFill] of expectedIcons) {
+      const icon = readFileSync(new URL(iconPath.slice(1), publicDir), "utf8");
+      expect(icon, iconPath).toContain(expectedFill);
+      expect(icon, iconPath).toContain('viewBox="0 0 64 64"');
+    }
+    for (const file of askThanePages) {
+      expect(extractSvgIcon(readFileSync(new URL(file, publicDir), "utf8")), file).toBe("/favicon-ask-thane.svg");
+    }
+    for (const file of chatLandingPages) {
+      expect(extractSvgIcon(readFileSync(new URL(file, publicDir), "utf8")), file).toBe("/favicon-chat.svg");
+    }
+    expect(extractSvgIcon(readFileSync(new URL("chat-app.html", publicDir), "utf8"))).toBe("/favicon-chat-app.svg");
   });
 
   it("keeps web custom reactions one-click and frontend validated", () => {
