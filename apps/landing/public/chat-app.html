@@ -2836,7 +2836,7 @@
               <button class="rail-tab" onclick="toggleSidebar()" title="Expand sidebar">THANE / ${esc(workspace?.slug || "chat")}</button>
               <div class="brand">
                 <div class="sig">${esc(workspaceCrest(workspace))}</div>
-                <div class="title"><h1>Thane Chat</h1><span class="state">online</span></div>
+                <div class="title"><h1>${esc(workspace?.name || workspace?.slug || "Thane Chat")}</h1><span class="state">online</span></div>
                 <p class="muted small">${esc(userDisplayLabel(activeUser))}${activeUser?.handle ? ` @${esc(activeUser.handle)}` : ""}</p>
               </div>
               <section class="section">
