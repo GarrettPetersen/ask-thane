@@ -1255,6 +1255,31 @@ describe("@ask-thane/api-worker", () => {
     });
   });
 
+  it("rejects non-emoji hosted reactions", async () => {
+    const prepare = vi.fn();
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/reactions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` },
+        body: JSON.stringify({ workspaceId: "wsp_1", messageId: "tmsg_1", emoji: "ok" })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: "reaction_must_be_single_emoji"
+    });
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
   it("marks hosted Thane Chat conversations read", async () => {
     const run = vi.fn(async () => ({ meta: { changes: 1 } }));
     const first = vi.fn(async function (this: { sql?: string }) {
@@ -2870,7 +2895,7 @@ describe("@ask-thane/api-worker", () => {
       THANE_CLI_AUTH_SECRET: "test-secret"
     } as never;
 
-    const res = await worker.fetch(
+    const invalid = await worker.fetch(
       new Request("https://api.local/v1/thane-cli/webhooks/reactions", {
         method: "POST",
         headers: { Authorization: "Bearer twk_test" },
@@ -2879,15 +2904,31 @@ describe("@ask-thane/api-worker", () => {
       authEnv
     );
 
+    expect(invalid.status).toBe(400);
+    await expect(invalid.json()).resolves.toMatchObject({
+      ok: false,
+      error: "reaction_must_be_single_emoji"
+    });
+    expect(insertedReactions).toHaveLength(0);
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/webhooks/reactions", {
+        method: "POST",
+        headers: { Authorization: "Bearer twk_test" },
+        body: JSON.stringify({ messageId: "tmsg_1", emoji: "📝" })
+      }),
+      authEnv
+    );
+
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
       ok: true,
-      reaction: { emoji: "ok", by: "build-bot" }
+      reaction: { emoji: "📝", by: "build-bot" }
     });
     expect(insertedReactions).toHaveLength(1);
     expect(insertedReactions[0]?.args[1]).toBe("tmsg_1");
     expect(insertedReactions[0]?.args[2]).toBe("tcm_webhook");
-    expect(insertedReactions[0]?.args[3]).toBe("ok");
+    expect(insertedReactions[0]?.args[3]).toBe("📝");
   });
 
   it("lets active webhook apps read app-accessible channel history", async () => {

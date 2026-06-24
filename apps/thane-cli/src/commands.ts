@@ -327,8 +327,8 @@ export const cliCommands: CliCommand[] = [
   {
     category: "Messages",
     command: "thane react <message-id> <emoji>",
-    description: "React to a message.",
-    examples: ["thane react msg_123 eyes"]
+    description: "React to a message with one emoji.",
+    examples: ["thane react msg_123 👀"]
   },
   {
     category: "Messages",

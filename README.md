@@ -199,7 +199,7 @@ Tab                autocomplete slash commands, channels, teams, users, and ment
 Esc                close menu/help, cancel reply/react, or return to typing
 ```
 
-Thread replies render indented under their parent message, and selecting a channel or DM from the sidebar keeps focus in the sidebar so you can keep browsing. The selected message shows dim reply/react hints inline. In the reaction picker, use arrows or number keys to choose a common reaction, Enter to apply it, or `c` to type a custom reaction.
+Thread replies render indented under their parent message, and selecting a channel or DM from the sidebar keeps focus in the sidebar so you can keep browsing. The selected message shows dim reply/react hints inline. In the reaction picker, use arrows or number keys to choose a common reaction, Enter to apply it, or `c` to type a custom single-emoji reaction.
 Messages sent through scriptable terminal commands render with a bot marker in chat, so teammates can distinguish likely automation from live typing.
 
 Create and switch teams:
@@ -326,7 +326,7 @@ Webhook app development contract:
 - Admins create/list/disable webhooks from the CLI; creation returns the one-time app token, signing secret, webhook id, and post-message endpoint.
 - Apps can read app-accessible recent channel messages with `channelId`, optional `threadRootId`, and `limit`; reads are side-effect-free.
 - Apps can post to `channelId`, `channelName`, or `dmTarget`; the hosted API creates/reuses app DMs and enforces channel access.
-- Apps can react with `{ "messageId": "...", "emoji": "..." }` through the reaction endpoint.
+- Apps can react with `{ "messageId": "...", "emoji": "📝" }` through the reaction endpoint. Reactions must be a single emoji.
 - Receiver URLs must be HTTPS, except localhost for local development.
 - Receivers should verify `x-thane-signature` over `<x-thane-timestamp>.<raw body>` and reject stale timestamps.
 - App tokens are stored hashed and are accepted only as bearer tokens on webhook API endpoints.

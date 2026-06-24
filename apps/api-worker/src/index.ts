@@ -193,6 +193,40 @@ const THANE_CLI_FREE_LIMITS = {
   historyDays: 90
 } as const;
 
+type GraphemeSegment = { segment: string };
+type SegmenterConstructor = new (
+  locale?: string | string[],
+  options?: { granularity?: "grapheme" | "word" | "sentence" }
+) => { segment(input: string): Iterable<GraphemeSegment> };
+
+function graphemeSegments(value: string): string[] {
+  const Segmenter = (Intl as typeof Intl & { Segmenter?: SegmenterConstructor }).Segmenter;
+  if (!Segmenter) {
+    return Array.from(value);
+  }
+  return Array.from(new Segmenter(undefined, { granularity: "grapheme" }).segment(value), (item) => item.segment);
+}
+
+function isSingleEmoji(value: string): boolean {
+  const segments = graphemeSegments(value);
+  if (segments.length !== 1 || segments[0] !== value) {
+    return false;
+  }
+  return (
+    /\p{Extended_Pictographic}/u.test(value) ||
+    /^[\u{1F1E6}-\u{1F1FF}]{2}$/u.test(value) ||
+    /^[0-9#*]\uFE0F?\u20E3$/u.test(value)
+  );
+}
+
+function normalizeReactionEmoji(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const emoji = value.trim();
+  return emoji && emoji.length <= 40 && isSingleEmoji(emoji) ? emoji : null;
+}
+
 type ThaneCliPlanTier = "free" | "cli_team";
 
 interface ThaneChatPushEvent {
@@ -3804,9 +3838,13 @@ async function handleThaneCliReactionCreate(request: Request, env: Env): Promise
   const payload = await parseJsonObject<ThaneCliReactionCreatePayload>(request);
   const workspaceId = typeof payload?.workspaceId === "string" && payload.workspaceId.trim() ? payload.workspaceId.trim() : null;
   const messageId = typeof payload?.messageId === "string" && payload.messageId.trim() ? payload.messageId.trim() : null;
-  const emoji = typeof payload?.emoji === "string" && payload.emoji.trim() ? payload.emoji.trim().slice(0, 40) : null;
-  if (!workspaceId || !messageId || !emoji) {
+  const hasEmoji = typeof payload?.emoji === "string" && payload.emoji.trim();
+  const emoji = normalizeReactionEmoji(payload?.emoji);
+  if (!workspaceId || !messageId || !hasEmoji) {
     return Response.json({ ok: false, error: "workspace_id_message_id_and_emoji_required" }, { status: 400 });
+  }
+  if (!emoji) {
+    return Response.json({ ok: false, error: "reaction_must_be_single_emoji" }, { status: 400 });
   }
   const member = await requireThaneCliWorkspaceMember(env, workspaceId, email);
   if (!member) {
@@ -4866,9 +4904,13 @@ async function handleThaneCliWebhookReactionCreate(request: Request, env: Env): 
   const { webhook, bot } = auth;
   const payload = await parseJsonObject<ThaneCliWebhookReactionPayload>(request);
   const messageId = typeof payload?.messageId === "string" && payload.messageId.trim() ? payload.messageId.trim() : null;
-  const emoji = typeof payload?.emoji === "string" && payload.emoji.trim() ? payload.emoji.trim().slice(0, 40) : null;
-  if (!messageId || !emoji) {
+  const hasEmoji = typeof payload?.emoji === "string" && payload.emoji.trim();
+  const emoji = normalizeReactionEmoji(payload?.emoji);
+  if (!messageId || !hasEmoji) {
     return Response.json({ ok: false, error: "message_id_and_emoji_required" }, { status: 400 });
+  }
+  if (!emoji) {
+    return Response.json({ ok: false, error: "reaction_must_be_single_emoji" }, { status: 400 });
   }
   const rateLimited = await enforceWorkspaceActionRateLimits(env, {
     action: "webhook_reaction_create",

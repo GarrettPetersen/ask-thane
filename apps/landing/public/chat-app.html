@@ -1659,6 +1659,21 @@
         render();
       }
 
+      function isSingleReactionEmoji(value) {
+        const segments = "Segmenter" in Intl
+          ? Array.from(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(value), (item) => item.segment)
+          : Array.from(value);
+        if (segments.length !== 1 || segments[0] !== value) return false;
+        return /\p{Extended_Pictographic}/u.test(value) ||
+          /^[\u{1F1E6}-\u{1F1FF}]{2}$/u.test(value) ||
+          /^[0-9#*]\uFE0F?\u20E3$/u.test(value);
+      }
+
+      function normalizeReactionEmoji(value) {
+        const emoji = String(value || "").trim();
+        return emoji && emoji.length <= 40 && isSingleReactionEmoji(emoji) ? emoji : "";
+      }
+
       async function reactTo(messageId, emoji) {
         if (!messageId || !emoji) return;
         state.reactionMenuMessageId = "";
@@ -1673,8 +1688,13 @@
       async function customReaction(event, messageId) {
         event.preventDefault();
         const input = event.currentTarget.querySelector("input");
-        const emoji = String(input?.value || "").trim();
-        if (!emoji) return;
+        const emoji = normalizeReactionEmoji(input?.value);
+        if (!emoji) {
+          input?.setCustomValidity("Use a single emoji.");
+          input?.reportValidity();
+          return;
+        }
+        input?.setCustomValidity("");
         event.currentTarget.reset();
         await reactTo(messageId, emoji);
       }
@@ -2722,7 +2742,7 @@
           ${menuOpen && canActOnMessage ? `<span class="reaction-menu" ${actionTapGuard}>${quickReactions.map((emoji) => {
             const emojiAction = `reactTo(${jsAttr(message.id)}, ${jsAttr(emoji)})`;
             return `<button type="button" ${mobileAction(emojiAction)} onclick="event.stopPropagation(); ${emojiAction}">${esc(emoji)}</button>`;
-          }).join("")}<form class="reaction-custom" onsubmit="customReaction(event, ${jsAttr(message.id)})"><input name="emoji" maxlength="12" placeholder="+"/><button>ok</button></form><button type="button" title="Close" ${mobileAction("closeReactionMenu()")} onclick="closeReactionMenu()">x</button></span>` : ""}
+          }).join("")}<form class="reaction-custom" onsubmit="customReaction(event, ${jsAttr(message.id)})"><input name="emoji" maxlength="40" placeholder="emoji" aria-label="Custom reaction emoji"/><button>ok</button></form><button type="button" title="Close" ${mobileAction("closeReactionMenu()")} onclick="closeReactionMenu()">x</button></span>` : ""}
           ${!isReply && replies.length ? replies.map((reply) => renderMessage(reply, users, repliesByRoot, true)).join("") : ""}
         </article>`;
       }

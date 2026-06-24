@@ -48,7 +48,7 @@ export const slashCommands: SlashCommand[] = [
   { name: "/recent", usage: "/recent", description: "Show recent messages in the focused conversation.", needsArgument: false },
   { name: "/thread", usage: "/thread <message-id>", description: "Show a message thread.", needsArgument: true },
   { name: "/reply", usage: "/reply <message-id> <text>", description: "Reply in a thread.", needsArgument: true },
-  { name: "/react", usage: "/react <message-id> <emoji>", description: "React to a message.", needsArgument: true },
+  { name: "/react", usage: "/react <message-id> <emoji>", description: "React to a message with one emoji.", needsArgument: true },
   { name: "/search", usage: "/search <query>", description: "Search messages in this team.", needsArgument: true },
   { name: "/quit", usage: "/quit", description: "Leave chat.", needsArgument: false },
   { name: "/exit", usage: "/exit", description: "Leave chat.", needsArgument: false }
