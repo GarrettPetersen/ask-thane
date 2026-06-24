@@ -345,56 +345,56 @@
             <h2>Organizations</h2>
             <p class="panel-stat" id="orgTrend">-</p>
           </div>
-          <svg class="chart" id="chartOrganizations" viewBox="0 0 920 270" preserveAspectRatio="none"></svg>
+          <svg class="chart" id="chartOrganizations" viewBox="0 0 920 270"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
             <h2>Workspaces</h2>
             <p class="panel-stat" id="workspaceTrend">-</p>
           </div>
-          <svg class="chart" id="chartWorkspaces" viewBox="0 0 920 270" preserveAspectRatio="none"></svg>
+          <svg class="chart" id="chartWorkspaces" viewBox="0 0 920 270"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
             <h2>Users</h2>
             <p class="panel-stat" id="userTrend">-</p>
           </div>
-          <svg class="chart" id="chartUsers" viewBox="0 0 920 270" preserveAspectRatio="none"></svg>
+          <svg class="chart" id="chartUsers" viewBox="0 0 920 270"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
             <h2>Tasks</h2>
             <p class="panel-stat" id="taskTrend">-</p>
           </div>
-          <svg class="chart" id="chartTasks" viewBox="0 0 920 270" preserveAspectRatio="none"></svg>
+          <svg class="chart" id="chartTasks" viewBox="0 0 920 270"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
             <h2>Ask Thane Installs</h2>
             <p class="panel-stat" id="installTrend">-</p>
           </div>
-          <svg class="chart" id="chartInstalls" viewBox="0 0 920 270" preserveAspectRatio="none"></svg>
+          <svg class="chart" id="chartInstalls" viewBox="0 0 920 270"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
             <h2>Thane Chat Teams</h2>
             <p class="panel-stat" id="cliWorkspaceTrend">-</p>
           </div>
-          <svg class="chart" id="chartCliWorkspaces" viewBox="0 0 920 270" preserveAspectRatio="none"></svg>
+          <svg class="chart" id="chartCliWorkspaces" viewBox="0 0 920 270"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
             <h2>Thane Chat Accounts</h2>
             <p class="panel-stat" id="cliAccountTrend">-</p>
           </div>
-          <svg class="chart" id="chartCliAccounts" viewBox="0 0 920 270" preserveAspectRatio="none"></svg>
+          <svg class="chart" id="chartCliAccounts" viewBox="0 0 920 270"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
             <h2>Thane Chat Messages</h2>
             <p class="panel-stat" id="cliMessageTrend">-</p>
           </div>
-          <svg class="chart" id="chartCliMessages" viewBox="0 0 920 270" preserveAspectRatio="none"></svg>
+          <svg class="chart" id="chartCliMessages" viewBox="0 0 920 270"></svg>
         </article>
       </section>
 
@@ -431,6 +431,8 @@
           cliAccounts: "#0e7490",
           cliMessages: "#64748b"
         };
+        let latestMetrics = null;
+        let resizeTimer = null;
 
         function setStatus(text, isError) {
           const el = document.getElementById("status");
@@ -480,9 +482,11 @@
         function renderSingleSeriesChart(input) {
           const chart = document.getElementById(input.chartId);
           if (!chart) return;
-          const width = 920;
+          const width = Math.max(1, Math.round(chart.getBoundingClientRect().width || chart.clientWidth || 920));
           const height = 270;
           const padding = { top: 24, right: 78, bottom: 54, left: 62 };
+          const plotRight = Math.max(padding.left + 1, width - padding.right);
+          const plotWidth = plotRight - padding.left;
           const values = input.values;
           const count = input.dates.length;
           const xMax = Math.max(1, count - 1);
@@ -492,12 +496,12 @@
           }
 
           const points = values.map((value, idx) => {
-            const x = padding.left + (idx / xMax) * (width - padding.left - padding.right);
+            const x = padding.left + (idx / xMax) * plotWidth;
             const y = padding.top + (1 - (value || 0) / yMax) * (height - padding.top - padding.bottom);
             return `${x.toFixed(2)},${y.toFixed(2)}`;
           });
           const areaPoints = points.concat(
-            `${(width - padding.right).toFixed(2)},${(height - padding.bottom).toFixed(2)}`,
+            `${plotRight.toFixed(2)},${(height - padding.bottom).toFixed(2)}`,
             `${padding.left.toFixed(2)},${(height - padding.bottom).toFixed(2)}`
           );
           const lastPoint = points[points.length - 1] ?? `${padding.left},${height - padding.bottom}`;
@@ -506,18 +510,19 @@
           const grid = [];
           for (let i = 0; i <= 4; i += 1) {
             const y = padding.top + (i / 4) * (height - padding.top - padding.bottom);
-            grid.push(`<line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" stroke="#ededeb" />`);
+            grid.push(`<line x1="${padding.left}" y1="${y}" x2="${plotRight}" y2="${y}" stroke="#ededeb" />`);
           }
 
+          chart.setAttribute("viewBox", `0 0 ${width} ${height}`);
           chart.innerHTML = `
             <g>${grid.join("")}</g>
-            <line x1="${padding.left}" y1="${height - padding.bottom}" x2="${width - padding.right}" y2="${height - padding.bottom}" stroke="#d8d8d2"></line>
+            <line x1="${padding.left}" y1="${height - padding.bottom}" x2="${plotRight}" y2="${height - padding.bottom}" stroke="#d8d8d2"></line>
             <line x1="${padding.left}" y1="${padding.top}" x2="${padding.left}" y2="${height - padding.bottom}" stroke="#d8d8d2"></line>
             <g><polygon fill="${input.color}" opacity="0.08" points="${areaPoints.join(" ")}"></polygon></g>
             <g><polyline fill="none" stroke="${input.color}" stroke-width="2.5" points="${points.join(" ")}"></polyline></g>
             <g><circle cx="${lastX}" cy="${lastY}" r="3.8" fill="${input.color}"></circle></g>
             <text x="${padding.left}" y="${height - 18}" font-size="11" fill="#686868">${formatDate(input.dates[0])}</text>
-            <text x="${width - padding.right}" y="${height - 18}" text-anchor="end" font-size="11" fill="#686868">${formatDate(input.dates[input.dates.length - 1])}</text>
+            <text x="${plotRight}" y="${height - 18}" text-anchor="end" font-size="11" fill="#686868">${formatDate(input.dates[input.dates.length - 1])}</text>
             <text x="${padding.left - 10}" y="${padding.top + 4}" text-anchor="end" font-size="11" fill="#686868">${formatNumber(yMax)}</text>
             <text x="${padding.left - 10}" y="${height - padding.bottom + 4}" text-anchor="end" font-size="11" fill="#686868">0</text>
           `;
@@ -530,6 +535,65 @@
             const trendPrefix = delta >= 0 ? "+" : "";
             trendEl.textContent = `${trendPrefix}${formatNumber(delta)} over window`;
           }
+        }
+
+        function renderCharts(data) {
+          renderSingleSeriesChart({
+            chartId: "chartOrganizations",
+            trendId: "orgTrend",
+            color: colors.organizations,
+            dates: data.series.dates,
+            values: data.series.organizations.cumulative
+          });
+          renderSingleSeriesChart({
+            chartId: "chartWorkspaces",
+            trendId: "workspaceTrend",
+            color: colors.workspaces,
+            dates: data.series.dates,
+            values: data.series.workspaces.cumulative
+          });
+          renderSingleSeriesChart({
+            chartId: "chartUsers",
+            trendId: "userTrend",
+            color: colors.users,
+            dates: data.series.dates,
+            values: data.series.users.cumulative
+          });
+          renderSingleSeriesChart({
+            chartId: "chartTasks",
+            trendId: "taskTrend",
+            color: colors.tasks,
+            dates: data.series.dates,
+            values: data.series.tasks.cumulative
+          });
+          renderSingleSeriesChart({
+            chartId: "chartInstalls",
+            trendId: "installTrend",
+            color: colors.installs,
+            dates: data.series.dates,
+            values: data.series.installs.cumulative
+          });
+          renderSingleSeriesChart({
+            chartId: "chartCliWorkspaces",
+            trendId: "cliWorkspaceTrend",
+            color: colors.cliWorkspaces,
+            dates: data.series.dates,
+            values: data.series.thaneCliWorkspaces.cumulative
+          });
+          renderSingleSeriesChart({
+            chartId: "chartCliAccounts",
+            trendId: "cliAccountTrend",
+            color: colors.cliAccounts,
+            dates: data.series.dates,
+            values: data.series.thaneCliAccounts.cumulative
+          });
+          renderSingleSeriesChart({
+            chartId: "chartCliMessages",
+            trendId: "cliMessageTrend",
+            color: colors.cliMessages,
+            dates: data.series.dates,
+            values: data.series.thaneCliMessages.cumulative
+          });
         }
 
         async function load() {
@@ -552,62 +616,8 @@
               "updatedAt",
               `Updated ${new Date(data.generatedAt).toLocaleString("en-US", { timeZoneName: "short" })}`
             );
-            renderSingleSeriesChart({
-              chartId: "chartOrganizations",
-              trendId: "orgTrend",
-              color: colors.organizations,
-              dates: data.series.dates,
-              values: data.series.organizations.cumulative
-            });
-            renderSingleSeriesChart({
-              chartId: "chartWorkspaces",
-              trendId: "workspaceTrend",
-              color: colors.workspaces,
-              dates: data.series.dates,
-              values: data.series.workspaces.cumulative
-            });
-            renderSingleSeriesChart({
-              chartId: "chartUsers",
-              trendId: "userTrend",
-              color: colors.users,
-              dates: data.series.dates,
-              values: data.series.users.cumulative
-            });
-            renderSingleSeriesChart({
-              chartId: "chartTasks",
-              trendId: "taskTrend",
-              color: colors.tasks,
-              dates: data.series.dates,
-              values: data.series.tasks.cumulative
-            });
-            renderSingleSeriesChart({
-              chartId: "chartInstalls",
-              trendId: "installTrend",
-              color: colors.installs,
-              dates: data.series.dates,
-              values: data.series.installs.cumulative
-            });
-            renderSingleSeriesChart({
-              chartId: "chartCliWorkspaces",
-              trendId: "cliWorkspaceTrend",
-              color: colors.cliWorkspaces,
-              dates: data.series.dates,
-              values: data.series.thaneCliWorkspaces.cumulative
-            });
-            renderSingleSeriesChart({
-              chartId: "chartCliAccounts",
-              trendId: "cliAccountTrend",
-              color: colors.cliAccounts,
-              dates: data.series.dates,
-              values: data.series.thaneCliAccounts.cumulative
-            });
-            renderSingleSeriesChart({
-              chartId: "chartCliMessages",
-              trendId: "cliMessageTrend",
-              color: colors.cliMessages,
-              dates: data.series.dates,
-              values: data.series.thaneCliMessages.cumulative
-            });
+            latestMetrics = data;
+            renderCharts(data);
             renderRecentRows(data);
             setStatus(`Showing ${data.range.days} days from ${data.range.startDate} to ${data.range.endDate}.`, false);
           } catch (_error) {
@@ -619,6 +629,11 @@
         if (refreshButton) refreshButton.addEventListener("click", load);
         const windowSelect = document.getElementById("windowDays");
         if (windowSelect) windowSelect.addEventListener("change", load);
+        window.addEventListener("resize", () => {
+          if (!latestMetrics) return;
+          window.clearTimeout(resizeTimer);
+          resizeTimer = window.setTimeout(() => renderCharts(latestMetrics), 100);
+        });
         load();
       })();
     </script>

@@ -444,10 +444,15 @@ describe("@ask-thane/landing", () => {
     expect(html).not.toContain("radial-gradient");
     expect(html).toContain("box-shadow: none !important;");
     expect(html).toContain('viewBox="0 0 920 270"');
+    expect(html).not.toContain('preserveAspectRatio="none"');
+    expect(html).toContain("chart.getBoundingClientRect().width");
+    expect(html).toContain('chart.setAttribute("viewBox", `0 0 ${width} ${height}`);');
     expect(html).toContain("const height = 270;");
     expect(html).toContain("const padding = { top: 24, right: 78, bottom: 54, left: 62 };");
     expect(html).toContain('y="${height - 18}"');
+    expect(html).toContain('x="${plotRight}"');
     expect(html).toContain('x="${padding.left - 10}"');
+    expect(html).toContain('window.setTimeout(() => renderCharts(latestMetrics), 100)');
   });
 
   it("rewrites /dashboard to static dashboard asset", async () => {
