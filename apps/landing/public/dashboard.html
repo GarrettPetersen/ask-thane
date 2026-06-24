@@ -26,22 +26,19 @@
     <!-- End social sharing -->
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="icon" type="image/svg+xml" href="/favicon-ask-thane.svg" />
+    <link rel="stylesheet" href="/site-modern.css" />
     <style>
       :root {
-        --bg: #f5f2ea;
+        --bg: #ffffff;
         --ink: #141414;
-        --muted: #605a53;
-        --surface: #fffdf8;
+        --muted: #686868;
+        --surface: #ffffff;
         --surface-strong: #ffffff;
-        --border: #e6ddd0;
-        --border-soft: #f0e9dd;
-        --brand: #0f5fd7;
-        --brand-dark: #0848a6;
-        --brand-soft: #e7f0ff;
-        --shadow: 0 14px 32px rgba(40, 22, 6, 0.08);
-        --radius-lg: 20px;
-        --radius-md: 14px;
-        --radius-sm: 10px;
+        --border: #d8d8d2;
+        --border-soft: #ededeb;
+        --brand: #050505;
+        --brand-dark: #050505;
+        --brand-soft: #f4f4f1;
       }
 
       * {
@@ -52,10 +49,7 @@
         margin: 0;
         font-family: "Avenir Next", "Segoe UI", sans-serif;
         color: var(--ink);
-        background:
-          radial-gradient(1000px 460px at 100% -10%, #ffe8c9 0%, transparent 66%),
-          radial-gradient(760px 440px at -10% 0%, #dbe9ff 0%, transparent 62%),
-          var(--bg);
+        background: var(--bg);
       }
 
       .container {
@@ -64,7 +58,7 @@
       }
 
       header {
-        padding: 24px 0 14px;
+        padding: 22px 0;
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -84,22 +78,18 @@
 
       .top-link {
         text-decoration: none;
-        color: var(--brand-dark);
-        border: 1px solid #d7e6ff;
-        background: #edf4ff;
+        color: var(--ink);
+        border: 1px solid var(--border);
+        background: transparent;
         padding: 8px 12px;
-        border-radius: 999px;
         font-size: 0.9rem;
         font-weight: 700;
       }
 
       .hero {
-        background:
-          linear-gradient(120deg, rgba(255, 255, 255, 0.96), rgba(255, 250, 240, 0.95)),
-          var(--surface);
+        min-height: 0 !important;
+        background: var(--surface) !important;
         border: 1px solid var(--border);
-        border-radius: var(--radius-lg);
-        box-shadow: var(--shadow);
         padding: 24px;
       }
 
@@ -116,11 +106,7 @@
         font-weight: 700;
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: var(--brand-dark);
-        background: var(--brand-soft);
-        border: 1px solid #cfe0ff;
-        border-radius: 999px;
-        padding: 6px 10px;
+        color: var(--ink);
       }
 
       .muted {
@@ -138,8 +124,7 @@
       select,
       button {
         font: inherit;
-        border: 1px solid #d6c9b4;
-        border-radius: var(--radius-sm);
+        border: 1px solid var(--border);
         padding: 8px 12px;
         background: #fff;
       }
@@ -166,8 +151,6 @@
       .kpi {
         background: var(--surface-strong);
         border: 1px solid var(--border);
-        border-radius: var(--radius-md);
-        box-shadow: 0 8px 20px rgba(40, 22, 6, 0.05);
         padding: 13px;
       }
 
@@ -194,10 +177,8 @@
       .panel {
         background: var(--surface-strong);
         border: 1px solid var(--border);
-        border-radius: var(--radius-md);
-        box-shadow: 0 8px 20px rgba(40, 22, 6, 0.05);
         padding: 14px;
-        overflow-x: auto;
+        overflow: visible;
       }
 
       .panel h2 {
@@ -228,10 +209,10 @@
 
       svg.chart {
         width: 100%;
-        height: 232px;
+        height: 270px;
         border: 1px solid var(--border-soft);
-        border-radius: var(--radius-sm);
-        background: linear-gradient(180deg, #fff, #fffcf6);
+        background: var(--surface);
+        overflow: visible;
       }
 
       .panel-head {
@@ -269,7 +250,23 @@
       }
 
       .table tbody tr:nth-child(even) {
-        background: #fffcf7;
+        background: var(--brand-soft);
+      }
+
+      .table-panel {
+        margin: 0 0 30px;
+        overflow-x: auto;
+      }
+
+      body.dashboard-page article {
+        margin: 0 !important;
+      }
+
+      body.dashboard-page .hero,
+      body.dashboard-page .kpi,
+      body.dashboard-page .panel {
+        border-radius: 0 !important;
+        box-shadow: none !important;
       }
 
       .status {
@@ -302,10 +299,9 @@
         }
       }
     </style>
-    <link rel="stylesheet" href="/site-modern.css" />
     <script src="/chat-shortcut.js" defer></script>
   </head>
-  <body>
+  <body class="dashboard-page">
     <header class="container">
       <a href="/"><img class="brand-mark" src="/brand/ask-thane-gray-logo-with-text.svg" alt="Ask Thane" /></a>
       <nav class="top-links" aria-label="Dashboard links">
@@ -349,60 +345,60 @@
             <h2>Organizations</h2>
             <p class="panel-stat" id="orgTrend">-</p>
           </div>
-          <svg class="chart" id="chartOrganizations" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
+          <svg class="chart" id="chartOrganizations" viewBox="0 0 920 270" preserveAspectRatio="none"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
             <h2>Workspaces</h2>
             <p class="panel-stat" id="workspaceTrend">-</p>
           </div>
-          <svg class="chart" id="chartWorkspaces" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
+          <svg class="chart" id="chartWorkspaces" viewBox="0 0 920 270" preserveAspectRatio="none"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
             <h2>Users</h2>
             <p class="panel-stat" id="userTrend">-</p>
           </div>
-          <svg class="chart" id="chartUsers" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
+          <svg class="chart" id="chartUsers" viewBox="0 0 920 270" preserveAspectRatio="none"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
             <h2>Tasks</h2>
             <p class="panel-stat" id="taskTrend">-</p>
           </div>
-          <svg class="chart" id="chartTasks" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
+          <svg class="chart" id="chartTasks" viewBox="0 0 920 270" preserveAspectRatio="none"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
             <h2>Ask Thane Installs</h2>
             <p class="panel-stat" id="installTrend">-</p>
           </div>
-          <svg class="chart" id="chartInstalls" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
+          <svg class="chart" id="chartInstalls" viewBox="0 0 920 270" preserveAspectRatio="none"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
             <h2>Thane Chat Teams</h2>
             <p class="panel-stat" id="cliWorkspaceTrend">-</p>
           </div>
-          <svg class="chart" id="chartCliWorkspaces" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
+          <svg class="chart" id="chartCliWorkspaces" viewBox="0 0 920 270" preserveAspectRatio="none"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
             <h2>Thane Chat Accounts</h2>
             <p class="panel-stat" id="cliAccountTrend">-</p>
           </div>
-          <svg class="chart" id="chartCliAccounts" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
+          <svg class="chart" id="chartCliAccounts" viewBox="0 0 920 270" preserveAspectRatio="none"></svg>
         </article>
         <article class="panel">
           <div class="panel-head">
             <h2>Thane Chat Messages</h2>
             <p class="panel-stat" id="cliMessageTrend">-</p>
           </div>
-          <svg class="chart" id="chartCliMessages" viewBox="0 0 920 220" preserveAspectRatio="none"></svg>
+          <svg class="chart" id="chartCliMessages" viewBox="0 0 920 270" preserveAspectRatio="none"></svg>
         </article>
       </section>
 
-      <section class="panel" style="margin: 0 0 30px;">
+      <section class="panel table-panel">
         <h2>Recent Daily Activity</h2>
         <table class="table" aria-label="Recent daily counts">
           <thead>
@@ -485,8 +481,8 @@
           const chart = document.getElementById(input.chartId);
           if (!chart) return;
           const width = 920;
-          const height = 232;
-          const padding = { top: 14, right: 14, bottom: 24, left: 40 };
+          const height = 270;
+          const padding = { top: 24, right: 78, bottom: 54, left: 62 };
           const values = input.values;
           const count = input.dates.length;
           const xMax = Math.max(1, count - 1);
@@ -510,17 +506,20 @@
           const grid = [];
           for (let i = 0; i <= 4; i += 1) {
             const y = padding.top + (i / 4) * (height - padding.top - padding.bottom);
-            grid.push(`<line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" stroke="#efe6d8" />`);
+            grid.push(`<line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" stroke="#ededeb" />`);
           }
 
           chart.innerHTML = `
             <g>${grid.join("")}</g>
-            <g><polygon fill="${input.color}" opacity="0.11" points="${areaPoints.join(" ")}"></polygon></g>
+            <line x1="${padding.left}" y1="${height - padding.bottom}" x2="${width - padding.right}" y2="${height - padding.bottom}" stroke="#d8d8d2"></line>
+            <line x1="${padding.left}" y1="${padding.top}" x2="${padding.left}" y2="${height - padding.bottom}" stroke="#d8d8d2"></line>
+            <g><polygon fill="${input.color}" opacity="0.08" points="${areaPoints.join(" ")}"></polygon></g>
             <g><polyline fill="none" stroke="${input.color}" stroke-width="2.5" points="${points.join(" ")}"></polyline></g>
             <g><circle cx="${lastX}" cy="${lastY}" r="3.8" fill="${input.color}"></circle></g>
-            <text x="${padding.left}" y="${height - 6}" font-size="11" fill="#666">${formatDate(input.dates[0])}</text>
-            <text x="${width - padding.right}" y="${height - 6}" text-anchor="end" font-size="11" fill="#666">${formatDate(input.dates[input.dates.length - 1])}</text>
-            <text x="${padding.left}" y="${padding.top + 10}" font-size="11" fill="#666">Top: ${formatNumber(yMax)}</text>
+            <text x="${padding.left}" y="${height - 18}" font-size="11" fill="#686868">${formatDate(input.dates[0])}</text>
+            <text x="${width - padding.right}" y="${height - 18}" text-anchor="end" font-size="11" fill="#686868">${formatDate(input.dates[input.dates.length - 1])}</text>
+            <text x="${padding.left - 10}" y="${padding.top + 4}" text-anchor="end" font-size="11" fill="#686868">${formatNumber(yMax)}</text>
+            <text x="${padding.left - 10}" y="${height - padding.bottom + 4}" text-anchor="end" font-size="11" fill="#686868">0</text>
           `;
 
           const startValue = values[0] || 0;

@@ -436,6 +436,20 @@ describe("@ask-thane/landing", () => {
     expect(body.series.thaneCliMessages.cumulative.at(-1)).toBeGreaterThanOrEqual(30);
   });
 
+  it("keeps the dashboard flat and gives chart labels room", () => {
+    const html = readFileSync(new URL("dashboard.html", publicDir), "utf8");
+
+    expect(html).toContain('<body class="dashboard-page">');
+    expect(html.indexOf('<link rel="stylesheet" href="/site-modern.css" />')).toBeLessThan(html.indexOf("<style>"));
+    expect(html).not.toContain("radial-gradient");
+    expect(html).toContain("box-shadow: none !important;");
+    expect(html).toContain('viewBox="0 0 920 270"');
+    expect(html).toContain("const height = 270;");
+    expect(html).toContain("const padding = { top: 24, right: 78, bottom: 54, left: 62 };");
+    expect(html).toContain('y="${height - 18}"');
+    expect(html).toContain('x="${padding.left - 10}"');
+  });
+
   it("rewrites /dashboard to static dashboard asset", async () => {
     const assetResponse = new Response("<html>dashboard</html>", { status: 200 });
     const fetchAssets = vi.fn(async () => assetResponse);
