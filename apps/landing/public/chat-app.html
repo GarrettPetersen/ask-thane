@@ -1323,6 +1323,7 @@
           return;
         }
         state.authLinkCode = "";
+        state.authStep = "code";
         state.busy = true; state.error = ""; state.status = "";
         render();
         try {
@@ -1330,10 +1331,10 @@
             method: "POST",
             body: JSON.stringify({ email: state.email, returnTo: authReturnToPath() })
           });
-          state.authStep = "code";
           state.status = `Code sent to ${state.email}`;
         } catch (error) {
-          state.error = error.message;
+          state.status = "If the email arrived, enter the code below.";
+          state.error = `Could not confirm the email send: ${error.message}`;
         } finally {
           state.busy = false; render();
         }
@@ -1343,6 +1344,19 @@
         event.preventDefault();
         const form = new FormData(event.currentTarget);
         await requestLoginCodeForEmail(form.get("email"));
+      }
+
+      async function resendLoginCode() {
+        await requestLoginCodeForEmail(state.email);
+      }
+
+      function showEmailStep() {
+        state.authStep = "email";
+        state.authLinkCode = "";
+        state.mfaChallengeToken = "";
+        state.status = "";
+        state.error = "";
+        render();
       }
 
       async function verifyLoginCode(code) {
@@ -2738,6 +2752,7 @@
                   <input name="${codeForm ? "code" : "email"}" autocomplete="${codeForm ? "one-time-code" : "email"}" value="${codeForm && state.authStep !== "mfa" ? esc(state.authLinkCode) : codeForm ? "" : esc(state.email)}" required ${state.busy ? "disabled" : ""} />
                 </div>
                 <button ${state.busy ? "disabled" : ""}>${codeForm ? "Verify" : "Send code"}</button>
+                ${state.authStep === "code" ? `<button type="button" onclick="resendLoginCode()" ${state.busy ? "disabled" : ""}>Resend code</button><button type="button" onclick="showEmailStep()" ${state.busy ? "disabled" : ""}>Change email</button>` : ""}
                 <p class="error small">${esc(state.error)}</p>
               </form>
             </section>
@@ -2976,6 +2991,8 @@
       }
 
       window.startLogin = startLogin;
+      window.resendLoginCode = resendLoginCode;
+      window.showEmailStep = showEmailStep;
       window.verifyLogin = verifyLogin;
       window.verifyMfa = verifyMfa;
       window.chooseWorkspace = chooseWorkspace;

@@ -199,6 +199,18 @@ describe("@ask-thane/landing", () => {
     expect(html).toContain("verifyLoginCode(state.authLinkCode)");
   });
 
+  it("keeps manual email code entry available when send confirmation fails", () => {
+    const html = readFileSync(new URL("chat-app.html", publicDir), "utf8");
+
+    expect(html).toContain('state.authStep = "code";');
+    expect(html).toContain("If the email arrived, enter the code below.");
+    expect(html).toContain("Could not confirm the email send:");
+    expect(html).toContain("function showEmailStep()");
+    expect(html).toContain("async function resendLoginCode()");
+    expect(html).toContain(">Resend code</button>");
+    expect(html).toContain(">Change email</button>");
+  });
+
   it("sends the setup display name when creating the first team", () => {
     const html = readFileSync(new URL("chat-app.html", publicDir), "utf8");
 
