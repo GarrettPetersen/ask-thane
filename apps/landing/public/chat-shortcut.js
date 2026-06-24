@@ -38,7 +38,12 @@
     link.href = CHAT_URL;
     link.setAttribute("aria-label", "Open Thane Chat");
     link.innerHTML = [
-      '<span class="thane-chat-shortcut-icon" aria-hidden="true"></span>',
+      '<svg class="thane-chat-shortcut-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">',
+      '<path d="M5.2 18.2A8.6 8.6 0 1 1 7.8 20L3 21l1-4.8Z"></path>',
+      '<circle cx="9" cy="12" r="0.9"></circle>',
+      '<circle cx="12" cy="12" r="0.9"></circle>',
+      '<circle cx="15" cy="12" r="0.9"></circle>',
+      '</svg>',
       '<span class="thane-chat-shortcut-badge" hidden></span>'
     ].join("");
 

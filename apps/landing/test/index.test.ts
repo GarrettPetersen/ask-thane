@@ -169,6 +169,7 @@ describe("@ask-thane/landing", () => {
     expect(readFileSync(new URL("chat-app.html", publicDir), "utf8")).not.toContain("/chat-shortcut.js");
     expect(readFileSync(new URL("chat-session-bridge.html", publicDir), "utf8")).not.toContain("/chat-shortcut.js");
     expect(existsSync(new URL("chat-shortcut.js", publicDir))).toBe(true);
+    expect(readFileSync(new URL("chat-shortcut.js", publicDir), "utf8")).toContain('<svg class="thane-chat-shortcut-icon"');
     expect(existsSync(new URL("chat-session-bridge.html", publicDir))).toBe(true);
   });
 
