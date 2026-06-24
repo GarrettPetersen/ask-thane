@@ -76,6 +76,14 @@ export function hasHostedChat(store: ThaneStore): boolean {
   return Boolean(hostedBaseUrl() && authToken(store));
 }
 
+function currentDisplayName(store: ThaneStore): string | undefined {
+  try {
+    return store.currentUser.displayName || store.currentAccount?.displayName || undefined;
+  } catch (_error) {
+    return store.currentAccount?.displayName || undefined;
+  }
+}
+
 function hostedApiError(payload: { error?: string; retryAfterSeconds?: number }, status: number): string {
   if (payload.error === "rate_limited" && payload.retryAfterSeconds) {
     return `rate_limited: try again in ${payload.retryAfterSeconds}s`;
@@ -240,10 +248,12 @@ export async function createHostedWorkspace(
   store: ThaneStore,
   input: { workspaceId: string; name: string; slug?: string; asciiArt?: string }
 ): Promise<void> {
+  const displayName = currentDisplayName(store);
   await postHosted(store, "/v1/thane-cli/workspaces", {
     workspaceId: input.workspaceId,
     workspaceName: input.name,
     ...(input.slug ? { workspaceSlug: input.slug } : {}),
+    ...(displayName ? { displayName } : {}),
     ...(input.asciiArt ? { asciiArt: input.asciiArt } : {})
   });
   await syncHostedStore(store, { workspaceId: input.workspaceId });
@@ -254,10 +264,12 @@ export async function ensureHostedWorkspace(store: ThaneStore): Promise<void> {
     return;
   }
   const workspace = store.activeWorkspace;
+  const displayName = currentDisplayName(store);
   await postHosted(store, "/v1/thane-cli/workspaces", {
     workspaceId: workspace.id,
     workspaceSlug: workspace.slug,
     workspaceName: workspace.name,
+    ...(displayName ? { displayName } : {}),
     ...(workspace.asciiArt ? { asciiArt: workspace.asciiArt } : {})
   });
   await syncHostedStore(store, { workspaceId: workspace.id });

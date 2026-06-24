@@ -718,7 +718,9 @@
       const realtimeEnabled = localStorage.getItem("thane.web.realtime") !== "false";
       const root = document.querySelector("#root");
       const inviteMatch = location.pathname.match(/^\/invite\/([^/?#]+)/);
-      const inviteEmail = new URLSearchParams(location.search).get("email") || "";
+      const initialSearchParams = new URLSearchParams(location.search);
+      const initialEmail = initialSearchParams.get("email") || "";
+      const initialAuthCode = initialSearchParams.get("code") || "";
       const initialSession = JSON.parse(localStorage.getItem(storageKey) || "null");
       const reactionEmojiPalette = [
         "👍", "❤️", "😂", "🎉", "👀", "🙏", "🔥", "👏",
@@ -750,7 +752,9 @@
       const state = {
         session: initialSession,
         authStep: "email",
-        email: inviteEmail,
+        email: initialEmail,
+        authLinkCode: initialAuthCode,
+        autoVerifyStarted: false,
         mfaChallengeToken: "",
         mfaStatus: null,
         mfaStatusLoading: false,
@@ -842,6 +846,19 @@
           throw new Error(body.error || `HTTP ${res.status}`);
         }
         return body;
+      }
+
+      function authReturnToPath() {
+        const url = new URL(location.href);
+        url.searchParams.delete("code");
+        return `${url.pathname}${url.search}${url.hash}`;
+      }
+
+      function stripAuthCodeFromUrl() {
+        if (!new URLSearchParams(location.search).has("code")) return;
+        const url = new URL(location.href);
+        url.searchParams.delete("code");
+        history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
       }
 
       async function previewInvite() {
@@ -1305,12 +1322,13 @@
         if (!state.email) {
           return;
         }
+        state.authLinkCode = "";
         state.busy = true; state.error = ""; state.status = "";
         render();
         try {
           await api("/v1/thane-cli/auth/start", {
             method: "POST",
-            body: JSON.stringify({ email: state.email })
+            body: JSON.stringify({ email: state.email, returnTo: authReturnToPath() })
           });
           state.authStep = "code";
           state.status = `Code sent to ${state.email}`;
@@ -1327,15 +1345,17 @@
         await requestLoginCodeForEmail(form.get("email"));
       }
 
-      async function verifyLogin(event) {
-        event.preventDefault();
+      async function verifyLoginCode(code) {
         state.busy = true; state.error = "";
         render();
-        const code = String(new FormData(event.currentTarget).get("code") || "").trim();
+        const normalizedCode = String(code || "").trim();
+        if (state.authStep !== "mfa") {
+          state.authLinkCode = normalizedCode;
+        }
         try {
           const body = await api("/v1/thane-cli/auth/verify", {
             method: "POST",
-            body: JSON.stringify({ email: state.email, code })
+            body: JSON.stringify({ email: state.email, code: normalizedCode })
           });
           if (body.mfaRequired) {
             state.authStep = "mfa";
@@ -1349,6 +1369,24 @@
         } finally {
           state.busy = false; render();
         }
+      }
+
+      async function verifyLogin(event) {
+        event.preventDefault();
+        const code = String(new FormData(event.currentTarget).get("code") || "").trim();
+        await verifyLoginCode(code);
+      }
+
+      async function autoVerifyLoginLink() {
+        if (state.autoVerifyStarted || !state.email || !state.authLinkCode) {
+          return false;
+        }
+        state.autoVerifyStarted = true;
+        state.authStep = "code";
+        state.status = "Signing in...";
+        stripAuthCodeFromUrl();
+        await verifyLoginCode(state.authLinkCode);
+        return true;
       }
 
       async function verifyMfa(event) {
@@ -1846,7 +1884,7 @@
           if (needsWorkspace) {
             const body = await api("/v1/thane-cli/workspaces", {
               method: "POST",
-              body: JSON.stringify({ workspaceName })
+              body: JSON.stringify({ workspaceName, displayName })
             });
             state.activeWorkspaceId = body.workspace?.id || state.activeWorkspaceId;
             state.activeChannelId = "";
@@ -2697,7 +2735,7 @@
                 ${codeForm ? `<p class="muted small">${esc(state.status)}</p>` : ""}
                 <div class="row">
                   <label>${codeForm ? (state.authStep === "mfa" ? "Authenticator code" : "Email code") : "Email"}</label>
-                  <input name="${codeForm ? "code" : "email"}" autocomplete="${codeForm ? "one-time-code" : "email"}" value="${codeForm ? "" : esc(state.email)}" required ${state.busy ? "disabled" : ""} />
+                  <input name="${codeForm ? "code" : "email"}" autocomplete="${codeForm ? "one-time-code" : "email"}" value="${codeForm && state.authStep !== "mfa" ? esc(state.authLinkCode) : codeForm ? "" : esc(state.email)}" required ${state.busy ? "disabled" : ""} />
                 </div>
                 <button ${state.busy ? "disabled" : ""}>${codeForm ? "Verify" : "Send code"}</button>
                 <p class="error small">${esc(state.error)}</p>
@@ -3019,7 +3057,13 @@
         }
       });
 
-      if (state.session?.authToken) {
+      if (state.email && state.authLinkCode) {
+        Promise.resolve()
+          .then(() => state.inviteToken ? previewInvite().catch(() => {}) : undefined)
+          .then(() => autoVerifyLoginLink())
+          .catch((error) => { state.error = error.message; })
+          .finally(render);
+      } else if (state.session?.authToken) {
         Promise.resolve()
           .then(() => state.inviteToken ? previewInvite().catch(() => {}) : undefined)
           .then(() => state.inviteToken ? acceptPendingInvite() : sync())

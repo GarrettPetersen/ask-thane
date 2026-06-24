@@ -119,12 +119,42 @@ describe("@ask-thane/api-worker", () => {
       from: "Thane <noreply@askthane.com>",
       to: "garrett@example.com",
       subject: "Your Thane Chat verification code",
-      text: expect.stringContaining("Your Thane Chat verification code is ")
+      text: expect.stringContaining("Sign in to Thane Chat:")
     });
+    const emailText = sendEmail.mock.calls[0]?.[0].text;
+    expect(emailText).toMatch(/https:\/\/chat\.askthane\.com\/\?email=garrett%40example\.com&code=\d{6}/);
+    expect(emailText).toMatch(/Or enter this code manually:\n\d{6}/);
     const authInsert = db.calls.find((call) => call.sql.includes("INSERT INTO thane_cli_auth_codes"));
     expect(authInsert?.args[1]).toBe("garrett@example.com");
     expect(authInsert?.args[2]).toBe("Garrett");
     expect(authInsert?.args[4]).toBe("email");
+  });
+
+  it("keeps invite return paths in Thane CLI auth email links", async () => {
+    const db = createAuthStartDbMock();
+    const sendEmail = vi.fn(async () => ({ messageId: "email_1" }));
+    const authEnv = {
+      DB: { prepare: db.prepare },
+      EMAIL: { send: sendEmail },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret",
+      THANE_CLI_EMAIL_FROM: "Thane <noreply@askthane.com>"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/auth/start", {
+        method: "POST",
+        body: JSON.stringify({
+          email: "Garrett@Example.com",
+          returnTo: "/invite/token_123?email=wrong%40example.com"
+        })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    const emailText = sendEmail.mock.calls[0]?.[0].text;
+    expect(emailText).toMatch(/https:\/\/chat\.askthane\.com\/invite\/token_123\?email=garrett%40example\.com&code=\d{6}/);
   });
 
   it("returns a Thane CLI dev verification code when email is not configured locally", async () => {
@@ -1509,6 +1539,84 @@ describe("@ask-thane/api-worker", () => {
     expect(workspaceInsert?.args[2]).toBe("Acme Team");
     const memberInsert = calls.find((call) => call.sql.includes("INSERT INTO thane_cli_workspace_members"));
     expect(memberInsert?.args[5]).toBe("owner");
+  });
+
+  it("uses the setup display name when creating the first Thane CLI workspace member", async () => {
+    const calls: Array<{ sql: string; args: unknown[] }> = [];
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_rate_limits")) {
+        return null;
+      }
+      if (sql.includes("SELECT id, workspace_slug, workspace_name, ascii_art")) {
+        return {
+          id: "tcw_1",
+          workspace_slug: "tenfold",
+          workspace_name: "Tenfold",
+          ascii_art: null
+        };
+      }
+      if (sql.includes("SELECT id, joined_at FROM thane_cli_workspace_members")) {
+        return {
+          id: "tcm_1",
+          joined_at: "2026-06-18T00:00:00.000Z",
+          left_at: null
+        };
+      }
+      if (sql.includes("SELECT id, account_id, email, display_name, handle, role, joined_at")) {
+        return {
+          id: "tcm_1",
+          account_id: "acct_1",
+          email: "john@example.com",
+          display_name: "John",
+          handle: "john",
+          role: "owner",
+          joined_at: "2026-06-18T00:00:00.000Z"
+        };
+      }
+      if (sql.includes("SELECT id FROM thane_cli_chat_messages")) {
+        return null;
+      }
+      if (sql.includes("FROM thane_cli_channels") && sql.includes("WHERE workspace_id = ? AND name = ?")) {
+        return {
+          id: "tcc_general",
+          workspace_id: "tcw_1",
+          name: "general",
+          kind: "channel",
+          visibility: "public",
+          topic: "Community-wide conversation",
+          created_at: "2026-06-17T00:00:00.000Z"
+        };
+      }
+      return null;
+    });
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        calls.push({ sql, args });
+        return { run, first: first.bind({ sql }) };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/workspaces", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await signAuthToken("john@example.com")}` },
+        body: JSON.stringify({ workspaceName: "Tenfold", displayName: " John " })
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    const memberInsert = calls.find((call) => call.sql.includes("INSERT INTO thane_cli_workspace_members"));
+    expect(memberInsert?.args[4]).toBe("John");
+    expect(memberInsert?.args[5]).toBe("john");
+    expect(memberInsert?.args[10]).toEqual(expect.stringMatching(/^Member [A-F0-9]{6}$/));
   });
 
   it("creates Thane CLI workspace invite links", async () => {

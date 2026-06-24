@@ -189,6 +189,22 @@ describe("@ask-thane/landing", () => {
     expect(html).not.toContain("<button>ok</button>");
   });
 
+  it("supports one-click email code sign-in links", () => {
+    const html = readFileSync(new URL("chat-app.html", publicDir), "utf8");
+
+    expect(html).toContain('const initialAuthCode = initialSearchParams.get("code") || "";');
+    expect(html).toContain("returnTo: authReturnToPath()");
+    expect(html).toContain("async function autoVerifyLoginLink()");
+    expect(html).toContain("stripAuthCodeFromUrl()");
+    expect(html).toContain("verifyLoginCode(state.authLinkCode)");
+  });
+
+  it("sends the setup display name when creating the first team", () => {
+    const html = readFileSync(new URL("chat-app.html", publicDir), "utf8");
+
+    expect(html).toContain("body: JSON.stringify({ workspaceName, displayName })");
+  });
+
   it("serves health", async () => {
     const env = {
       DB: makeDbStub(),

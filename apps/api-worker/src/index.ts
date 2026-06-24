@@ -13,6 +13,7 @@ interface Env {
   THANE_CLI_AUTH_DEV_CODES?: string;
   THANE_CLI_AUTH_SECRET?: string;
   THANE_CLI_EMAIL_FROM?: string;
+  THANE_CLI_WEB_AUTH_BASE_URL?: string;
   THANE_CLI_INVITE_BASE_URL?: string;
   THANE_CLI_WEB_INVITE_BASE_URL?: string;
   THANE_PAYMENTS_BASE_URL?: string;
@@ -24,6 +25,7 @@ interface Env {
 interface AuthStartPayload {
   email?: unknown;
   displayName?: unknown;
+  returnTo?: unknown;
 }
 
 interface ProfileUpdatePayload {
@@ -86,6 +88,7 @@ interface ThaneCliWorkspaceEnsurePayload {
   workspaceSlug?: unknown;
   workspaceName?: unknown;
   asciiArt?: unknown;
+  displayName?: unknown;
 }
 
 interface ThaneCliChannelCreatePayload {
@@ -1113,6 +1116,7 @@ async function profileDisplayNameForEmail(env: Env, email: string): Promise<stri
   if (accountDisplayName) {
     return accountDisplayName;
   }
+  const fallbackDisplayName = fallbackDisplayNameForAccountId(await accountIdForEmail(email));
   try {
     const row = await env.DB
       .prepare(
@@ -1125,6 +1129,9 @@ async function profileDisplayNameForEmail(env: Env, email: string): Promise<stri
       .bind(email)
       .first<{ display_name?: string | null }>();
     const displayName = row?.display_name?.trim() || null;
+    if (displayName === fallbackDisplayName) {
+      return null;
+    }
     return displayName && !isLegacyEmailDerivedIdentity(email, displayName) ? displayName : null;
   } catch (error) {
     if (String(error).toLowerCase().includes("no such table")) {
@@ -1311,6 +1318,28 @@ function webInviteBaseUrl(env: Env): string {
   return env.THANE_CLI_WEB_INVITE_BASE_URL?.trim().replace(/\/+$/g, "") || "https://chat.askthane.com/invite";
 }
 
+function webAuthBaseUrl(env: Env): string {
+  return env.THANE_CLI_WEB_AUTH_BASE_URL?.trim().replace(/\/+$/g, "") || "https://chat.askthane.com";
+}
+
+function authReturnPath(value: unknown): string {
+  if (typeof value !== "string") {
+    return "/";
+  }
+  const trimmed = value.trim().slice(0, 500);
+  if (!trimmed.startsWith("/") || trimmed.startsWith("//")) {
+    return "/";
+  }
+  return trimmed;
+}
+
+function authVerificationUrl(env: Env, input: { email: string; code: string; returnTo?: unknown }): string {
+  const url = new URL(authReturnPath(input.returnTo), `${webAuthBaseUrl(env)}/`);
+  url.searchParams.set("email", input.email);
+  url.searchParams.set("code", input.code);
+  return url.toString();
+}
+
 function appendInviteeEmailToUrl(url: string, inviteeEmail?: string | null): string {
   if (!inviteeEmail) {
     return url;
@@ -1414,6 +1443,7 @@ async function ensureThaneCliWorkspace(env: Env, input: {
   workspaceName: string;
   asciiArt?: string | null;
   email: string;
+  displayName?: string | null;
   role: "owner" | "admin" | "member";
 }): Promise<{ id: string; slug: string; name: string; asciiArt?: string | null }> {
   const createdAt = nowIso();
@@ -1447,7 +1477,7 @@ async function ensureThaneCliWorkspace(env: Env, input: {
   await ensureThaneCliMember(env, {
     workspaceId: workspace.id,
     email: input.email,
-    displayName: await profileDisplayNameForEmail(env, input.email),
+    displayName: input.displayName?.trim() || (await profileDisplayNameForEmail(env, input.email)),
     role: input.role
   });
   await ensureThaneCliChannel(env, workspace.id, "general", "Community-wide conversation");
@@ -1470,6 +1500,7 @@ async function ensureThaneCliMember(env: Env, input: {
   const generatedAccountHandle = publicHandleForAccountId(accountId);
   const legacyHandle = normalizeHandleFromEmail(input.email);
   const legacyDisplayName = input.email.split("@")[0]?.trim() || legacyHandle;
+  const generatedDisplayName = fallbackDisplayNameForAccountId(accountId);
   const displayName = input.displayName?.trim() || fallbackDisplayNameForAccountId(accountId);
   const handle =
     input.email === "thane@askthane.com"
@@ -1497,6 +1528,7 @@ async function ensureThaneCliMember(env: Env, input: {
          END,
          display_name = CASE
            WHEN thane_cli_workspace_members.display_name = ? THEN excluded.display_name
+           WHEN thane_cli_workspace_members.display_name = ? THEN excluded.display_name
            ELSE COALESCE(NULLIF(thane_cli_workspace_members.display_name, ''), excluded.display_name)
          END,
          handle = CASE
@@ -1523,6 +1555,7 @@ async function ensureThaneCliMember(env: Env, input: {
       now,
       now,
       legacyDisplayName,
+      generatedDisplayName,
       legacyHandle,
       generatedAccountHandle
     )
@@ -2464,16 +2497,20 @@ function fromAddress(env: Env): string {
   return env.THANE_CLI_EMAIL_FROM?.trim() || "Thane <noreply@askthane.com>";
 }
 
-async function sendVerificationEmail(env: Env, input: { email: string; code: string }): Promise<boolean> {
+async function sendVerificationEmail(env: Env, input: { email: string; code: string; returnTo?: unknown }): Promise<boolean> {
   if (!env.EMAIL) {
     return false;
   }
+  const signInUrl = authVerificationUrl(env, input);
 
   await env.EMAIL.send({
     from: fromAddress(env),
     to: input.email,
     subject: "Your Thane Chat verification code",
-    text: `Your Thane Chat verification code is ${input.code}.\n\nThis code expires in 10 minutes.`
+    text:
+      `Sign in to Thane Chat:\n${signInUrl}\n\n` +
+      `Or enter this code manually:\n${input.code}\n\n` +
+      `This code expires in 10 minutes.`
   });
   return true;
 }
@@ -2536,7 +2573,7 @@ async function handleThaneCliAuthStart(request: Request, env: Env): Promise<Resp
 
   let delivery: "email" | "dev_code" = "email";
   try {
-    const sent = await sendVerificationEmail(env, { email, code });
+    const sent = await sendVerificationEmail(env, { email, code, returnTo: payload?.returnTo });
     if (!sent) {
       if (!shouldReturnDevCodes(env)) {
         return Response.json({ ok: false, error: "email_not_configured" }, { status: 503 });
@@ -2893,6 +2930,7 @@ async function handleThaneCliWorkspaceEnsure(request: Request, env: Env): Promis
   const requestedWorkspaceName = normalizeWorkspaceName(payload?.workspaceName);
   const workspaceSlug = normalizeWorkspaceSlug(payload?.workspaceSlug) ?? workspaceSlugFromName(requestedWorkspaceName);
   const workspaceName = requestedWorkspaceName ?? workspaceSlug;
+  const displayName = normalizeDisplayName(payload?.displayName);
   if (!workspaceSlug || !workspaceName) {
     return Response.json({ ok: false, error: "workspace_name_required" }, { status: 400 });
   }
@@ -2913,6 +2951,7 @@ async function handleThaneCliWorkspaceEnsure(request: Request, env: Env): Promis
     workspaceName,
     asciiArt: normalizeAsciiArt(payload?.asciiArt),
     email,
+    displayName,
     role: "owner"
   });
   return Response.json({ ok: true, workspace });
