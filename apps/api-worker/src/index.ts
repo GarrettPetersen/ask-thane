@@ -1657,6 +1657,21 @@ function workspaceJoinMessageText(displayName: string): string {
   return `${displayName.trim() || "A member"} joined the team.`;
 }
 
+function isGeneratedWorkspaceJoinMessageText(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed === workspaceJoinMessageText("") || /^Member [A-Z0-9]{1,8} joined the team\.$/.test(trimmed);
+}
+
+function workspaceJoinMessageDisplayText(
+  message: { id: string; author_member_id: string; text: string },
+  member: { account_id?: string | null; email?: string | null; display_name?: string | null; handle?: string | null } | undefined
+): string {
+  if (!member || message.id !== workspaceJoinMessageId(message.author_member_id) || !isGeneratedWorkspaceJoinMessageText(message.text)) {
+    return message.text;
+  }
+  return workspaceJoinMessageText(publicDisplayNameForMember(member));
+}
+
 async function recordThaneCliWorkspaceJoinMessage(env: Env, input: {
   workspaceId: string;
   memberId: string;
@@ -1692,6 +1707,28 @@ async function recordThaneCliWorkspaceJoinMessage(env: Env, input: {
       reason: error instanceof Error ? error.message : String(error)
     });
   });
+}
+
+async function refreshThaneCliWorkspaceJoinMessage(env: Env, input: {
+  workspaceId: string;
+  memberId: string;
+  accountId: string;
+  displayName: string;
+}): Promise<void> {
+  const nextText = workspaceJoinMessageText(input.displayName);
+  const fallbackText = workspaceJoinMessageText(fallbackDisplayNameForAccountId(input.accountId));
+  const anonymousText = workspaceJoinMessageText("");
+  if (nextText === fallbackText || nextText === anonymousText) {
+    return;
+  }
+  await env.DB
+    .prepare(
+      `UPDATE thane_cli_chat_messages
+       SET text = ?, updated_at = ?
+       WHERE id = ? AND workspace_id = ? AND text IN (?, ?)`
+    )
+    .bind(nextText, nowIso(), workspaceJoinMessageId(input.memberId), input.workspaceId, fallbackText, anonymousText)
+    .run();
 }
 
 async function requireThaneCliWorkspaceMember(
@@ -2884,6 +2921,14 @@ async function handleThaneCliProfileUpdate(request: Request, env: Env): Promise<
       .prepare(`UPDATE thane_cli_workspace_members SET ${assignments.join(", ")} WHERE workspace_id = ? AND email = ? AND left_at IS NULL`)
       .bind(...values)
       .run();
+    if (displayName) {
+      await refreshThaneCliWorkspaceJoinMessage(env, {
+        workspaceId,
+        memberId: member.id,
+        accountId: member.account_id,
+        displayName
+      });
+    }
     return Response.json({
       ok: true,
       scope: "workspace",
@@ -3256,7 +3301,7 @@ async function buildThaneCliSyncResponse(request: Request, env: Env): Promise<Re
     workspaceId: message.workspace_id,
     channelId: message.channel_id,
     authorId: message.author_member_id,
-    text: message.text,
+    text: workspaceJoinMessageDisplayText(message, membersById.get(message.author_member_id)),
     createdAt: message.created_at,
     source: message.source,
     ...(message.thread_root_id ? { threadRootId: message.thread_root_id } : {}),

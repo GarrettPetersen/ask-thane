@@ -217,6 +217,21 @@ describe("@ask-thane/landing", () => {
     expect(html).toContain("body: JSON.stringify({ workspaceName, displayName })");
   });
 
+  it("keeps invited setup names before accepting the invite", () => {
+    const html = readFileSync(new URL("chat-app.html", publicDir), "utf8");
+
+    expect(html).toContain("const setupRequired = Boolean(accountState?.isNewAccount);");
+    expect(html).toContain("if (state.inviteToken && !setupRequired)");
+    expect(html).toContain("const needsWorkspace = !state.inviteToken && (state.snapshot?.workspaces?.length ?? 0) === 0;");
+    expect(html).toContain("await acceptPendingInvite();");
+  });
+
+  it("labels the web settings button with a gear icon", () => {
+    const html = readFileSync(new URL("chat-app.html", publicDir), "utf8");
+
+    expect(html).toContain('<span aria-hidden="true">⚙</span> menu');
+  });
+
   it("serves health", async () => {
     const env = {
       DB: makeDbStub(),

@@ -898,14 +898,17 @@
 
       async function finishSignIn(account, accountState = null) {
         saveSession(account);
-        state.setupRequired = Boolean(accountState?.isNewAccount);
+        const setupRequired = Boolean(accountState?.isNewAccount);
+        state.setupRequired = setupRequired;
         state.setupDraft = {
           displayName: account?.displayName || "",
           handle: "",
           workspaceName: ""
         };
-        if (state.inviteToken) {
+        if (state.inviteToken && !setupRequired) {
           await acceptPendingInvite();
+        } else if (state.inviteToken) {
+          await previewInvite().catch(() => {});
         } else {
           await sync();
         }
@@ -1866,7 +1869,7 @@
 
       function needsSetup() {
         const workspaceCount = state.snapshot?.workspaces?.length ?? 0;
-        return state.setupRequired || workspaceCount === 0;
+        return state.setupRequired || (!state.inviteToken && workspaceCount === 0);
       }
 
       async function completeSetup(event) {
@@ -1875,7 +1878,7 @@
         const displayName = String(form.get("displayName") || "").trim();
         const handle = String(form.get("handle") || "").trim().replace(/^@/, "");
         const workspaceName = String(form.get("workspaceName") || "").trim();
-        const needsWorkspace = (state.snapshot?.workspaces?.length ?? 0) === 0;
+        const needsWorkspace = !state.inviteToken && (state.snapshot?.workspaces?.length ?? 0) === 0;
         if (!displayName) {
           state.error = "Name is required.";
           render();
@@ -1895,7 +1898,9 @@
             body: JSON.stringify({ displayName, scope: "account" })
           });
           saveSession({ ...state.session, ...(accountProfile.account || {}), displayName: accountProfile.accountDisplayName || accountProfile.displayName || displayName });
-          if (needsWorkspace) {
+          if (state.inviteToken && !state.inviteAccepted) {
+            await acceptPendingInvite();
+          } else if (needsWorkspace) {
             const body = await api("/v1/thane-cli/workspaces", {
               method: "POST",
               body: JSON.stringify({ workspaceName, displayName })
@@ -2761,7 +2766,7 @@
 
       function renderSetup() {
         const workspaceCount = state.snapshot?.workspaces?.length ?? 0;
-        const needsWorkspace = workspaceCount === 0;
+        const needsWorkspace = !state.inviteToken && workspaceCount === 0;
         root.innerHTML = `
           <main class="login">
             <section class="login-card">
@@ -2915,7 +2920,7 @@
                   </div>
                 </div>
                 <div class="topbar-actions">
-                  <button onclick="openSettingsMenu()">menu</button>
+                  <button onclick="openSettingsMenu()"><span aria-hidden="true">⚙</span> menu</button>
                   <button onclick="saveSession(null); location.reload()">sign out</button>
                 </div>
               </header>

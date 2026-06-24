@@ -610,6 +610,15 @@ describe("@ask-thane/api-worker", () => {
     });
     const update = calls.find((call) => call.sql.startsWith("UPDATE thane_cli_workspace_members SET display_name") && call.sql.includes("WHERE workspace_id = ? AND email = ?"));
     expect(update?.args).toEqual(["GP", expect.any(String), "wsp_1", "garrett@example.com"]);
+    const joinMessageUpdate = calls.find((call) => call.sql.includes("UPDATE thane_cli_chat_messages"));
+    expect(joinMessageUpdate?.args).toEqual([
+      "GP joined the team.",
+      expect.any(String),
+      "tjoin_member_1",
+      "wsp_1",
+      "Member 1 joined the team.",
+      "A member joined the team."
+    ]);
     expect(calls.some((call) => call.sql.includes("UPDATE thane_cli_workspace_members SET display_name = ?, updated_at = ? WHERE email = ?"))).toBe(false);
   });
 
@@ -937,6 +946,120 @@ describe("@ask-thane/api-worker", () => {
         createdAt: "2026-06-18T00:01:00.000Z"
       }
     ]);
+  });
+
+  it("renders stale generated join messages with current display names", async () => {
+    const first = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("SELECT display_name")) {
+        return { display_name: "Owner" };
+      }
+      return null;
+    });
+    const all = vi.fn(async function (this: { sql?: string }) {
+      const sql = this.sql ?? "";
+      if (sql.includes("FROM thane_cli_workspace_members m")) {
+        return {
+          results: [
+            {
+              id: "wsp_1",
+              workspace_slug: "acme",
+              workspace_name: "Acme",
+              ascii_art: null,
+              created_at: "2026-06-18T00:00:00.000Z",
+              updated_at: "2026-06-18T00:00:00.000Z",
+              member_id: "tcm_1",
+              role: "owner"
+            }
+          ]
+        };
+      }
+      if (sql.includes("COUNT(msg.id) AS unread_count")) {
+        return { results: [] };
+      }
+      if (sql.includes("FROM thane_cli_workspace_members") && !sql.includes("JOIN")) {
+        return {
+          results: [
+            {
+              id: "tcm_1",
+              account_id: "acct_1",
+              email: "owner@example.com",
+              display_name: "Owner",
+              handle: "owner",
+              role: "owner",
+              joined_at: "2026-06-18T00:00:00.000Z"
+            },
+            {
+              id: "tcm_2",
+              account_id: "acct_278b3b000000000000000000",
+              email: "john@example.com",
+              display_name: "John",
+              handle: "john",
+              role: "member",
+              joined_at: "2026-06-18T00:01:00.000Z"
+            }
+          ]
+        };
+      }
+      if (sql.includes("FROM thane_cli_channels")) {
+        return {
+          results: [
+            {
+              id: "tcc_1",
+              workspace_id: "wsp_1",
+              name: "general",
+              kind: "channel",
+              visibility: "public",
+              topic: "General",
+              created_at: "2026-06-18T00:00:00.000Z"
+            }
+          ]
+        };
+      }
+      if (sql.includes("FROM thane_cli_chat_messages")) {
+        return {
+          results: [
+            {
+              id: "tjoin_tcm_2",
+              workspace_id: "wsp_1",
+              channel_id: "tcc_1",
+              author_member_id: "tcm_2",
+              text: "Member 278B3B joined the team.",
+              source: "chat",
+              thread_root_id: null,
+              created_at: "2026-06-18T00:01:00.000Z"
+            }
+          ]
+        };
+      }
+      return { results: [] };
+    });
+    const noRateLimit = vi.fn(async () => null);
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn(() => {
+        if (sql.includes("thane_cli_rate_limits")) {
+          return { first: noRateLimit, run };
+        }
+        return sql.includes("SELECT display_name") ? { first: first.bind({ sql }) } : { all: all.bind({ sql }) };
+      })
+    }));
+    const authEnv = {
+      DB: { prepare },
+      BUILD_ENV: "production",
+      THANE_CLI_AUTH_SECRET: "test-secret"
+    } as never;
+
+    const res = await worker.fetch(
+      new Request("https://api.local/v1/thane-cli/sync?workspaceId=wsp_1", {
+        headers: { Authorization: `Bearer ${await signAuthToken("owner@example.com")}` }
+      }),
+      authEnv
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.messages[0].text).toBe("John joined the team.");
   });
 
   it("syncs hosted read states and unread counts for Thane Chat", async () => {
