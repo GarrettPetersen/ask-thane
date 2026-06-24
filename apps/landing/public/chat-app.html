@@ -386,24 +386,39 @@
         font-size: 11px;
       }
       .reaction-menu {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
+        display: inline-grid;
+        grid-template-columns: auto auto;
+        align-items: start;
+        gap: 5px;
         margin-left: 10px;
         padding: 2px 4px;
         border: 1px solid var(--line);
         background: #070a08;
         vertical-align: middle;
+        max-width: min(360px, calc(100vw - 32px));
       }
       .reaction-menu button {
         min-height: 26px;
         min-width: 28px;
         padding: 0 5px;
       }
+      .reaction-palette {
+        display: grid;
+        grid-template-columns: repeat(8, 28px);
+        gap: 3px;
+      }
+      .reaction-menu .reaction-emoji {
+        padding: 0;
+        font-size: 15px;
+      }
       .reaction-custom {
         display: inline-flex;
         gap: 4px;
         align-items: center;
+      }
+      .reaction-side {
+        display: grid;
+        gap: 4px;
       }
       .reaction-custom input {
         width: 62px;
@@ -670,6 +685,8 @@
         .brand { padding: 14px; }
         .setup-grid { grid-template-columns: 1fr; }
         .mention-suggestions { padding-left: 12px; }
+        .reaction-menu { grid-template-columns: 1fr auto; }
+        .reaction-palette { grid-template-columns: repeat(6, 28px); }
       }
       @media (hover: none), (pointer: coarse) {
         .message {
@@ -703,6 +720,11 @@
       const inviteMatch = location.pathname.match(/^\/invite\/([^/?#]+)/);
       const inviteEmail = new URLSearchParams(location.search).get("email") || "";
       const initialSession = JSON.parse(localStorage.getItem(storageKey) || "null");
+      const reactionEmojiPalette = [
+        "👍", "❤️", "😂", "🎉", "👀", "🙏", "🔥", "👏",
+        "✅", "💯", "🚀", "🤔", "😄", "😮", "😢", "😡",
+        "🙌", "🫡", "✨", "💪", "👎", "😆", "😍", "📝"
+      ];
 
       function memoryScope(session) {
         return encodeURIComponent(session?.id || session?.email || "anonymous");
@@ -2724,6 +2746,14 @@
         return user?.displayName?.trim() || (user?.handle ? `@${user.handle}` : "unknown");
       }
 
+      function renderReactionMenu(messageId, mobileAction, actionTapGuard) {
+        const buttons = reactionEmojiPalette.map((emoji) => {
+          const emojiAction = `reactTo(${jsAttr(messageId)}, ${jsAttr(emoji)})`;
+          return `<button type="button" class="reaction-emoji" title="React with ${esc(emoji)}" aria-label="React with ${esc(emoji)}" ${mobileAction(emojiAction)} onclick="event.stopPropagation(); ${emojiAction}">${esc(emoji)}</button>`;
+        }).join("");
+        return `<span class="reaction-menu" ${actionTapGuard}><span class="reaction-palette" role="group" aria-label="Emoji reactions">${buttons}</span><span class="reaction-side"><span class="reaction-custom"><input name="emoji" maxlength="40" placeholder="paste" aria-label="Paste one emoji" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" oninput="customReactionInput(event, ${jsAttr(messageId)})" oncompositionend="customReactionInput(event, ${jsAttr(messageId)})" onkeydown="if (event.key === 'Escape') { event.preventDefault(); closeReactionMenu(); }"/></span><button type="button" title="Close" aria-label="Close reaction menu" ${mobileAction("closeReactionMenu()")} onclick="closeReactionMenu()">x</button></span></span>`;
+      }
+
       function isWorkspaceJoinMessage(message) {
         return String(message?.id || "").startsWith("evt_join_") || String(message?.id || "").startsWith("tjoin_");
       }
@@ -2745,7 +2775,6 @@
           return `<span class="reaction-chip" title="${esc(reaction.emoji + by)}">${esc(reaction.emoji)}${reaction.count > 1 ? `<span class="reaction-count">${reaction.count}</span>` : ""}</span>`;
         }).join("");
         const menuOpen = state.reactionMenuMessageId === message.id;
-        const quickReactions = ["👍", "❤️", "😂", "🎉", "👀"];
         const deliveryText = message.failed ? " failed" : message.pending ? " sending" : "";
         const canActOnMessage = !message.pending && !message.failed;
         const canDmAuthor = canActOnMessage && user && user.id !== currentUser()?.id;
@@ -2757,10 +2786,7 @@
         return `<article class="message ${isReply ? "reply" : ""} ${message.pending ? "pending" : ""} ${message.failed ? "failed" : ""} ${menuOpen ? "show-reactions" : ""}" ontouchstart="${canActOnMessage ? `startLongPress(event, ${jsAttr(message.id)})` : ""}" ontouchmove="markTouchMoved()" ontouchend="cancelLongPress()" ontouchcancel="cancelLongPress()" oncontextmenu="${canActOnMessage ? `openReactionMenu(event, ${jsAttr(message.id)})` : "event.preventDefault()"}">
           <span class="message-meta">${branch}<span class="msg-marker">  ${esc(stamp)}</span> <span class="message-author">${esc(author)}${sourceMarker}</span>${deliveryText}: </span><span class="message-text">${esc(message.text)}</span>${replies.length && !isReply ? `<span class="thread-count"> (${replies.length} repl${replies.length === 1 ? "y" : "ies"})</span>` : ""}${reactionHtml ? `<span class="message-reactions">${reactionHtml}</span>` : ""}
           ${canActOnMessage ? `<span class="message-actions"><button type="button" class="message-action" title="React" aria-label="React" ${mobileAction(reactAction)} onclick="${reactAction}"><span aria-hidden="true">+</span><span class="action-label">react</span></button>${!isReply ? `<button type="button" class="message-action" title="Reply" aria-label="Reply" ${mobileAction(replyAction)} onclick="event.stopPropagation(); ${replyAction}"><span aria-hidden="true">↵</span><span class="action-label">reply</span></button>` : ""}${canDmAuthor ? `<button type="button" class="message-action" title="DM ${esc(author)}" aria-label="DM ${esc(author)}" ${mobileAction(dmAction)} onclick="event.stopPropagation(); ${dmAction}"><span aria-hidden="true">@</span><span class="action-label">DM</span></button>` : ""}</span>` : ""}
-          ${menuOpen && canActOnMessage ? `<span class="reaction-menu" ${actionTapGuard}>${quickReactions.map((emoji) => {
-            const emojiAction = `reactTo(${jsAttr(message.id)}, ${jsAttr(emoji)})`;
-            return `<button type="button" ${mobileAction(emojiAction)} onclick="event.stopPropagation(); ${emojiAction}">${esc(emoji)}</button>`;
-          }).join("")}<span class="reaction-custom"><input name="emoji" maxlength="40" placeholder="emoji" aria-label="Custom reaction emoji" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" oninput="customReactionInput(event, ${jsAttr(message.id)})" oncompositionend="customReactionInput(event, ${jsAttr(message.id)})" onkeydown="if (event.key === 'Escape') { event.preventDefault(); closeReactionMenu(); }"/></span><button type="button" title="Close" ${mobileAction("closeReactionMenu()")} onclick="closeReactionMenu()">x</button></span>` : ""}
+          ${menuOpen && canActOnMessage ? renderReactionMenu(message.id, mobileAction, actionTapGuard) : ""}
           ${!isReply && replies.length ? replies.map((reply) => renderMessage(reply, users, repliesByRoot, true)).join("") : ""}
         </article>`;
       }

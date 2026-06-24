@@ -176,9 +176,13 @@ describe("@ask-thane/landing", () => {
   it("keeps web custom reactions one-click and frontend validated", () => {
     const html = readFileSync(new URL("chat-app.html", publicDir), "utf8");
 
+    expect(html).toContain("const reactionEmojiPalette");
+    expect(html).toContain("function renderReactionMenu");
     expect(html).toContain("function isSingleReactionEmoji");
     expect(html).toContain("function customReactionInput");
     expect(html).toContain("normalizeReactionEmoji(emoji)");
+    expect(html).toContain("class=\"reaction-palette\"");
+    expect(html).toContain("class=\"reaction-emoji\"");
     expect(html).toContain("oninput=\"customReactionInput");
     expect(html).toContain("input?.reportValidity()");
     expect(html).not.toContain("onsubmit=\"customReaction");
